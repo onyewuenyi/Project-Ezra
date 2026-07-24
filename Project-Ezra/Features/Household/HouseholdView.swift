@@ -166,7 +166,7 @@ struct HouseholdView: View {
     private func statusTint(_ status: HouseholdStatus) -> Color {
         switch status {
         case .operatingSmoothly: return Palette.success
-        case .needsAttention: return Palette.warning
+        case .needsAttention: return Palette.householdAttention
         case .quiet: return Palette.secondaryText
         }
     }
@@ -220,7 +220,7 @@ struct HouseholdView: View {
     private func eventTint(_ kind: CoordinationEvent.Kind) -> Color {
         switch kind {
         case .completed: return Palette.success
-        case .decision: return Palette.accentStart
+        case .decision: return Palette.decisionAccent
         case .waiting, .upForGrabs: return Palette.mutedText
         case .assigned, .aiMove: return Palette.accentFlat
         }
@@ -286,7 +286,7 @@ struct HouseholdView: View {
     }
 
     private func subtitleTint(for load: MemberLoad) -> Color {
-        if load.isOverloaded || load.overdueCount > 0 { return Palette.warning }
+        if load.isOverloaded || load.overdueCount > 0 { return Palette.householdAttention }
         if !load.flags.isEmpty { return Palette.secondaryText }
         return Palette.mutedText
     }

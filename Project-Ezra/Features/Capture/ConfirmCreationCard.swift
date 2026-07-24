@@ -91,7 +91,7 @@ struct ConfirmCreationCard: View {
             if draft.isJudgmentCall {
                 Label("Your call to make", systemImage: "hand.raised")
                     .font(.metadata)
-                    .foregroundStyle(Palette.accentStart)
+                    .foregroundStyle(Palette.decisionAccent)
             }
         }
         .padding(Spacing.md)
@@ -335,7 +335,7 @@ struct ConfirmCreationCard: View {
                     Image(systemName: "exclamationmark.circle.fill").font(.system(size: IconSize.caption))
                     Text("Urgent").font(.metadata.weight(.medium))
                 }
-                .foregroundStyle(Palette.warning)
+                .foregroundStyle(Palette.priorityUrgent)
             } else {
                 pill {
                     Image(systemName: "exclamationmark.circle").font(.system(size: IconSize.caption))
@@ -383,15 +383,12 @@ struct ConfirmCreationCard: View {
     /// AITag; that stays within its budget.
     private var assumedMark: some View {
         Image(systemName: "sparkle")
-            .font(.system(size: 9, weight: .semibold))
+            .font(.system(size: IconSize.nano, weight: .semibold))
             .foregroundStyle(Palette.accentFlat)
     }
 
     private func pill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: Spacing.xxs, content: content)
-            .padding(.horizontal, Spacing.xs)
-            .padding(.vertical, 5)
-            .background(Palette.secondarySurface, in: Capsule())
+        MetadataChip(density: .compact) { content() }
     }
 
     private func setDue(_ dayOffset: Int) {

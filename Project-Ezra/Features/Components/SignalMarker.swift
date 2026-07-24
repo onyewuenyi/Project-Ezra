@@ -5,7 +5,7 @@
 //  The leading attention-Signal glyph on the RECORD surfaces (My Tasks rows + the
 //  detail chips). Replaces the retired `PriorityBadgeView` bars: attention is now a
 //  computed system score (never a badge), and only the USER signal surfaces as a
-//  mark — Urgent (`exclamationmark.circle.fill`, warning tint). A task without it
+//  mark — Urgent (`exclamationmark.circle.fill`, `priorityUrgent` tint). A task without it
 //  renders NOTHING (zero footprint), so the row title sits flush against the status
 //  glyph — Today (`TodayTaskRow`/`TaskCardView`) stays entirely signal-free by design.
 //
@@ -25,7 +25,7 @@ struct SignalMarker: View {
         if isUrgent {
             HStack(spacing: Spacing.xxs) {
                 Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(Palette.warning)
+                    .foregroundStyle(Palette.priorityUrgent)
                     .accessibilityLabel("Urgent")
             }
             .font(.system(size: size * unit, weight: .semibold))

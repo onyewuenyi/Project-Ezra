@@ -66,10 +66,19 @@ extension Font {
     static var bodyInput: Font { scaledToken(16, .regular, relativeTo: .callout) }
     /// 20pt Semibold — inline nav titles (Today's leading toolbar title).
     static var navTitle: Font { scaledToken(20, .semibold, relativeTo: .title3) }
+
+    // Micro-chip labels — the sub-`metadata` tier the chips used to hardcode as
+    // `.system(size: 10/11)`. Tokenized so the whole app tracks Dynamic Type instead
+    // of freezing at a fixed point size (assumed-mark, AITag, AssessmentChip, stack badge).
+    /// 11pt Semibold — micro-chip labels & counts (AssessmentChip label, stack count).
+    static var chipLabel: Font { scaledToken(11, .semibold, relativeTo: .caption2) }
+    /// 10pt Semibold — the tightest chip text (AITag, dense chip labels).
+    static var chipLabelTight: Font { scaledToken(10, .semibold, relativeTo: .caption2) }
 }
 
 /// SF Symbol point sizes, tokenized so glyphs scale with the type system rather than
-/// scattered `.system(size:)` literals. Micro chip metrics (10/11) stay bespoke.
+/// scattered `.system(size:)` literals. The micro tier (`micro`/`nano`) pairs with the
+/// `chipLabel`/`chipLabelTight` fonts for the sub-`caption` chip glyphs.
 enum IconSize {
     static let display: CGFloat = 40  // empty-state / calm-state glyphs
     static let control: CGFloat = 22  // complete circle, prominent controls
@@ -77,6 +86,8 @@ enum IconSize {
     static let body: CGFloat = 16  // trail row markers
     static let small: CGFloat = 14  // section header icons
     static let caption: CGFloat = 12  // metadata glyphs, chevrons
+    static let micro: CGFloat = 11  // chip icons, chain-stack count/icon
+    static let nano: CGFloat = 9  // the assumed-mark sparkle, chip expand chevron
 }
 
 /// Convenience text-style modifiers that bundle font + size-specific tracking + color.

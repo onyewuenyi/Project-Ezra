@@ -9,8 +9,10 @@
 //  renders; position already carries it. Overdue is the one metadata marker
 //  (flags philosophy); everything else differentiates by material and position.
 //
-//  No `DispatchQueue.asyncAfter` / completion-chaining anywhere — completion calls
-//  straight through and the live status drives the checked-and-dimmed look.
+//  This row does no `DispatchQueue.asyncAfter` / completion-chaining — completion
+//  calls straight through and the live status drives the checked-and-dimmed look.
+//  (The record surfaces `TaskRow`/`TaskCardView` hold briefly via `Motion.completeHold`
+//  so their fade-out reads; that's the one place a completion delay is intended.)
 //
 
 import SwiftUI
@@ -58,7 +60,7 @@ struct TodayTaskRow: View {
             if register == .plan, !isDone, task.isOverdue() {
                 Text(overdueLabel)
                     .metadataStyle()
-                    .foregroundStyle(Palette.warning)
+                    .foregroundStyle(Palette.overdue)
             }
         }
         .padding(.vertical, Spacing.xs)
@@ -88,7 +90,7 @@ struct TodayTaskRow: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: IconSize.body))
                 .foregroundStyle(Palette.success)
-                .frame(width: 28, height: 28)
+                .frame(width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn)
         case .plan:
             // One symbol that MORPHS circle → checkmark on completion (symbolEffect
             // replace), so the core action lands with a satisfying spring instead of a
@@ -100,7 +102,7 @@ struct TodayTaskRow: View {
                     .font(.system(size: IconSize.control, weight: isDone ? .regular : .light))
                     .foregroundStyle(isDone ? Palette.success : Palette.secondaryText)
                     .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 32, height: 32)
+                    .frame(width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.pressableIcon)

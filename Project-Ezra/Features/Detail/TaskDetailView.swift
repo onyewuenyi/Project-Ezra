@@ -183,22 +183,13 @@ struct TaskDetailView: View {
         }
     }
 
-    /// The shared chip shell: a compact capsule with a ≥44pt tap target (the visual
-    /// capsule stays short; `contentShape` extends the hit region, the `filterMenu` trick).
+    /// The detail's property chip — the shared `MetadataChip` at standard density.
     private func chip<Content: View>(
         muted: Bool = false, @ViewBuilder content: () -> Content
     )
         -> some View
     {
-        HStack(spacing: Spacing.xxs) { content() }
-            .font(.supporting.weight(.medium))
-            .foregroundStyle(muted ? Palette.mutedText : Palette.primaryText)
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
-            .background(Palette.secondarySurface, in: Capsule())
-            .overlay { Capsule().strokeBorder(Palette.border, lineWidth: 0.5) }
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
+        MetadataChip(density: .standard, muted: muted) { content() }
     }
 
     private var statusChip: some View {
@@ -261,7 +252,7 @@ struct TaskDetailView: View {
             chip(muted: !task.isUrgent) {
                 Image(systemName: task.isUrgent ? "exclamationmark.circle.fill" : "exclamationmark.circle")
                     .font(.system(size: IconSize.caption))
-                    .foregroundStyle(task.isUrgent ? Palette.warning : Palette.mutedText)
+                    .foregroundStyle(task.isUrgent ? Palette.priorityUrgent : Palette.mutedText)
                 Text(task.isUrgent ? "Urgent" : "Not urgent")
             }
         }
@@ -387,7 +378,7 @@ struct TaskDetailView: View {
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: IconSize.small))
-                        .foregroundStyle(Palette.accentFlat)
+                        .foregroundStyle(Palette.decisionAccent)
                     Text(flagged ? "Needs a decision" : "A decision to make")
                         .font(.sectionHeader)
                         .foregroundStyle(Palette.primaryText)

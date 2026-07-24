@@ -62,7 +62,7 @@ struct StatusGlyphView: View {
         Image(systemName: display.symbol)
             .font(.system(size: size, weight: .regular))
             .foregroundStyle(display.tint)
-            .frame(width: 28, height: 28)
+            .frame(width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn)
             .contentShape(Rectangle())
     }
 

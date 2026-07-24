@@ -33,7 +33,13 @@ The original assigned green as a persistent "completed" status color while also 
 
 ## Navigation
 
-**Tab bar (four tabs):**
+> **Superseded — shipped nav differs.** `docs/PRD.md` overrides this section. The app ships four
+> tabs — **Today · Inbox · My Tasks · Household** — plus a floating **Capture** button (not a tab).
+> The **Review/retro tab is gone** (replaced by the Today advisor sequence); the composer opens from
+> the Capture button, and the AI activity/undo log is the **Inbox** feed, not a toolbar sheet. The
+> lanes/Runs model below is historical.
+
+**Tab bar (original draft — four tabs):**
 
 ```
 Today       Tasks       Inbox       Review

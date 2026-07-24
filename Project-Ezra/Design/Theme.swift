@@ -63,6 +63,11 @@ enum Palette {
     static let accentEnd = Color(hex: "22D3EE")  // bright cyan
     static let accentFlat = Color(hex: "2F6BFF")  // single-color fallback (<24px)
     static let accentSoft = Color(hex: "1E5EFF").opacity(0.15)
+    /// The single "judgment / your-call-to-make" blue — the `hand.raised` decision sites
+    /// (ConfidenceRow `.ask`, AssessmentChip Needs-Decision, the confirm-card judgment flag,
+    /// the detail decision banner). Flat, not gradient: these icons render below 24px. Split
+    /// out so one semantic idea is one token instead of forking accentStart↔accentFlat.
+    static let decisionAccent = accentFlat
     /// AI-processing soft-glow shadow color — used only for the composer's "thinking" halo.
     static let accentGlow = Color(hex: "1E5EFF").opacity(0.35)
     /// The Today backdrop's drifting cobalt glow — a soft accent-family radial over the
@@ -73,9 +78,10 @@ enum Palette {
     /// the seven `.white` call sites on the accent gradient route through the system.
     static let onAccent = Color.white
 
-    /// The signature gradient. Use only at ≥24px: AI tag, active tab, primary
-    /// confirm button, Needs Decision edge-glow, and the Today plan's hero action
-    /// edge (the day's one payoff moment). Everywhere else use `accentFlat`.
+    /// The signature gradient. Use only at ≥24px: the AI tag, the primary confirm
+    /// button, the Needs-Decision edge stroke, the composer's processing border, and
+    /// the Today plan's hero-action edge (the day's one payoff moment). Everywhere else
+    /// use `accentFlat` — including the active tab, which renders flat via `.tint`.
     static let accentGradient = LinearGradient(
         colors: [accentStart, accentEnd],
         startPoint: .topLeading,
@@ -86,6 +92,25 @@ enum Palette {
     static let success = Color(hex: "34C759")  // transient completion motion only
     static let warning = Color(hex: "F59E0B")
     static let error = Color(hex: "EF4444")
+
+    // Attention hues — split out of `warning` so a single row never shows the same
+    // color for three unrelated meanings (the Urgent mark, the In-Progress status
+    // glyph, and an Overdue marker previously all rendered `warning`). One meaning,
+    // one token. The 6-state status vocabulary keeps amber for In-Progress; the two
+    // cross-axis meanings move off amber.
+    /// The user's Urgent priority signal (`SignalMarker`, the detail toggle, the
+    /// confirm-card pill). Red — the hottest attention mark, distinct from status.
+    static let priorityUrgent = Color(hex: "EF4444")
+    /// The `.inProgress` status-glyph tint. Amber — unchanged; the status vocabulary
+    /// stays Linear-authentic (half-filled amber). Tokenized so it's semantically
+    /// separate from Urgent/Overdue even though it shares amber's value.
+    static let statusInProgress = Color(hex: "F59E0B")
+    /// The overdue / past-due time-risk marker (Today rows, task cards). Orange —
+    /// distinct from both Urgent-red and the amber status glyph.
+    static let overdue = Color(hex: "F97316")
+    /// Household needs-attention / member-overload tint. Amber, isolated to the
+    /// Household surfaces where it doesn't collide with a task's own marks.
+    static let householdAttention = Color(hex: "F59E0B")
 }
 
 // MARK: - Spacing (8pt grid)

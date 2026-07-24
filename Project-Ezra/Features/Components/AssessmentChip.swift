@@ -21,10 +21,10 @@ struct AssessmentChip: View {
             HStack(spacing: 4) {
                 if let icon = display.icon {
                     Image(systemName: icon)
-                        .font(.system(size: 10, weight: .semibold))  // micro: bespoke chip metrics
+                        .font(.chipLabelTight)
                 }
                 Text(display.label)
-                    .font(.system(size: 11, weight: .semibold))  // micro: bespoke chip metrics
+                    .font(.chipLabel)
             }
             .foregroundStyle(display.foreground)
             .padding(.horizontal, 8)
@@ -56,7 +56,7 @@ struct AssessmentChip: View {
         if assessment.needsDecision != nil {
             return Display(
                 label: "Needs Decision", icon: "hand.raised",
-                foreground: Palette.accentStart, background: Palette.accentSoft, gradientStroke: true)
+                foreground: Palette.decisionAccent, background: Palette.accentSoft, gradientStroke: true)
         }
         if assessment.isUnowned {
             return Display(

@@ -51,7 +51,7 @@ struct ConfidenceRow: View {
         case .ask:
             Image(systemName: "hand.raised.fill")
                 .font(.system(size: IconSize.caption))
-                .foregroundStyle(Palette.accentStart)
+                .foregroundStyle(Palette.decisionAccent)
         }
     }
 
@@ -72,7 +72,7 @@ struct ConfidenceRow: View {
 struct AITag: View {
     var body: some View {
         Text("AI")
-            .font(.system(size: 10, weight: .bold))  // micro: bespoke chip metrics
+            .font(.chipLabelTight)
             .foregroundStyle(Palette.onAccent)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)

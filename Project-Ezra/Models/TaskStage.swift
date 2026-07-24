@@ -101,7 +101,7 @@ enum TaskDisplayStatus: String, CaseIterable, Identifiable {
 
     var tint: Color {
         switch self {
-        case .inProgress: return Palette.warning
+        case .inProgress: return Palette.statusInProgress
         case .inReview: return Palette.accentFlat
         case .todo: return Palette.secondaryText
         case .backlog: return Palette.mutedText

@@ -102,7 +102,7 @@ struct TaskCardView: View {
                         Text("·").foregroundStyle(Palette.mutedText)
                         Text(dueText(due))
                             .font(.metadata)
-                            .foregroundStyle(isOverdue(due) ? Palette.warning : Palette.secondaryText)
+                            .foregroundStyle(isOverdue(due) ? Palette.overdue : Palette.secondaryText)
                     }
                     if let effort = task.effortLabel {
                         Text("·").foregroundStyle(Palette.mutedText)
@@ -236,7 +236,10 @@ struct TaskCardView: View {
             Image(systemName: "circle")
                 .font(.system(size: IconSize.control, weight: .light))
                 .foregroundStyle(Palette.secondaryText)
-                .frame(width: 44, height: 44, alignment: .leading)
+                .frame(
+                    width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.hitTarget,
+                    alignment: .leading
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.pressableIcon)
@@ -253,7 +256,9 @@ struct TaskCardView: View {
         withAnimation(Motion.complete) {
             isCompleting = true
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Motion.completeHold) {
+        // Hold briefly so the fade-out reads, then commit (was DispatchQueue.asyncAfter).
+        Task {
+            try? await Task.sleep(for: .seconds(Motion.completeHold))
             onComplete?()
         }
     }

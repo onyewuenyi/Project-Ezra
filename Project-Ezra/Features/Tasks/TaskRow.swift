@@ -218,7 +218,11 @@ struct TaskRow: View {
             return
         }
         withAnimation(Motion.complete) { isCompleting = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Motion.completeHold) { onComplete() }
+        // Hold briefly so the fade-out reads, then commit (was DispatchQueue.asyncAfter).
+        Task {
+            try? await Task.sleep(for: .seconds(Motion.completeHold))
+            onComplete()
+        }
     }
 
     private var accessibilityText: String {
@@ -243,8 +247,8 @@ struct TaskRowDivider: View {
             .fill(Palette.border)
             .frame(height: 0.5)
             // Inset under the title: the leading signal mark is zero-footprint when
-            // absent, so align to the status glyph (28) + gap.
-            .padding(.leading, 28 + Spacing.sm)
+            // absent, so align to the status glyph column + gap.
+            .padding(.leading, LayoutMetrics.recordGlyphColumn + Spacing.sm)
     }
 }
 

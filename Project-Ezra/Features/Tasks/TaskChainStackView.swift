@@ -120,24 +120,24 @@ struct TaskChainStackView: View {
         Button {
             Motion.withMotion(Motion.settle) { isExpanded.toggle() }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: Spacing.xxs) {
                 Image(systemName: "square.stack.3d.up.fill")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.chipLabelTight)
                 Text("\(chain.members.count)")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.chipLabel)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: IconSize.nano, weight: .semibold))
                     .rotationEffect(.degrees(isExpanded ? 180 : 0))
                     .animation(Motion.snap, value: isExpanded)
             }
             .foregroundStyle(Palette.secondaryText)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
             .background(Palette.secondarySurface, in: Capsule())
             .overlay {
                 Capsule().strokeBorder(Palette.border, lineWidth: 0.5)
             }
-            .frame(minWidth: 44, minHeight: 44)
+            .frame(minWidth: LayoutMetrics.hitTarget, minHeight: LayoutMetrics.hitTarget)
         }
         .buttonStyle(.pressableIcon)
         .accessibilityLabel(
