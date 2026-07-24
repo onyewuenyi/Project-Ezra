@@ -138,6 +138,14 @@ struct ComposerView: View {
         let learned = CorrectionProfile.rules(
             from: corrections.map { $0 }, tasks: allTasks.map { $0 })
         let openTasks = openTaskSnapshots
+        // The user's past "no"s (rejected merges/links) — the resolver drops matching
+        // proposals so a rejection sticks across captures. Loading also lazily prunes
+        // expired/orphaned rows.
+        let suppressions = SuppressionStore.load(
+            in: context, existingTaskIDs: Set(allTasks.compactMap(\.uuid)))
+        // Load persisted title vectors into the retrieval memo (once per process) so
+        // the first capture of the session doesn't re-embed the whole open set.
+        EmbeddingStore.warmUp(openTaskIDs: Set(openTasks.map(\.id)), in: context)
         triageTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, generation == triageGeneration else { return }
@@ -146,6 +154,7 @@ struct ComposerView: View {
                 roster: roster,
                 learned: learned,
                 openTasks: openTasks,
+                suppressions: suppressions,
                 onPartial: { partial in
                     // Streaming (device): candidates fill in while the model is
                     // still generating. Stale snapshots drop; edits survive merge.
@@ -156,6 +165,10 @@ struct ComposerView: View {
                 }
             )
             guard !Task.isCancelled, generation == triageGeneration else { return }
+            // Persist any title vectors retrieval computed fresh this pass — tiny rows
+            // on the app's write context, post-debounce (never per keystroke). The
+            // save rides the next commit; an abandoned capture just re-memoizes later.
+            EmbeddingStore.persistFresh(openTasks: openTasks, in: context)
             // Preserve the user's in-place edits: a re-parse only replaces
             // candidates whose AI reading actually changed.
             Motion.withMotion(Motion.settle) {
@@ -168,6 +181,8 @@ struct ComposerView: View {
     /// ("should anything already open wait on this new task?").
     private var openTaskSnapshots: [OpenTaskSnapshot] {
         let open = allTasks.filter { !$0.status.isResolved }
+        let titlesByID = Dictionary(
+            uniqueKeysWithValues: open.compactMap { task in task.uuid.map { ($0, task.title) } })
         return open.compactMap { task in
             guard let id = task.uuid else { return nil }
             // Derive the active blockers ONCE and reuse for both the notes and isBlocked
@@ -181,9 +196,7 @@ struct ComposerView: View {
                 updatedAt: task.updatedAt,
                 dueDate: task.dueDate,
                 isBlocked: !active.isEmpty,
-                dismissedDuplicateIDs: task.relationships
-                    .filter { $0.kind == .duplicate && $0.dismissed }
-                    .compactMap(\.targetID)
+                parentTitle: task.parentTaskID.flatMap { titlesByID[$0] }
             )
         }
     }

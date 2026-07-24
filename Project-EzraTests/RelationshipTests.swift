@@ -3,12 +3,13 @@
 //  Project-EzraTests
 //
 //  The `Relationship` blob is the graph's most load-bearing type — it absorbed the old
-//  `blockersData` + `parentTaskID`. These lock the four hardening measures: the derived
+//  `blockersData` + `parentTaskID`. These lock the hardening measures: the derived
 //  `blockers` view keeps the exact old Blocker semantics (durable list, external waits,
-//  reopen re-blocks, cycle guard, unblock leaves `.parent`), tombstones carry no live
-//  semantics, the versioned envelope round-trips, and — the real prize — an
-//  operation-sequence property test runs the bridge against an independent oracle so a
-//  reopen×tombstone interaction can never silently diverge.
+//  reopen re-blocks, cycle guard, unblock leaves `.parent`), the `Origin` invariants
+//  hold, suppression keys are symmetric/directional by construction, the versioned
+//  envelope round-trips, and — the real prize — an operation-sequence property test
+//  runs the bridge against an independent oracle so a reopen×edge interaction can
+//  never silently diverge.
 //
 
 import Foundation
@@ -88,29 +89,48 @@ struct RelationshipTests {
         #expect(task.taskBlockerIDs == [b2.uuid!])
     }
 
-    // MARK: - Tombstones
+    // MARK: - Suppression keys (pair-owned, never edges)
 
-    @Test("A dismissed edge carries no live semantics — invisible to every derived view")
-    func dismissedNoLiveSemantics() {
-        let blocker = TaskItem(title: "b", status: .active)
-        let parent = TaskItem(title: "p", status: .active)
-        let task = TaskItem(title: "x", status: .active)
-        task.relationships = [
-            Relationship(
-                kind: .blocks, targetID: blocker.uuid!, provenance: .human, confidence: 1.0,
-                dismissed: true),
-            Relationship(
-                kind: .parent, targetID: parent.uuid!, provenance: .human, confidence: 1.0,
-                dismissed: true),
-        ]
-        #expect(task.blockers.isEmpty)
-        #expect(!task.hasActiveBlockers(among: [task, blocker]))
-        #expect(task.parentTaskID == nil)
+    @Test("Duplicate suppression is symmetric by construction; parent stays directional")
+    func suppressionKeySemantics() {
+        let a = UUID()
+        let b = UUID()
+        let dup = RelationshipSuppression(
+            kind: .duplicateMerge, pairKey: RelationshipSuppression.symmetricKey(a, b),
+            targetID: nil, normalizedTitle: nil, createdAt: Date())
+        // The same false pair can't come back from the other side.
+        #expect(dup.suppressesPair(kind: .duplicateMerge, a, b))
+        #expect(dup.suppressesPair(kind: .duplicateMerge, b, a))
+        #expect(!dup.suppressesPair(kind: .parentLink, a, b))
+
+        let parent = RelationshipSuppression(
+            kind: .parentLink, pairKey: RelationshipSuppression.directionalKey(child: a, parent: b),
+            targetID: nil, normalizedTitle: nil, createdAt: Date())
+        // "A is not a child of B" implies nothing about the reverse.
+        #expect(parent.suppressesPair(kind: .parentLink, a, b))
+        #expect(!parent.suppressesPair(kind: .parentLink, b, a))
+    }
+
+    @Test("Capture-form suppression matches on normalized draft title, not raw text")
+    func captureFormNormalization() {
+        let target = UUID()
+        let suppression = RelationshipSuppression(
+            kind: .duplicateMerge, pairKey: nil, targetID: target,
+            normalizedTitle: RelationshipSuppression.normalizeTitle("Renew — the Passport!"),
+            createdAt: Date())
+        #expect(
+            suppression.suppresses(
+                kind: .duplicateMerge, targetID: target,
+                normalizedTitle: RelationshipSuppression.normalizeTitle("renew the passport")))
+        #expect(
+            !suppression.suppresses(
+                kind: .duplicateMerge, targetID: target,
+                normalizedTitle: RelationshipSuppression.normalizeTitle("book the flights")))
     }
 
     // MARK: - Invariant validation + envelope
 
-    @Test("Invariant validation catches self-edges, dup lives, bad targets, and human confidence")
+    @Test("Invariant validation catches self-edges, dup pairs, bad targets, and bad confidence")
     func invariants() {
         let id = UUID()
         let other = UUID()
@@ -118,19 +138,20 @@ struct RelationshipTests {
         #expect(
             Relationship.firstViolation(
                 in: [.blocks(taskID: id)], owner: id) != nil)
-        // Duplicate live (kind, target).
+        // Duplicate (kind, target) pair.
         #expect(
             Relationship.firstViolation(
                 in: [.blocks(taskID: other), .blocks(taskID: other)]) != nil)
         // nil target on a non-blocks edge.
         #expect(
             Relationship.firstViolation(in: [
-                Relationship(kind: .parent, targetID: nil, provenance: .human, confidence: 1.0)
+                Relationship(kind: .parent, targetID: nil, origin: .human)
             ]) != nil)
-        // Human edge with confidence ≠ 1.0.
+        // Inferred confidence outside 0…1. (A human edge with a confidence is now
+        // unrepresentable — `Origin.human` has no confidence to get wrong.)
         #expect(
             Relationship.firstViolation(in: [
-                Relationship(kind: .blocks, targetID: other, provenance: .human, confidence: 0.5)
+                Relationship(kind: .blocks, targetID: other, origin: .inferred(confidence: 1.4))
             ]) != nil)
         // A clean list is valid.
         #expect(Relationship.firstViolation(in: [.blocks(taskID: other)], owner: id) == nil)
@@ -143,7 +164,7 @@ struct RelationshipTests {
         #expect(RelationshipStore.decode(data) == rels)
     }
 
-    // MARK: - Operation-sequence property test (the reopen×tombstone catcher)
+    // MARK: - Operation-sequence property test (the reopen×edge catcher)
 
     @Test("A seeded-random op sequence never diverges from the independent blocker oracle")
     func operationSequenceParity() {

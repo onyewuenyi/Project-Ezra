@@ -116,6 +116,77 @@ struct TaskRankingTests {
         #expect(sorted.map(\.title) == ["soon", "later", "undated"])
     }
 
+    // MARK: - currentRelevance (the live layer inside the attention component)
+
+    @Test("Deferral pulls a task down within its band")
+    func deferralPullsDown() {
+        let deferred = score(TaskItem(title: "deferred", status: .active), 50)
+        deferred.deferralCount = 5  // −7.5
+        let peer = score(TaskItem(title: "peer", status: .active), 50)
+        let all = [deferred, peer]
+        #expect(precedes(peer, deferred, among: all))
+        #expect(!precedes(deferred, peer, among: all))
+    }
+
+    @Test("Staleness reads the human clock — a system touch doesn't reset the decay")
+    func stalenessHumanClock() {
+        let dormant = score(TaskItem(title: "dormant", status: .active, createdAt: days(-30)), 50)
+        dormant.touch(now: days(-1))  // a system path bumped updatedAt; no human ever touched it
+        let fresh = score(TaskItem(title: "fresh", status: .active, createdAt: days(-30)), 50)
+        fresh.touchHuman(now: now)
+        let all = [dormant, fresh]
+        #expect(precedes(fresh, dormant, among: all))  // dormant decayed ~30d despite the touch
+    }
+
+    @Test("A recent unblock boosts within the window; an old one doesn't")
+    func recentUnblock() {
+        let justFreed = score(TaskItem(title: "freed", status: .active, createdAt: now), 50)
+        justFreed.lastUnblockedAt = days(-1)  // inside the 48h window
+        let longAgo = score(TaskItem(title: "old", status: .active, createdAt: now), 50)
+        longAgo.lastUnblockedAt = days(-5)  // outside — no boost
+        let peer = score(TaskItem(title: "peer", status: .active, createdAt: now), 50)
+        let all = [justFreed, longAgo, peer]
+        #expect(precedes(justFreed, peer, among: all))
+        #expect(precedes(justFreed, longAgo, among: all))
+    }
+
+    @Test("currentRelevance clamps to ±25 in both directions")
+    func relevanceClamp() {
+        let buried = TaskItem(title: "buried", status: .active, createdAt: days(-365))
+        buried.deferralCount = 20
+        let down = TaskRanking.currentRelevance(
+            for: buried, now: now, recentlyGainedDependent: false, neighborDueDates: [])
+        #expect(down == -TaskRanking.relevanceClamp)
+
+        let hot = TaskItem(title: "hot", status: .active, createdAt: now)
+        hot.lastUnblockedAt = now
+        let up = TaskRanking.currentRelevance(
+            for: hot, now: now, recentlyGainedDependent: true, neighborDueDates: [now])
+        #expect(up == TaskRanking.relevanceClamp)  // 12 + 8 + 15 = 35, clamped
+    }
+
+    @Test("Passport scenario: dormant high-importance sinks, then rises when flights get booked")
+    func passportScenario() {
+        // Dormant 20 days: intrinsic importance stays high, relevance is deeply negative.
+        let passport = score(
+            TaskItem(title: "Renew passport", status: .active, createdAt: days(-20)), 70)
+        let errand = score(TaskItem(title: "errand", status: .active, createdAt: now), 60)
+        // While dormant, the lower-importance errand outranks it (70 − 12 < 60).
+        #expect(precedes(errand, passport, among: [passport, errand]))
+
+        // Flights get booked: a near-due task now waits on the passport — a fresh
+        // reverse edge (recently-gained dependent) plus a related deadline approaching.
+        let flights = score(
+            TaskItem(title: "Book flights", status: .active, dueDate: days(2), createdAt: now), 40)
+        flights.relationships = [
+            Relationship(
+                kind: .blocks, targetID: passport.uuid!, note: nil, origin: .human, createdAt: days(-1))
+        ]
+        let all = [passport, errand, flights]
+        // −12 (stale) + 8 (new dependent) + 13 (due in 2d) = +9 → 79 beats 60.
+        #expect(precedes(passport, errand, among: all))
+    }
+
     // MARK: - Strict weak ordering (the crash guard)
 
     @Test("The comparator is a strict weak ordering over a shuffled adversarial set")

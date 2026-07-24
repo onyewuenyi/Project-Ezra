@@ -253,4 +253,51 @@ struct IntentResolverTests {
         #expect(draft.edgeProposals.count == 1)
         #expect(draft.edgeProposals.first?.kind == .duplicateOf)  // duplicate wins
     }
+
+    @Test("childOf is auto-accepted above the floor — additive links get no undecided limbo")
+    func childAutoAccept() {
+        let candID = UUID()
+        let candidates = [RetrievalCandidate(id: candID, title: "Plan trip", facts: "", score: 1)]
+        func childDraft(_ confidence: Double) -> TaskDraft {
+            var i = intent("Book flights")
+            i.childOf = EdgeReference(targetID: candID, confidence: confidence)
+            return IntentResolver.resolve(i, candidates: candidates)
+        }
+        #expect(childDraft(0.9).edgeProposals.first?.decision == .accepted)
+        // The mid band that would be .undecided for a duplicate is ACCEPTED for a child
+        // (additive + reversible — the auto-accept invariant's tiering is by
+        // destructiveness, not uniform).
+        #expect(childDraft(0.6).edgeProposals.first?.decision == .accepted)
+        // The suppression floor still holds: below it the model is declining, not gating.
+        #expect(childDraft(0.4).edgeProposals.isEmpty)
+    }
+
+    @Test("A rejected pairing is dropped on the next capture of the same title — and only that title")
+    func suppressionDropsRepeatProposal() {
+        let candID = UUID()
+        let candidates = [RetrievalCandidate(id: candID, title: "Renew passport", facts: "", score: 1)]
+        // What commit writes after the user taps "Keep both": keyed on the normalized
+        // DRAFT TITLE against the target (a fresh draft id can never match a pair key).
+        let suppression = RelationshipSuppression(
+            kind: .duplicateMerge, pairKey: nil, targetID: candID,
+            normalizedTitle: RelationshipSuppression.normalizeTitle("Renew — the Passport!"),
+            createdAt: Date())
+
+        var same = intent("renew the passport")
+        same.duplicateOf = EdgeReference(targetID: candID, confidence: 0.9)
+        let suppressed = IntentResolver.resolve(same, candidates: candidates, suppressions: [suppression])
+        #expect(suppressed.edgeProposals.isEmpty)
+
+        var different = intent("Book flights to Rome")
+        different.duplicateOf = EdgeReference(targetID: candID, confidence: 0.9)
+        let proposed = IntentResolver.resolve(
+            different, candidates: candidates, suppressions: [suppression])
+        #expect(proposed.edgeProposals.count == 1)  // materially different text still proposes
+
+        // A duplicate suppression never silences a CHILD proposal to the same target.
+        var child = intent("renew the passport")
+        child.childOf = EdgeReference(targetID: candID, confidence: 0.9)
+        let childDraft = IntentResolver.resolve(child, candidates: candidates, suppressions: [suppression])
+        #expect(childDraft.edgeProposals.count == 1)
+    }
 }

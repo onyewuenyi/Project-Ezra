@@ -48,6 +48,10 @@ struct DecisionContext: Sendable {
     var reasoning: String
     var rawCapture: String
     var notes: String?
+    /// The umbrella this decision is a step of, named EXPLICITLY (the objective-lite
+    /// signal: "part of Plan the Italy trip" frames the options better than an
+    /// undifferentiated related-title).
+    var parentTitle: String?
     var relatedTitles: [String]
 
     init(task: TaskItem, among all: [TaskItem]) {
@@ -55,12 +59,12 @@ struct DecisionContext: Sendable {
         reasoning = task.reasoning
         rawCapture = task.rawCapture
         notes = task.notes
-        // Related-edge titles: parent, children, and active blockers give the model the
+        parentTitle = task.parentTaskID.flatMap { parentID in
+            all.first { $0.uuid == parentID }?.title
+        }
+        // Related-edge titles: children and active blockers give the model the
         // surrounding shape of the decision without dragging the graph.
         var related: [String] = []
-        if let parentID = task.parentTaskID, let parent = all.first(where: { $0.uuid == parentID }) {
-            related.append(parent.title)
-        }
         related.append(contentsOf: task.activeBlockerTasks(among: all).map(\.title))
         if let selfID = task.uuid {
             related.append(
@@ -99,6 +103,9 @@ struct DecisionFramingService {
         if !context.reasoning.isEmpty { lines.append("Why it's a decision: \(context.reasoning)") }
         if !context.rawCapture.isEmpty { lines.append("They said: \(context.rawCapture)") }
         if let notes = context.notes, !notes.isEmpty { lines.append("Notes: \(notes)") }
+        if let parent = context.parentTitle {
+            lines.append("Part of the larger goal: \(parent)")
+        }
         if !context.relatedTitles.isEmpty {
             lines.append("Related tasks: " + context.relatedTitles.joined(separator: "; "))
         }

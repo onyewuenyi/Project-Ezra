@@ -355,15 +355,17 @@ enum SampleFlowFixtures {
         // A `.parent` edge: the mailing-address change is a STEP of the move (an edge is not
         // a status, so it keeps its dependency blocker too).
         mailingAddress.linkParent(movers.uuid!)
-        // A dismissed-duplicate tombstone ("Keeping both"): a near-dup of "Donate old
-        // clothes" carries a dismissed `.duplicate` edge — no live semantics, it just stops
-        // the pair being re-proposed on a later similar capture.
+        // A rejected duplicate ("Keeping both"): a near-dup of "Donate old clothes"
+        // leaves pair-owned suppression records — never an edge — so the pairing is
+        // not re-proposed on a later similar capture.
         let donateBooks = TaskItem(
             title: "Donate the old books", category: "Home", status: .active, confidence: 0.85,
             reasoning: "A separate donation from the clothes.", ownerID: you.uuid, effortMinutes: 20,
             createdAt: now, in: context)
         context.insert(donateBooks)
-        donateBooks.tombstoneDuplicate(staleDonate.uuid!)
+        SuppressionStore.recordRejectedDuplicate(
+            draftTitle: donateBooks.title, createdID: donateBooks.uuid,
+            targetID: staleDonate.uuid!, in: context)
         // A merged capture folded into the expense report: the target keeps the provenance,
         // and a reversible `.human` "merged" Inbox entry (Undo resurrects the folded draft).
         expenseReport.notes = "Also captured: File the Q2 expenses"

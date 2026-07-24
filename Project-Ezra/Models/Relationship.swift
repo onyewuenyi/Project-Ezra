@@ -15,22 +15,44 @@
 //                   (`note`, `targetID == nil`) otherwise. Backs the `blockers`
 //                   derived view, so all the old Blocker semantics survive verbatim.
 //  - `.parent`    — this task is a step under `targetID` (Split-Into-Subtasks).
-//  - `.duplicate` — a rejected/dismissed dedupe suggestion, kept as a tombstone so
-//                   the same pair is never re-proposed (Phase 2).
 //  - `.related`   — a soft association (reserved).
+//
+//  Live edges are the ONLY edges: a rejected suggestion is not a dismissed edge on
+//  either task — it's a `RelationshipSuppression` in the pair-owned suppression set
+//  (see `RelationshipSuppression.swift`). The old `dismissed` tombstones (and the
+//  tombstone-only `.duplicate` kind) are gone, so every derived view and guard reads
+//  the list unfiltered.
 //
 //  **Mutation choke point (constitutional):** views and engines NEVER assign
 //  `relationships` directly — every write funnels through the `TaskMutations`
-//  helpers, the same law as the `status` setter. `dismissed` edges are tombstones:
-//  they carry NO live semantics (never a blocker, never a parent) and exist only so
-//  a suggestion is never re-proposed.
+//  helpers, the same law as the `status` setter.
+//
+//  Blob-over-entity expiry condition (deliberate, recorded): revisit this storage
+//  when a consumer needs to query edges without the task set already loaded, when
+//  `Kind` exceeds ~6 cases, or when household sync needs edge-level granularity.
 //
 
 import Foundation
 
 struct Relationship: Codable, Hashable, Identifiable {
-    enum Kind: String, Codable { case blocks, parent, duplicate, related }
-    enum Provenance: String, Codable { case ai, human }
+    enum Kind: String, Codable { case blocks, parent, related }
+
+    /// Who authored the edge. A human edge structurally cannot carry a confidence
+    /// and an inferred edge cannot omit one — the illegal states the old
+    /// `provenance` + `confidence` pair left to call-site discipline are
+    /// unrepresentable here.
+    enum Origin: Codable, Hashable {
+        case human
+        case inferred(confidence: Double)
+
+        var isHuman: Bool { if case .human = self { return true }; return false }
+
+        /// The model's confidence for an inferred edge; nil for a human one.
+        var inferredConfidence: Double? {
+            if case .inferred(let confidence) = self { return confidence }
+            return nil
+        }
+    }
 
     var id: UUID = UUID()
     var kind: Kind
@@ -40,37 +62,24 @@ struct Relationship: Codable, Hashable, Identifiable {
     /// The external-wait phrase, in the user's own words. Set iff a `.blocks` edge has
     /// no `targetID`.
     var note: String?
-    var provenance: Provenance
-    /// The AI's confidence in this edge, 0…1. Always `1.0` for a `.human` edge.
-    var confidence: Double
-    /// Tombstone marker: a dismissed edge is never re-proposed and has no live
-    /// semantics (excluded from `blockers`, `parentTaskID`, and every derived view).
-    var dismissed: Bool = false
+    var origin: Origin
     var createdAt: Date = Date()
 
     // MARK: - Convenience constructors (mirror the old `Blocker` factory verbs)
 
-    static func blocks(
-        taskID: UUID, provenance: Provenance = .human, confidence: Double = 1.0
-    ) -> Relationship {
-        Relationship(
-            kind: .blocks, targetID: taskID, note: nil, provenance: provenance,
-            confidence: provenance == .human ? 1.0 : confidence)
+    static func blocks(taskID: UUID, origin: Origin = .human) -> Relationship {
+        Relationship(kind: .blocks, targetID: taskID, note: nil, origin: origin)
     }
 
-    static func externalWait(_ note: String?, provenance: Provenance = .human) -> Relationship {
+    static func externalWait(_ note: String?, origin: Origin = .human) -> Relationship {
         let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
         return Relationship(
             kind: .blocks, targetID: nil, note: (trimmed?.isEmpty == false) ? trimmed : nil,
-            provenance: provenance, confidence: 1.0)
+            origin: origin)
     }
 
-    static func parent(
-        taskID: UUID, provenance: Provenance = .human, confidence: Double = 1.0
-    ) -> Relationship {
-        Relationship(
-            kind: .parent, targetID: taskID, note: nil, provenance: provenance,
-            confidence: provenance == .human ? 1.0 : confidence)
+    static func parent(taskID: UUID, origin: Origin = .human) -> Relationship {
+        Relationship(kind: .parent, targetID: taskID, note: nil, origin: origin)
     }
 
     // MARK: - Invariant validation (DEBUG-asserted on encode, callable from tests)
@@ -78,13 +87,15 @@ struct Relationship: Codable, Hashable, Identifiable {
     /// The set of invariants every persisted relationship list must hold. Asserted on
     /// encode in DEBUG and callable directly from `RelationshipTests`:
     /// - no self-edges,
-    /// - no duplicate LIVE (kind, targetID) pairs (tombstones may duplicate a live pair),
+    /// - no duplicate (kind, targetID) pairs,
     /// - `targetID == nil` only on a `.blocks` edge (an external wait),
-    /// - `confidence == 1.0` on every `.human` edge.
+    /// - an inferred confidence stays in 0…1.
+    /// (The old human⇒confidence-1.0 rule is unrepresentable now — `Origin.human`
+    /// carries no confidence at all.)
     /// Returns the first violation message, or nil when the list is valid. `owner` is the
     /// owning task's uuid, so a self-edge can be caught.
     static func firstViolation(in relationships: [Relationship], owner: UUID? = nil) -> String? {
-        var liveKeys = Set<String>()
+        var keys = Set<String>()
         for rel in relationships {
             if let owner, rel.targetID == owner {
                 return "self-edge (\(rel.kind.rawValue)) on \(owner)"
@@ -92,14 +103,13 @@ struct Relationship: Codable, Hashable, Identifiable {
             if rel.targetID == nil && rel.kind != .blocks {
                 return "nil targetID on non-blocks edge (\(rel.kind.rawValue))"
             }
-            if rel.provenance == .human && rel.confidence != 1.0 {
-                return "human edge with confidence \(rel.confidence) ≠ 1.0"
+            if let confidence = rel.origin.inferredConfidence, !(0...1).contains(confidence) {
+                return "inferred edge with confidence \(confidence) outside 0…1"
             }
-            guard !rel.dismissed else { continue }
             if let target = rel.targetID {
                 let key = "\(rel.kind.rawValue):\(target.uuidString)"
-                if !liveKeys.insert(key).inserted {
-                    return "duplicate live edge \(key)"
+                if !keys.insert(key).inserted {
+                    return "duplicate edge \(key)"
                 }
             }
         }
@@ -113,6 +123,17 @@ struct Relationship: Codable, Hashable, Identifiable {
     }
 }
 
+// MARK: - Trust-semantics accessors
+
+/// Named filters so call sites read their trust semantics instead of inlining
+/// origin predicates.
+extension Sequence where Element == Relationship {
+    /// Edges a human authored (or explicitly confirmed at creation).
+    func humanConfirmed() -> [Relationship] { filter { $0.origin.isHuman } }
+    /// Edges the AI inferred (each carries its confidence).
+    func inferred() -> [Relationship] { filter { !$0.origin.isHuman } }
+}
+
 // MARK: - Versioned storage envelope
 
 /// The on-disk shape of `TaskItem.relationshipsData`: a version tag plus the edge
@@ -120,7 +141,10 @@ struct Relationship: Codable, Hashable, Identifiable {
 /// blobs stay decodable forever — the single migration hook if the shape ever
 /// changes post-launch.
 enum RelationshipStore {
-    static let currentVersion = 1
+    /// v2: `origin` (human | inferred(confidence)) replaced `provenance` +
+    /// `confidence`, and `dismissed` tombstones left the type entirely (suppression
+    /// is pair-owned — see `RelationshipSuppression`).
+    static let currentVersion = 2
 
     private struct Envelope: Codable {
         var v: Int

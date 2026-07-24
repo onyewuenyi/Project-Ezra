@@ -20,10 +20,14 @@ import Foundation
 /// tap. Tiered by the model's confidence at resolution (see `IntentResolver`).
 struct EdgeProposal: Hashable {
     enum Kind: String, Hashable { case duplicateOf, childOf }
+    /// `.undecided` is DUPLICATE-ONLY: a merge destroys user data, so it stays
+    /// confidence-tiered (0.85/0.5). A child link is additive and reversible, so
+    /// `childOf` is auto-accepted above the suppression floor — the auto-accept
+    /// invariant's single destructive-inference exception is the duplicate merge.
     enum Decision: String, Hashable {
-        case accepted  // ≥0.85 — pre-selected, still confirm-gated
-        case undecided  // 0.5–0.85 — shown as a question, user chooses
-        case rejected  // the user said no → a dismissed tombstone at commit
+        case accepted  // pre-selected, still confirm-gated
+        case undecided  // duplicate 0.5–0.85 — shown as a question, user chooses
+        case rejected  // the user said no → a suppression record at commit
     }
     var kind: Kind
     var targetID: UUID
@@ -77,7 +81,7 @@ struct TaskDraft: Identifiable, Hashable {
     var blocks: [OpenTaskSnapshot] = []
     /// Capture-graph proposals for THIS new task — duplicate / child edges to existing
     /// tasks, shown as confirm-card chips. Accepted ones execute at commit (a merge or a
-    /// parent link); rejected ones leave a dismissed tombstone; undecided ones do nothing.
+    /// parent link); rejected ones write suppression records; undecided ones do nothing.
     var edgeProposals: [EdgeProposal] = []
 
     /// The accepted duplicate proposal, if any — the one that turns this draft into a
@@ -232,9 +236,10 @@ struct OpenTaskSnapshot: Sendable, Hashable {
     var updatedAt: Date = .distantPast
     var dueDate: Date? = nil
     var isBlocked: Bool = false
-    /// Task ids this one has already been dismissed-as-duplicate against (tombstones),
-    /// so retrieval/proposals never re-surface a pair the user already rejected.
-    var dismissedDuplicateIDs: [UUID] = []
+    /// The umbrella this task is a step of, when it has a `.parent` edge — surfaced
+    /// in the retrieval fact line so the model sees the larger goal a candidate
+    /// belongs to (the objective-lite signal).
+    var parentTitle: String? = nil
 }
 
 /// Personal context handed to an engine per triage call. The context budget is
@@ -254,6 +259,9 @@ struct TriageContext: Sendable {
     /// candidate package the model gets for duplicate/child detection (the ONLY ids it
     /// may reference). Built by `ContextRetrieval`; empty when nothing is close enough.
     var candidates: [RetrievalCandidate] = []
+    /// Suggestions the user has already rejected (`SuppressionStore`) — the resolver
+    /// drops any matching proposal so a "no" sticks across captures.
+    var suppressions: [RelationshipSuppression] = []
 
     static let none = TriageContext()
 }

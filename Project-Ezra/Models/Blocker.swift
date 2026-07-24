@@ -14,7 +14,7 @@
 //                  task on a guess (see `AppBrain.resolveBlockers`).
 //
 //  No longer persisted directly — `Blocker` is now a READ-ONLY UI value type derived
-//  on read from a task's non-dismissed `.blocks` `Relationship` edges (see
+//  on read from a task's `.blocks` `Relationship` edges (see
 //  `TaskItem.blockers`). Each derived blocker reuses its edge's `id`, so a blocker's
 //  identity round-trips back to the underlying relationship for removal. The four
 //  factory verbs below survive for tests and call-site symmetry.

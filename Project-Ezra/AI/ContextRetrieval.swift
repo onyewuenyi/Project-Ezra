@@ -15,7 +15,6 @@
 //
 
 import Foundation
-import NaturalLanguage
 
 /// One retrieved neighbour: the task's identity plus a compact fact line for the model
 /// prompt, and the blended relevance score that ranked it.
@@ -42,38 +41,52 @@ enum ContextRetrieval {
     /// The relevance floor — below this a neighbour isn't worth showing the model at all.
     static let relevanceFloor = 0.12
 
-    /// The sentence-embedding model, loaded ONCE per process (loading it is the expensive
-    /// part; it was previously re-created on every triage call). Nil when unavailable →
-    /// the blend degrades to lexical overlap.
-    private static let sentenceEmbedding = NLEmbedding.sentenceEmbedding(for: .english)
+    /// The cap on FRESH embeddings per retrieval call (cache misses that actually run
+    /// the model). Everything cached is free; misses beyond the budget fall back to
+    /// lexical-only scoring for that candidate, so capture latency stays flat
+    /// regardless of store size (they'll embed on a later capture).
+    static let maxFreshEmbeds = 20
 
-    /// Rank the open set by relevance to `text`. `excluding` drops tombstoned ids (pairs
-    /// the user already rejected). Deterministic: ties break by uuid, capped at `maxCandidates`.
+    /// Rank the open set by relevance to `text`. Deterministic: ties break by uuid,
+    /// capped at `maxCandidates`. Rejected pairings are NOT filtered here — retrieval
+    /// stays a pure relevance ranking; suppression is the resolver's job
+    /// (`IntentResolver.edgeProposals` + `SuppressionStore`), keyed per-proposal.
     static func candidates(
         matching text: String,
         category: String? = nil,
         among tasks: [OpenTaskSnapshot],
-        excluding: Set<UUID> = [],
         now: Date = Date()
     ) -> [RetrievalCandidate] {
         let queryWords = CorrectionProfile.significantWords(text)
-        let embedding = sentenceEmbedding
+
+        // Vectors come from the `EmbeddingStore` read-through (memo → model), with a
+        // bounded fresh-embed budget per call. The query vector is computed outside
+        // the budget (it's one embed, and nothing works without it).
+        var freshBudget = maxFreshEmbeds
+        func vector(for candidateTitle: String) -> [Double]? {
+            if let cached = EmbeddingStore.cachedVector(for: candidateTitle) { return cached }
+            guard freshBudget > 0, let fresh = EmbeddingStore.computeVector(for: candidateTitle)
+            else { return nil }
+            freshBudget -= 1
+            return fresh
+        }
+        let queryVector =
+            EmbeddingStore.cachedVector(for: text) ?? EmbeddingStore.computeVector(for: text)
 
         let scored: [RetrievalCandidate] = tasks.compactMap { snap in
-            guard !excluding.contains(snap.id) else { return nil }
-
             let lexical = jaccard(queryWords, CorrectionProfile.significantWords(snap.title))
             let categoryScore = (category != nil && category == snap.category) ? 1.0 : 0.0
             let recency = recencyScore(snap.updatedAt, now: now)
 
             let score: Double
-            if let embedding {
-                let similarity = embeddingSimilarity(embedding, text, snap.title)
+            if let queryVector, let candidateVector = vector(for: snap.title) {
+                let similarity = EmbeddingStore.similarity(queryVector, candidateVector)
                 score =
                     embeddingWeight * similarity + lexicalWeight * lexical
                     + categoryWeight * categoryScore + recencyWeight * recency
             } else {
-                // Embedding unavailable → its weight shifts onto lexical overlap.
+                // Embedding unavailable (no model, or over the fresh-embed budget) →
+                // its weight shifts onto lexical overlap.
                 score =
                     (embeddingWeight + lexicalWeight) * lexical
                     + categoryWeight * categoryScore + recencyWeight * recency
@@ -94,12 +107,6 @@ enum ContextRetrieval {
     }
 
     // MARK: - Components
-
-    /// Cosine similarity in [0, 1] from `NLEmbedding`'s cosine distance ([0, 2]).
-    private static func embeddingSimilarity(_ embedding: NLEmbedding, _ a: String, _ b: String) -> Double {
-        let distance = embedding.distance(between: a, and: b, distanceType: .cosine)
-        return max(0, min(1, 1 - distance))
-    }
 
     private static func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
         guard !a.isEmpty || !b.isEmpty else { return 0 }
@@ -133,6 +140,7 @@ enum ContextRetrieval {
             }
         }
         if snap.isBlocked { parts.append("blocked") }
+        if let parent = snap.parentTitle { parts.append("step of “\(parent)”") }
         return parts.joined(separator: " · ")
     }
 }

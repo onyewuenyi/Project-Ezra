@@ -113,6 +113,7 @@ final class AppBrain {
         roster: [RosterPerson] = [],
         learned: [LearnedRule] = [],
         openTasks: [OpenTaskSnapshot] = [],
+        suppressions: [RelationshipSuppression] = [],
         onPartial: (@MainActor ([TaskDraft]) -> Void)? = nil
     ) async -> [TaskDraft] {
         isProcessing = true
@@ -124,13 +125,15 @@ final class AppBrain {
             personalization: CorrectionProfile.instructionLines(learned),
             roster: roster,
             openTasks: openTasks,
-            candidates: candidates
+            candidates: candidates,
+            suppressions: suppressions
         )
         // Resolve intents → drafts and apply the ownership gate — the one path both the
         // streaming partials and the final result run through.
         func resolveAndGate(_ intents: [TaskIntent]) -> [TaskDraft] {
             var drafts = IntentResolver.resolve(
-                intents, rules: learned, openTasks: openTasks, candidates: candidates)
+                intents, rules: learned, openTasks: openTasks, candidates: candidates,
+                suppressions: suppressions)
             Self.applyOwnershipGate(to: &drafts, hasHousehold: !roster.isEmpty)
             return drafts
         }
@@ -183,8 +186,8 @@ final class AppBrain {
     /// forever — one capture, many tasks), and log silent-tier filings to the change log.
     /// Capture Graph Awareness: a draft with an ACCEPTED duplicate proposal does NOT
     /// create a task — it MERGES into the target (the capture rides along); all other
-    /// drafts create real tasks and may gain a parent link (accepted child) or a dismissed
-    /// tombstone (rejected duplicate).
+    /// drafts create real tasks and may gain a parent link (accepted child) or write
+    /// suppression records (rejected duplicate/child — see `SuppressionStore`).
     @discardableResult
     func commit(
         _ drafts: [TaskDraft], rawCapture: String, source: CaptureSource = .text,
@@ -280,7 +283,7 @@ final class AppBrain {
                     dependent.removeBlocker(blocker.id, among: all)
                 }
                 let before = dependent.taskBlockerIDs.count
-                dependent.addTaskBlocker(newID, among: all, provenance: .ai)  // no-ops if it'd cycle
+                dependent.addTaskBlocker(newID, among: all, origin: .inferred(confidence: 0.9))  // no-ops if it'd cycle
                 guard dependent.taskBlockerIDs.count > before else { continue }
                 context.insert(
                     ChangeLogEntry(
@@ -326,7 +329,9 @@ final class AppBrain {
 
     /// Apply the accepted capture-graph proposals on the newly created tasks: an accepted
     /// child link becomes a `.parent` edge (with a reversible "linked" entry); a REJECTED
-    /// duplicate leaves a dismissed tombstone so the pair is never re-proposed. Accepted
+    /// proposal writes `SuppressionRecord`s (capture-form keyed on the normalized draft
+    /// title so the same rejection sticks across captures, plus the pair form for
+    /// both-tasks-exist consumers) so the pairing is never re-proposed. Accepted
     /// duplicates are handled separately by the merge fold (no task was created).
     private func resolveProposedEdges(
         _ drafts: [TaskDraft], created: [TaskItem], all: [TaskItem], in context: NSManagedObjectContext
@@ -346,7 +351,13 @@ final class AppBrain {
                             initiatedBy: .ai, isReversible: true,
                             taskTitle: task.title, taskUUID: task.uuid, in: context))
                 case (.duplicateOf, .rejected):
-                    task.tombstoneDuplicate(proposal.targetID)
+                    SuppressionStore.recordRejectedDuplicate(
+                        draftTitle: draft.title, createdID: task.uuid,
+                        targetID: proposal.targetID, in: context)
+                case (.childOf, .rejected):
+                    SuppressionStore.recordRejectedParent(
+                        draftTitle: draft.title, createdID: task.uuid,
+                        parentID: proposal.targetID, in: context)
                 default:
                     continue  // undecided / non-open → nothing
                 }
@@ -372,7 +383,7 @@ final class AppBrain {
             target.notes =
                 [target.notes, note]
                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
-            target.touch()
+            target.touchHuman()  // the merge rode the user's confirm tap — real engagement
             context.insert(
                 ChangeLogEntry(
                     summary: "Merged “\(draft.title)” into “\(target.title)”",
@@ -449,7 +460,7 @@ final class AppBrain {
             if let blockerID = TaskItem.resolveBlocker(
                 phrase: phrase, among: candidates.filter { $0.uuid != task.uuid })
             {
-                task.addTaskBlocker(blockerID, among: candidates, provenance: .ai)  // no-ops if it'd cycle
+                task.addTaskBlocker(blockerID, among: candidates, origin: .inferred(confidence: 0.9))  // no-ops if it'd cycle
             } else {
                 // No matching task: the captured wait becomes an EXTERNAL blocker in
                 // the user's own words ("waiting on receipts") rather than being
@@ -457,7 +468,7 @@ final class AppBrain {
                 // blockers" rule's intent: the phrase rode the Confirm-Creation card
                 // (visible, removable) — it is confirm-sanctioned, never a silent
                 // post-creation invention. Blocked stays derived either way.
-                task.addExternalBlocker(phrase, among: candidates, provenance: .ai)
+                task.addExternalBlocker(phrase, among: candidates, origin: .inferred(confidence: 0.9))
             }
         }
     }

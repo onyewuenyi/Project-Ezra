@@ -39,6 +39,15 @@ extension TaskItem {
         updatedAt = now
     }
 
+    /// The HUMAN clock: a human-initiated edit bumps `lastHumanTouchAt` alongside
+    /// `updatedAt`. System paths (capture-time edge writes on existing tasks, sweeps)
+    /// call plain `touch()` — staleness and the plan-reconcile deferral discriminator
+    /// read the human clock only, so a system write can never fake engagement.
+    func touchHuman(now: Date = Date()) {
+        lastHumanTouchAt = now
+        touch(now: now)
+    }
+
     /// Move the task along the working pipeline (`TaskStage`). Stage is a sub-state of
     /// `.active` — this writes only `stageRaw` (and the touch clock); it NEVER touches
     /// the status. Setting a stage on an inbox/resolved task is harmless: the display
@@ -102,14 +111,14 @@ extension TaskItem {
         if isStageUnset { stage = TaskStage.defaultOnConfirm }
         confirmedAt = now
         transition(to: .active, now: now)
-        touch(now: now)  // transition no-ops if already active; the confirm still counts as a touch
+        touchHuman(now: now)  // transition no-ops if already active; the confirm still counts as a touch
     }
 
     /// The human explicitly making the call a Needs Decision flag was waiting on.
     /// The only way a judgment call's flag ever clears.
     func resolveDecision(now: Date = Date()) {
         needsDecision = false
-        touch(now: now)
+        touchHuman(now: now)
     }
 
     /// Escalate-to-Decision: sets the one visible flag. This IS the ask-tier
@@ -124,7 +133,7 @@ extension TaskItem {
     /// Human-initiated, from the retro or a swipe.
     func deferTask(until date: Date?, now: Date = Date()) {
         dueDate = date
-        touch(now: now)
+        touchHuman(now: now)
     }
 
     /// Set who owns this task — the current user (pass `UserProfile.currentMemberID`),
@@ -135,7 +144,7 @@ extension TaskItem {
     func claim(ownerID: UUID?, among tasks: [TaskItem]) {
         self.ownerID = ownerID
         self.ownerPending = false
-        touch()
+        touchHuman()
     }
 
     // NOTE: there is no `block()`. Blocked is never a status — it is derived
@@ -163,9 +172,13 @@ extension TaskItem {
     /// Force-unblock: drop every `.blocks` edge (tracked and external alike), leaving
     /// any `.parent`/other edges intact. The detail sheet's "Unblock" action. Leaves
     /// the status alone — the task simply stops reading as blocked on the next
-    /// derivation.
-    func unblock() {
+    /// derivation. Human-initiated (a detail/recommended-action tap), so it stamps
+    /// both `lastUnblockedAt` (the recently-unblocked fact) and the human clock.
+    func unblock(now: Date = Date()) {
+        guard !blockers.isEmpty else { return }
         removeRelationships { $0.kind == .blocks }
+        lastUnblockedAt = now
+        touchHuman(now: now)
     }
 
     /// Reopen a resolved task, restoring the status it left when it was resolved
@@ -188,10 +201,10 @@ extension TaskItem {
     /// Add a tracked dependency (a `.blocks` edge). No-ops on self, a live duplicate, or
     /// a reference that would close a cycle (so a task can never become infinitely
     /// blocked). `tasks` supplies the graph for the cycle check AND the attention
-    /// recompute (the target gains a dependent). `provenance` is `.human` by default;
-    /// AI sites (capture-time blocker/dependent resolution) pass `.ai`.
+    /// recompute (the target gains a dependent). `origin` is `.human` by default;
+    /// AI sites (capture-time blocker/dependent resolution) pass `.inferred`.
     func addTaskBlocker(
-        _ blockerID: UUID, among tasks: [TaskItem], provenance: Relationship.Provenance = .human
+        _ blockerID: UUID, among tasks: [TaskItem], origin: Relationship.Origin = .human
     ) {
         guard let selfID = uuid, blockerID != selfID, !taskBlockerIDs.contains(blockerID) else {
             return
@@ -200,8 +213,7 @@ extension TaskItem {
         guard !TaskItem.wouldCreateCycle(from: selfID, adding: blockerID, blockersByUUID: map) else {
             return
         }
-        appendRelationship(
-            .blocks(taskID: blockerID, provenance: provenance, confidence: provenance == .human ? 1.0 : 0.9))
+        appendRelationship(.blocks(taskID: blockerID, origin: origin))
         // The blocker task just gained an open dependent → its graph centrality shifts.
         if let target = tasks.first(where: { $0.uuid == blockerID }) {
             AttentionEngine.recompute([target], among: tasks)
@@ -212,21 +224,20 @@ extension TaskItem {
     /// a `.blocks` edge with no target. Nothing auto-resurfaces it. `note` nil reads as
     /// "something else". No cycle risk — an external blocker has no edge, and (having no
     /// target) it never shifts anyone's centrality. `.human` by default; the one
-    /// sanctioned AI site (a captured wait that matched no task at commit) passes `.ai`.
+    /// sanctioned AI site (a captured wait that matched no task at commit) passes `.inferred`.
     func addExternalBlocker(
-        _ note: String?, among tasks: [TaskItem], provenance: Relationship.Provenance = .human
+        _ note: String?, among tasks: [TaskItem], origin: Relationship.Origin = .human
     ) {
-        appendRelationship(.externalWait(note, provenance: provenance))
+        appendRelationship(.externalWait(note, origin: origin))
     }
 
     /// Link this task as a step UNDER `parentID` — a `.parent` edge (Split-Into-Subtasks /
     /// capture child-linking). No-ops on self or a live duplicate.
-    func linkParent(_ parentID: UUID, provenance: Relationship.Provenance = .human, confidence: Double = 1.0)
-    {
+    func linkParent(_ parentID: UUID, origin: Relationship.Origin = .human) {
         guard let selfID = uuid, parentID != selfID,
-            !relationships.contains(where: { $0.kind == .parent && $0.targetID == parentID && !$0.dismissed })
+            !relationships.contains(where: { $0.kind == .parent && $0.targetID == parentID })
         else { return }
-        appendRelationship(.parent(taskID: parentID, provenance: provenance, confidence: confidence))
+        appendRelationship(.parent(taskID: parentID, origin: origin))
     }
 
     /// Remove a `.parent` edge to `parentID` (the undo of `linkParent`).
@@ -234,22 +245,16 @@ extension TaskItem {
         removeRelationships { $0.kind == .parent && $0.targetID == parentID }
     }
 
-    /// Record a dismissed `.duplicate` tombstone toward `targetID` — the user said "these
-    /// are NOT the same". Carries no live semantics; exists only so the pair is never
-    /// re-proposed.
-    func tombstoneDuplicate(_ targetID: UUID) {
-        guard let selfID = uuid, targetID != selfID else { return }
-        appendRelationship(
-            Relationship(
-                kind: .duplicate, targetID: targetID, provenance: .human, confidence: 1.0,
-                dismissed: true))
-    }
-
     /// Remove one `.blocks` edge by its id (task or external). Recomputes the ex-target's
-    /// attention (it lost a dependent).
-    func removeBlocker(_ blockerID: UUID, among tasks: [TaskItem]) {
+    /// attention (it lost a dependent). Stamps `lastUnblockedAt` when this removal is the
+    /// one that frees the task (its last ACTIVE blocker) — the edge is gone after this,
+    /// so the moment must be recorded here or never. No human-clock bump: callers span
+    /// human taps, capture-time upgrades, and undo.
+    func removeBlocker(_ blockerID: UUID, among tasks: [TaskItem], now: Date = Date()) {
+        let wasBlocked = hasActiveBlockers(among: tasks)
         let exTargetID = relationships.first { $0.id == blockerID }?.targetID
         removeRelationships { $0.id == blockerID && $0.kind == .blocks }
+        if wasBlocked && !hasActiveBlockers(among: tasks) { lastUnblockedAt = now }
         if let exTargetID, let target = tasks.first(where: { $0.uuid == exTargetID }) {
             AttentionEngine.recompute([target], among: tasks)
         }
@@ -328,6 +333,7 @@ extension TaskItem {
     @discardableResult
     func completeAndResurface(in context: NSManagedObjectContext, now: Date = Date()) -> [TaskItem] {
         complete(now: now)
+        touchHuman(now: now)  // only a human can attest a real-world completion
         logHumanResolution(action: "completed", verb: "Completed", now: now, in: context)
         return Self.resurfaceDependents(of: self, in: context)
     }
@@ -338,6 +344,7 @@ extension TaskItem {
     @discardableResult
     func killAndResurface(in context: NSManagedObjectContext, now: Date = Date()) -> [TaskItem] {
         kill(now: now)
+        touchHuman(now: now)  // the manual cancel path (the silent auto-archive calls `kill` directly)
         logHumanResolution(action: "killed", verb: "Canceled", now: now, in: context)
         return Self.resurfaceDependents(of: self, in: context)
     }
@@ -380,7 +387,7 @@ extension TaskItem {
         in context: NSManagedObjectContext
     ) {
         guard oldValue != newValue else { return }
-        touch(now: now)  // a real field edit — keep the stale clock honest
+        touchHuman(now: now)  // a real human field edit — keep both clocks honest
         let actor = UserProfile.currentMemberID(in: context)
 
         if coalescable,
@@ -562,6 +569,9 @@ extension TaskItem {
             // The dependent referenced `resolved`, which was active until just now, so
             // it *was* blocked. It comes free iff nothing else still blocks it.
             guard !dependent.hasActiveBlockers(among: all) else { continue }
+            // The blocker cleared just now — record the fact (the recently-unblocked
+            // boost reads it). A fact write only: no touch, so staleness stays honest.
+            dependent.lastUnblockedAt = Date()
             freed.append(dependent)
             let detail: String
             if dependent.ownerPending {

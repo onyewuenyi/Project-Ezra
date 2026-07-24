@@ -253,8 +253,12 @@ struct TaskMutationTests {
         let old = Date(timeIntervalSinceNow: -10 * 24 * 3600)
         let stale = TaskItem(title: "x", status: .active, createdAt: old)
         #expect(stale.isStale())
-        // Touching it resets the clock.
+        // A SYSTEM touch does NOT reset the clock — staleness reads the human clock,
+        // so a capture-time edge write can't fake engagement…
         stale.touch()
+        #expect(stale.isStale())
+        // …a HUMAN touch does.
+        stale.touchHuman()
         #expect(!stale.isStale())
         // A dated task is never stale — it goes overdue instead.
         let dated = TaskItem(

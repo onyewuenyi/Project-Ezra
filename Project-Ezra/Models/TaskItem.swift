@@ -261,6 +261,36 @@ final class TaskItem: NSManagedObject {
     /// derives it on read, so "blocked with nothing blocking it" is unrepresentable.
     @NSManaged private var relationshipsData: Data?
 
+    // Deferral + engagement facts. FACTS, not reasoning — they live here with the
+    // other facts, never inside the attention metadata blob. Written by the Today
+    // plan seam (`TodayPlanStore`) and the graph mutations; read live by
+    // `TaskRanking.currentRelevance`.
+
+    /// Times this task appeared in a committed Today plan and was left UNTOUCHED —
+    /// the true skip signal (`currentRelevance` pulls it down). Distinct from
+    /// `carriedOverCount`: conflating them would penalize actively-worked multi-day
+    /// tasks, the inverted signal.
+    @NSManaged var deferralCount: Int32
+    /// Times this task was planned, worked on (a human touch since it surfaced), but
+    /// not finished. Deliberately written-but-unread by ranking for now — the
+    /// distinction can't be backfilled later, so it's recorded from day one.
+    @NSManaged var carriedOverCount: Int32
+    /// The last time this task appeared in a generated Today plan.
+    @NSManaged var lastSurfacedAt: Date?
+    /// When this task's last ACTIVE blocker cleared (the recently-unblocked boost).
+    /// Stamped by the unblock mutations and the resurface seam — nothing else about
+    /// an edge removal survives, so this fact must be written at the moment it happens.
+    @NSManaged var lastUnblockedAt: Date?
+    /// The HUMAN clock: the last human-initiated edit (`touchHuman`). `updatedAt` is
+    /// also bumped by system paths (capture-time edge writes on existing tasks), so
+    /// staleness and the plan-reconcile deferral discriminator read THIS, falling
+    /// back to `createdAt` while nil.
+    @NSManaged var lastHumanTouchAt: Date?
+
+    /// The honest untouched-since clock for staleness-style reads: the last human
+    /// touch, or birth when no human has touched it yet.
+    var humanTouchedAt: Date { lastHumanTouchAt ?? createdAt }
+
     /// Rough effort estimate in minutes, when the wording implies one. Feeds the
     /// quick-win signal. Bridges the optional-scalar `effortMinutesValue`.
     var effortMinutes: Int? {
@@ -458,12 +488,14 @@ final class TaskItem: NSManagedObject {
         return dueDate < Calendar.current.startOfDay(for: now)
     }
 
-    /// The Stale flag: no due date, untouched past the rot threshold. The heuristic
-    /// rot-detector for the majority of errands that never had a date to blow past.
-    /// (Dated tasks blow past their date instead — that's Overdue.)
+    /// The Stale flag: no due date, un-TOUCHED-BY-A-HUMAN past the rot threshold. The
+    /// heuristic rot-detector for the majority of errands that never had a date to blow
+    /// past. (Dated tasks blow past their date instead — that's Overdue.) Reads the
+    /// human clock, not `updatedAt` — a capture-time edge write on this task (a system
+    /// path that bumps `updatedAt`) must not silently reset its staleness.
     func isStale(now: Date = Date(), threshold: TimeInterval = StalePolicy.retroThreshold) -> Bool {
         guard !status.isResolved, dueDate == nil else { return false }
-        return now.timeIntervalSince(updatedAt) > threshold
+        return now.timeIntervalSince(humanTouchedAt) > threshold
     }
 
     // MARK: - AI Assessment (derived on read)
@@ -551,11 +583,11 @@ extension TaskItem {
     }
 
     /// Everything this task is waiting on — a READ-ONLY derived view over the
-    /// non-dismissed `.blocks` edges. `Blocker` survives as the UI value type; each
-    /// derived blocker reuses its edge's `id`, so `removeBlocker(_ id:)` still lands.
+    /// `.blocks` edges. `Blocker` survives as the UI value type; each derived
+    /// blocker reuses its edge's `id`, so `removeBlocker(_ id:)` still lands.
     var blockers: [Blocker] {
         relationships
-            .filter { $0.kind == .blocks && !$0.dismissed }
+            .filter { $0.kind == .blocks }
             .map { rel in
                 Blocker(
                     id: rel.id, kind: rel.targetID != nil ? .task : .external,
@@ -563,11 +595,11 @@ extension TaskItem {
             }
     }
 
-    /// The task this one is a step under, if any — the first non-dismissed `.parent`
-    /// edge's target. Read-only (Split-Into-Subtasks plumbing; Phase 2's capture
-    /// child-linking is the only writer, via a mutation helper).
+    /// The task this one is a step under, if any — the first `.parent` edge's
+    /// target. Read-only (Split-Into-Subtasks plumbing; capture child-linking is
+    /// the only writer, via a mutation helper).
     var parentTaskID: UUID? {
-        relationships.first { $0.kind == .parent && !$0.dismissed }?.targetID
+        relationships.first { $0.kind == .parent }?.targetID
     }
 
     /// The graph edges only. Chains and the cycle guard are built from tracked

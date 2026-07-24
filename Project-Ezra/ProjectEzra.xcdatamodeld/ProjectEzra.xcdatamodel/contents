@@ -28,6 +28,26 @@
         <attribute name="stateTimelineData" optional="YES" attributeType="Binary"/>
         <attribute name="attentionData" optional="YES" attributeType="Binary"/>
         <attribute name="relationshipsData" optional="YES" attributeType="Binary"/>
+        <attribute name="deferralCount" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="carriedOverCount" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="lastSurfacedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastUnblockedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastHumanTouchAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="SuppressionRecord" representedClassName="SuppressionRecord" syncable="YES">
+        <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="kindRaw" optional="NO" attributeType="String" defaultValueString="duplicateMerge"/>
+        <attribute name="pairKey" optional="YES" attributeType="String"/>
+        <attribute name="targetID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="normalizedTitle" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="EmbeddingCache" representedClassName="EmbeddingCache" syncable="YES">
+        <attribute name="taskID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="vector" optional="YES" attributeType="Binary"/>
+        <attribute name="sourceHash" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="revision" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="computedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
     </entity>
     <entity name="Capture" representedClassName="Capture" syncable="YES">
         <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>

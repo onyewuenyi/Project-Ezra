@@ -19,15 +19,21 @@ enum IntentResolver {
     /// Resolve a batch. Only `.create` intents become drafts today.
     static func resolve(
         _ intents: [TaskIntent], rules: [LearnedRule] = [],
-        openTasks: [OpenTaskSnapshot] = [], candidates: [RetrievalCandidate] = [], now: Date = Date()
+        openTasks: [OpenTaskSnapshot] = [], candidates: [RetrievalCandidate] = [],
+        suppressions: [RelationshipSuppression] = [], now: Date = Date()
     ) -> [TaskDraft] {
         intents.filter { $0.action == .create }
-            .map { resolve($0, rules: rules, openTasks: openTasks, candidates: candidates, now: now) }
+            .map {
+                resolve(
+                    $0, rules: rules, openTasks: openTasks, candidates: candidates,
+                    suppressions: suppressions, now: now)
+            }
     }
 
     static func resolve(
         _ intent: TaskIntent, rules: [LearnedRule] = [],
-        openTasks: [OpenTaskSnapshot] = [], candidates: [RetrievalCandidate] = [], now: Date = Date()
+        openTasks: [OpenTaskSnapshot] = [], candidates: [RetrievalCandidate] = [],
+        suppressions: [RelationshipSuppression] = [], now: Date = Date()
     ) -> TaskDraft {
         let intent = applyRules(rules, to: intent)
         let dueDate = resolveDate(expression: intent.dateExpression, now: now)
@@ -56,7 +62,8 @@ enum IntentResolver {
         )
         draft.workIntent = intent.workIntent.flatMap { WorkIntent(rawValue: $0) }
         draft.blocks = detectDependents(for: intent, among: openTasks)
-        draft.edgeProposals = edgeProposals(for: intent, candidates: candidates)
+        draft.edgeProposals = edgeProposals(
+            for: intent, candidates: candidates, suppressions: suppressions)
         // Freeze the AI's field values so the Confirm-Creation diff can tell what
         // the user corrected — the learning signal starts here. Deliberately taken
         // AFTER rule application: a learned rule is part of the AI's proposal now,
@@ -82,17 +89,29 @@ enum IntentResolver {
     static let suggestThreshold = 0.5
 
     /// Turn the model's duplicate/child claims into tiered, validated `EdgeProposal`s:
-    /// unknown ids dropped (must be a candidate), <0.5 suppressed, and a task can't be
+    /// unknown ids dropped (must be a candidate), <0.5 suppressed, previously-rejected
+    /// pairs dropped (the capture-form suppression check: same normalized draft title
+    /// against the same target — a "no" sticks across captures), and a task can't be
     /// both a duplicate of AND a child of the same target (the stronger duplicate wins).
     static func edgeProposals(
-        for intent: TaskIntent, candidates: [RetrievalCandidate]
+        for intent: TaskIntent, candidates: [RetrievalCandidate],
+        suppressions: [RelationshipSuppression] = []
     ) -> [EdgeProposal] {
         let byID = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let normalizedTitle = RelationshipSuppression.normalizeTitle(intent.title)
         var proposals: [EdgeProposal] = []
 
         func consider(_ kind: EdgeProposal.Kind, _ ref: EdgeReference?) {
             guard let ref, let candidate = byID[ref.targetID] else { return }  // unknown id dropped
-            guard let decision = tier(ref.confidence) else { return }  // <0.5 suppressed
+            let suppressionKind: RelationshipSuppression.SuppressionKind =
+                kind == .duplicateOf ? .duplicateMerge : .parentLink
+            guard
+                !suppressions.contains(where: {
+                    $0.suppresses(
+                        kind: suppressionKind, targetID: ref.targetID, normalizedTitle: normalizedTitle)
+                })
+            else { return }  // the user already said no to this pairing
+            guard let decision = tier(kind, ref.confidence) else { return }  // <0.5 suppressed
             proposals.append(
                 EdgeProposal(
                     kind: kind, targetID: ref.targetID, targetTitle: candidate.title,
@@ -108,12 +127,19 @@ enum IntentResolver {
         return proposals
     }
 
-    /// ≥0.85 → pre-selected (still confirm-gated); 0.5–0.85 → the user chooses; below →
-    /// suppressed entirely.
-    static func tier(_ confidence: Double) -> EdgeProposal.Decision? {
-        if confidence >= acceptThreshold { return .accepted }
-        if confidence >= suggestThreshold { return .undecided }
-        return nil
+    /// Tiering splits by DESTRUCTIVENESS, not uniformly by confidence (the auto-accept
+    /// invariant): a duplicate merge folds a capture into an existing task, so it keeps
+    /// the two-threshold tiering; a child link is additive and reversible, so above the
+    /// suppression floor it is simply accepted (pre-selected, editable at confirm — no
+    /// `.undecided` limbo that silently does nothing at commit).
+    static func tier(_ kind: EdgeProposal.Kind, _ confidence: Double) -> EdgeProposal.Decision? {
+        guard confidence >= suggestThreshold else { return nil }
+        switch kind {
+        case .duplicateOf:
+            return confidence >= acceptThreshold ? .accepted : .undecided
+        case .childOf:
+            return .accepted
+        }
     }
 
     // MARK: - Learned rules (the correction loop's deterministic half)

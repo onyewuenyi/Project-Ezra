@@ -32,9 +32,15 @@ struct Project_EzraApp: App {
         // `workIntentRaw` classification. Generation 8 = retires the Pinned signal
         // (drops TaskItem `isPinned`), leaving `isUrgent` as the only user Signal — a
         // manual float-to-top override competed with the computed attention score.
+        // Generation 9 = the relevance + suppression substrate: TaskItem gains the
+        // deferral/engagement facts (`deferralCount`/`carriedOverCount`/`lastSurfacedAt`/
+        // `lastUnblockedAt`/`lastHumanTouchAt`), `relationshipsData` moves to v2
+        // (`Origin` replaces provenance+confidence; dismissed tombstones leave the
+        // type for the pair-owned suppression store), and two entities land —
+        // `SuppressionRecord` and `EmbeddingCache`.
         // Wipes existing stores, TestFlight users included — accepted under the
         // clean-break policy.
-        let schemaGeneration = 8
+        let schemaGeneration = 9
         let generationKey = "appSchemaGeneration"
         if UserDefaults.standard.integer(forKey: generationKey) != schemaGeneration {
             PersistenceStack.destroyStore()

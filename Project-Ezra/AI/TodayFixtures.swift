@@ -23,8 +23,8 @@
 //  - Decision Framing: a `.decision` work-intent task that is NOT a needsDecision judgment
 //    call, so the detail shows the lighter Thinking Partner card ("A decision to make").
 //  - Capture Graph Awareness (persisted results of the confirm-card decisions): a parent
-//    task with `.parent` child sub-steps, a dismissed `.duplicate` tombstone ("Keeping
-//    both"), and a merged capture (provenance note + a reversible "merged" Inbox entry
+//    task with `.parent` child sub-steps, a rejected duplicate ("Keeping both" —
+//    suppression records), and a merged capture (provenance note + a reversible "merged" Inbox entry
 //    whose Undo resurrects the folded draft).
 //
 
@@ -37,7 +37,10 @@ enum TodayFixtures {
     /// requiring the app to be deleted first. Identity (Household / FamilyMember /
     /// UserProfile) is preserved — `seed` re-bootstraps it idempotently.
     static func reset(in context: NSManagedObjectContext) {
-        for entity in ["TaskItem", "CapacityLog", "Capture", "ChangeLogEntry", "Correction"] {
+        for entity in [
+            "TaskItem", "CapacityLog", "Capture", "ChangeLogEntry", "Correction",
+            "SuppressionRecord", "EmbeddingCache",
+        ] {
             let request = NSFetchRequest<NSManagedObject>(entityName: entity)
             (try? context.fetch(request))?.forEach(context.delete)
         }
@@ -177,15 +180,17 @@ enum TodayFixtures {
             effortMinutes: 60, createdAt: now.addingTimeInterval(-3 * day), in: context)
         for step in [photos, passport, flights] { step.linkParent(italyPlan.uuid!) }
 
-        // MARK: Capture Graph — a dismissed-duplicate tombstone ("Keeping both")
-        // The persisted result of the user rejecting a duplicate proposal: a near-dup task
-        // carries a dismissed `.duplicate` edge (no live semantics; it just stops the pair
-        // being re-proposed on the next similar capture).
+        // MARK: Capture Graph — a rejected duplicate ("Keeping both")
+        // The persisted result of the user rejecting a duplicate proposal: pair-owned
+        // suppression records (never an edge) that stop the pairing being re-proposed
+        // on the next similar capture.
         let bestBuyReturn = TaskItem(
             title: "Return the Best Buy package", category: "Errands", status: .active,
             confidence: 0.9, reasoning: "A separate return — kept apart from the Amazon one.",
             ownerID: me, effortMinutes: 15, createdAt: now.addingTimeInterval(-2 * day), in: context)
-        bestBuyReturn.tombstoneDuplicate(amazonReturn.uuid!)
+        SuppressionStore.recordRejectedDuplicate(
+            draftTitle: bestBuyReturn.title, createdID: bestBuyReturn.uuid,
+            targetID: amazonReturn.uuid!, in: context)
 
         // MARK: Capture Graph — a merged capture (the accepted-duplicate result)
         // A later capture of the same task folded INTO the expense report: the target keeps

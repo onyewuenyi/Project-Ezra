@@ -27,7 +27,9 @@ import Foundation
 struct AttentionContributor: Codable, Hashable {
     enum Kind: String, Codable {
         case urgentSignal, aiImportance, effortShape, graphCentrality
-        case deferralPattern  // reserved (V1 unused)
+        // NOTE: deferral is deliberately NOT a persisted contributor — it lives in the
+        // live layer (`TaskRanking.currentRelevance` reads `deferralCount`), where a
+        // fast-moving fact belongs. The old reserved `deferralPattern` case is gone.
     }
     var kind: Kind
     var points: Double

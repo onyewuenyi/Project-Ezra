@@ -176,9 +176,17 @@ final class TodaySequenceModel {
         }
     }
 
-    /// Persist the final briefing and advance the recap high-water mark.
+    /// Persist the final briefing and advance the recap high-water mark. Also stamps
+    /// `lastSurfacedAt` on every planned task — the fact the next rollover's deferral
+    /// discriminator compares the human clock against (re-stamping on a same-day
+    /// replan/upgrade is harmless: same day, same comparison).
     private func finalize() {
         guard let plan else { return }
+        let planned = Set(plan.actions.map(\.taskID))
+        for task in allTasks where task.uuid.map(planned.contains) ?? false {
+            task.lastSurfacedAt = now
+        }
+        try? context?.save()
         store.save(
             TodayPlanCache(
                 dateKey: TodayPlanStore.dayKey(for: now), tier: plan.tier, headline: plan.headline,

@@ -121,6 +121,38 @@ struct TodayPlanStoreTests {
         #expect(store.cache == nil)
     }
 
+    @Test("Rollover discriminates deferral from carried-over by the HUMAN clock, once per day")
+    func rolloverDeferralDiscrimination() throws {
+        let context = TestStore.makeContext()
+        let store = TodayPlanStore(defaults: freshDefaults())
+        let yesterday = now.addingTimeInterval(-24 * 3600)
+        let birth = yesterday.addingTimeInterval(-3600)
+
+        let untouched = TaskItem(title: "untouched", status: .active, createdAt: birth)
+        let worked = TaskItem(title: "worked", status: .active, createdAt: birth)
+        let systemTouched = TaskItem(title: "system", status: .active, createdAt: birth)
+        let finished = TaskItem(title: "finished", status: .active, createdAt: birth)
+        let tasks = [untouched, worked, systemTouched, finished]
+        for task in tasks { task.lastSurfacedAt = yesterday }
+
+        worked.touchHuman(now: now.addingTimeInterval(-3600))  // real engagement after surfacing
+        systemTouched.touch(now: now.addingTimeInterval(-3600))  // a system bump must NOT count
+        finished.complete(now: now.addingTimeInterval(-3600))
+
+        store.save(
+            cache(for: yesterday, actions: tasks.map { PlannedAction(taskID: $0.uuid!, rationale: nil) }))
+        store.reconcileIfNeeded(context: context, tasks: tasks, now: now)
+
+        #expect(untouched.deferralCount == 1 && untouched.carriedOverCount == 0)
+        #expect(worked.carriedOverCount == 1 && worked.deferralCount == 0)
+        #expect(systemTouched.deferralCount == 1 && systemTouched.carriedOverCount == 0)
+        #expect(finished.deferralCount == 0 && finished.carriedOverCount == 0)  // resolved → neither
+
+        // Once per day: the cache was cleared, so a second reconcile is a no-op.
+        store.reconcileIfNeeded(context: context, tasks: tasks, now: now)
+        #expect(untouched.deferralCount == 1)
+    }
+
     @Test("No reconciliation when the cache is already today's")
     func reconciliationSkipsToday() throws {
         let context = TestStore.makeContext()

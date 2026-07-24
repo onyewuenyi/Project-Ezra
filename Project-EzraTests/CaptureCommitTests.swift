@@ -4,9 +4,9 @@
 //
 //  Capture Graph Awareness at commit: an accepted duplicate FOLDS into the target (no new
 //  task, a reversible "merged" entry that Undo resurrects); a rejected duplicate creates
-//  the task and leaves a dismissed tombstone; an accepted child becomes a reversible
-//  `.parent` edge; and the previously-undiffed reverse-dependency removal is now a
-//  Correction.
+//  the task and writes pair-owned suppression records (capture-form + symmetric pair —
+//  never an edge); an accepted child becomes a reversible `.parent` edge; and the
+//  previously-undiffed reverse-dependency removal is now a Correction.
 //
 
 import CoreData
@@ -71,8 +71,8 @@ struct CaptureCommitTests {
         #expect(corrections.contains { $0.fieldCorrected == "duplicate" && $0.userValue == "accepted" })
     }
 
-    @Test("Rejected duplicate creates the task and leaves a dismissed tombstone")
-    func rejectedTombstone() throws {
+    @Test("Rejected duplicate creates the task and writes suppression records, never an edge")
+    func rejectedSuppression() throws {
         let context = TestStore.makeContext()
         let brain = AppBrain()
         let existing = TaskItem(title: "Renew passport", status: .active, in: context)
@@ -85,13 +85,30 @@ struct CaptureCommitTests {
         let created = brain.commit(
             [draft("Renew passport again", edges: [dup])], rawCapture: "", into: context)
         #expect(created.count == 1)
-        #expect(
-            created[0].relationships.contains {
-                $0.kind == .duplicate && $0.dismissed && $0.targetID == existing.uuid!
-            })
-        // The tombstone carries no live semantics (not a blocker, not a parent).
+        // The rejection is pair-owned suppression, never an edge on either task.
+        #expect(created[0].relationships.isEmpty)
         #expect(created[0].blockers.isEmpty)
         #expect(created[0].parentTaskID == nil)
+
+        let suppressions = SuppressionStore.load(
+            in: context, existingTaskIDs: Set([existing.uuid!, created[0].uuid!]))
+        // Capture form: keyed on the normalized draft title against the target — the key
+        // that fires when the same text is captured again next week (a fresh draft id).
+        #expect(
+            suppressions.contains {
+                $0.suppresses(
+                    kind: .duplicateMerge, targetID: existing.uuid!,
+                    normalizedTitle: RelationshipSuppression.normalizeTitle("Renew passport again"))
+            })
+        // Pair form: symmetric by construction — matches from either direction.
+        #expect(
+            suppressions.contains {
+                $0.suppressesPair(kind: .duplicateMerge, created[0].uuid!, existing.uuid!)
+            })
+        #expect(
+            suppressions.contains {
+                $0.suppressesPair(kind: .duplicateMerge, existing.uuid!, created[0].uuid!)
+            })
     }
 
     @Test("Accepted child creates a parent edge with a reversible linked entry")
@@ -113,6 +130,30 @@ struct CaptureCommitTests {
         linked.undone = true
         ChangeLogUndo.revert(linked, in: context)
         #expect(created.first?.parentTaskID == nil)
+    }
+
+    @Test("Suppression hygiene: rows expire past maxAge and prune when their target is gone")
+    func suppressionHygiene() throws {
+        let context = TestStore.makeContext()
+        let live = TaskItem(title: "live", status: .active, in: context)
+        context.insert(live)
+        try context.save()
+
+        let expired = Date().addingTimeInterval(-SuppressionStore.maxAge - 86_400)
+        SuppressionStore.recordRejectedDuplicate(
+            draftTitle: "expired one", createdID: nil, targetID: live.uuid!, in: context, now: expired)
+        SuppressionStore.recordRejectedDuplicate(
+            draftTitle: "orphaned one", createdID: nil, targetID: UUID(), in: context)
+        SuppressionStore.recordRejectedDuplicate(
+            draftTitle: "kept one", createdID: nil, targetID: live.uuid!, in: context)
+
+        let loaded = SuppressionStore.load(in: context, existingTaskIDs: [live.uuid!])
+        #expect(loaded.count == 1)
+        #expect(
+            loaded.first?.normalizedTitle == RelationshipSuppression.normalizeTitle("kept one"))
+        // The stale rows were physically pruned, not just filtered.
+        let rows = try context.fetch(NSFetchRequest<SuppressionRecord>(entityName: "SuppressionRecord"))
+        #expect(rows.count == 1)
     }
 
     @Test("Removing a proposed reverse-dependency is now diffed as a Correction")

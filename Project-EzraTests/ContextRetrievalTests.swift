@@ -4,7 +4,8 @@
 //
 //  ContextRetrieval is the deterministic, pre-model substrate behind Capture Graph
 //  Awareness. These pin near-duplicate ranking, the embedding-nil lexical fallback (the
-//  path the simulator runs), the cap, determinism, and tombstone exclusion.
+//  path the simulator runs), the cap, and determinism. (Rejected-pair suppression is
+//  the resolver's job now — see `IntentResolverTests` — retrieval stays a pure ranking.)
 //
 
 import Foundation
@@ -57,15 +58,6 @@ struct ContextRetrievalTests {
         let a = ContextRetrieval.candidates(matching: "passport", among: tasks, now: now)
         let b = ContextRetrieval.candidates(matching: "passport", among: tasks, now: now)
         #expect(a == b)
-    }
-
-    @Test("Tombstoned ids are excluded")
-    func tombstoneExclusion() {
-        let excluded = UUID()
-        let tasks = [snap(excluded, "renew passport"), snap(UUID(), "renew passport too")]
-        let result = ContextRetrieval.candidates(
-            matching: "renew passport", among: tasks, excluding: [excluded])
-        #expect(!result.contains { $0.id == excluded })
     }
 
     @Test("Unrelated tasks fall below the relevance floor")

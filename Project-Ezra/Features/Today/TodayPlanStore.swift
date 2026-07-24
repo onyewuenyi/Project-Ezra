@@ -126,6 +126,14 @@ final class TodayPlanStore {
     /// with the capacity input gone, the capacity dimension is vestigial (`.steady`),
     /// so `CapacityBaseline(for: .steady)` reads as the overall daily-completion
     /// average. Empty-plan days aren't logged (they'd drag the average down).
+    ///
+    /// This is also the per-task deferral write seam: a planned task still OPEN at
+    /// rollover increments `deferralCount` when no human touched it since it surfaced
+    /// (the true skip), or `carriedOverCount` when someone worked on it without
+    /// finishing (multi-day work must NOT read as deferral — ranking would pull down
+    /// actively-worked tasks, the inverted signal). The discriminator is the HUMAN
+    /// clock (`humanTouchedAt`), never `updatedAt` — a system edge-write between
+    /// surface and rollover can't fake engagement.
     func reconcileIfNeeded(context: NSManagedObjectContext, tasks: [TaskItem], now: Date) {
         guard let stale = cache, stale.dateKey != Self.dayKey(for: now) else { return }
 
@@ -134,6 +142,15 @@ final class TodayPlanStore {
                 uniqueKeysWithValues: tasks.compactMap { task in task.uuid.map { ($0, task) } })
             let completed = stale.actions.filter { byID[$0.taskID]?.status == .done }.count
             let skipped = stale.actions.count - completed
+            for action in stale.actions {
+                guard let task = byID[action.taskID], !task.status.isResolved else { continue }
+                let surfacedAt = task.lastSurfacedAt ?? stale.generatedAt
+                if task.humanTouchedAt > surfacedAt {
+                    task.carriedOverCount += 1
+                } else {
+                    task.deferralCount += 1
+                }
+            }
             let day = Calendar.current.startOfDay(for: stale.generatedAt)
             let log = CapacityLog(
                 date: day, capacity: .steady, planCount: stale.actions.count,

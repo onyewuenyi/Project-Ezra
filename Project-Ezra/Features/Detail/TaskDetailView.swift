@@ -122,7 +122,7 @@ struct TaskDetailView: View {
             // Scoped to THIS task, not the context: several pages share one context in the
             // pager, and a dirty neighbour must never stamp this task's `updatedAt` — Stale
             // detection and the auto-archive depend on that timestamp being honest.
-            if task.hasChanges { task.touch() }
+            if task.hasChanges { task.touchHuman() }
             try? context.save()
         }
         .alert("New person", isPresented: $showAddPerson) {
