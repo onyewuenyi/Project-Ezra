@@ -22,9 +22,11 @@ final class Correction: NSManagedObject {
     @NSManaged var taskUUID: UUID?
     /// The capture that produced the task, for tracing corrections to inputs.
     @NSManaged var captureID: UUID?
-    /// Which field was corrected ("title", "category", "dueDate", "priority",
-    /// "owner", "effort"). Loose vocabulary, not an enum — same reasoning as
-    /// `ChangeLogEntry.action`.
+    /// Which field was corrected — the vocabulary `TaskDraft.corrections` actually
+    /// writes: "title", "category", "dueDate", "urgent", "owner", "effort",
+    /// "blocker", "blocks", "duplicate", "parent". Loose vocabulary, not an enum —
+    /// same reasoning as `ChangeLogEntry.action`. ("priority" is retired; nothing
+    /// writes it — eval tooling should key on "urgent".)
     @NSManaged var fieldCorrected: String
     /// What the model produced, string-encoded.
     @NSManaged var aiValue: String
@@ -41,7 +43,9 @@ final class Correction: NSManagedObject {
         createdAt: Date = Date(),
         in context: NSManagedObjectContext = PersistenceStack.scratch
     ) {
-        self.init(entity: NSEntityDescription.entity(forEntityName: "Correction", in: context)!, insertInto: context)
+        self.init(
+            entity: NSEntityDescription.entity(forEntityName: "Correction", in: context)!, insertInto: context
+        )
         self.uuid = UUID()
         self.taskUUID = taskUUID
         self.captureID = captureID

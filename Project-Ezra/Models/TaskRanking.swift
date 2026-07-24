@@ -179,11 +179,7 @@ enum TaskRanking {
     /// 0…`dueProximityMax` from the NEAREST related due date: a neighbor due today
     /// (or overdue) scores the max, decaying linearly by a point per day out.
     static func dueProximity(_ dueDates: [Date], now: Date) -> Double {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: now)
-        let daysOut = dueDates.compactMap { due in
-            cal.dateComponents([.day], from: today, to: cal.startOfDay(for: due)).day
-        }
+        let daysOut = dueDates.compactMap { TaskItem.daysUntil($0, now: now) }
         guard let nearest = daysOut.min() else { return 0 }
         return max(0, dueProximityMax - Double(max(0, nearest)))
     }

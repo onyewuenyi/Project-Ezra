@@ -9,7 +9,7 @@
 //  position via `TaskRanking`). What stays: the blocked treatment (a contrast-aware
 //  dim + a small `hourglass` marker — never a blur; glass-on-content reads muddy) and
 //  full accessibility (state enumerated verbally). Quick actions live in
-//  a Linear-style long-press context menu (Done · Status · Priority · Cancel) —
+//  a Linear-style long-press context menu (Done · Status · Urgent · Cancel) —
 //  the system lift-and-pop, no custom gesture.
 //
 //  The leading glyph is the six-state `StatusGlyphView` menu, so complete/cancel/
@@ -122,10 +122,10 @@ struct TaskRow: View {
 
     // MARK: - Long-press quick actions
 
-    /// The Linear-style long-press menu: Done / Status / Priority / Cancel. Every
+    /// The Linear-style long-press menu: Done / Status / Urgent / Cancel. Every
     /// action routes through the same seams as the leading glyph menu — `handlePick`
-    /// for state moves (undo-aware Done/Cancel), a direct write + `touch()` for
-    /// priority (mirroring the detail chip).
+    /// for state moves (undo-aware Done/Cancel), `setUrgent` for the signal toggle
+    /// (mirroring the detail chip).
     @ViewBuilder
     private var contextMenuContent: some View {
         Button {

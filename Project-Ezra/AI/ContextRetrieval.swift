@@ -126,11 +126,7 @@ enum ContextRetrieval {
     private static func factLine(_ snap: OpenTaskSnapshot, now: Date) -> String {
         var parts = [snap.category]
         if let due = snap.dueDate {
-            let days =
-                Calendar.current.dateComponents(
-                    [.day], from: Calendar.current.startOfDay(for: now),
-                    to: Calendar.current.startOfDay(for: due)
-                ).day ?? 0
+            let days = TaskItem.daysUntil(due, now: now) ?? 0
             if days < 0 {
                 parts.append("overdue")
             } else if days == 0 {

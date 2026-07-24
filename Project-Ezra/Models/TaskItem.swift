@@ -488,6 +488,17 @@ final class TaskItem: NSManagedObject {
         return dueDate < Calendar.current.startOfDay(for: now)
     }
 
+    /// Whole calendar days from start-of-day(`now`) to start-of-day(`due`):
+    /// positive = future, 0 = today, negative = overdue. THE one due-delta
+    /// derivation — retrieval fact lines, plan snapshots, ranking due-proximity,
+    /// and importance backfill all read this instead of re-deriving the calendar
+    /// math (four independent copies once drifted here).
+    static func daysUntil(_ due: Date, now: Date, calendar: Calendar = .current) -> Int? {
+        calendar.dateComponents(
+            [.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: due)
+        ).day
+    }
+
     /// The Stale flag: no due date, un-TOUCHED-BY-A-HUMAN past the rot threshold. The
     /// heuristic rot-detector for the majority of errands that never had a date to blow
     /// past. (Dated tasks blow past their date instead — that's Overdue.) Reads the
@@ -633,16 +644,24 @@ extension TaskItem {
         return tasks.filter { $0.uuid.map(ids.contains) ?? false }
     }
 
+    /// The still-open tasks that WAIT ON this one — the reverse `.blocks` edge,
+    /// walked in ONE place. The Blocking flag and the plan snapshot's
+    /// "blocks '…'" facts both read this (they used to re-implement the walk).
+    func dependents(among tasks: [TaskItem]) -> [TaskItem] {
+        guard let selfID = uuid else { return [] }
+        return tasks.filter { other in
+            other.uuid != selfID && !other.status.isResolved
+                && other.taskBlockerIDs.contains(selfID)
+        }
+    }
+
     /// The Blocking flag, derived: true when any other unresolved task's blocker
     /// list points at this one. Never stored — storing both directions would let
     /// them drift; compute it at read time instead. Internal: manifests only as a
     /// modest position boost, never a label.
     func isBlocking(among tasks: [TaskItem]) -> Bool {
-        guard let selfID = uuid, !status.isResolved else { return false }
-        return tasks.contains { other in
-            other.uuid != selfID && !other.status.isResolved
-                && other.taskBlockerIDs.contains(selfID)
-        }
+        guard !status.isResolved else { return false }
+        return !dependents(among: tasks).isEmpty
     }
 
     /// Card display: the first active blocker as a whole phrase ("after Renew passport",

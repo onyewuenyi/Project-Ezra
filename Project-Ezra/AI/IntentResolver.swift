@@ -221,13 +221,8 @@ enum IntentResolver {
     static func inferredImportance(title: String, dueDate: Date?, now: Date = Date()) -> Double {
         let words = CorrectionProfile.significantWords(title)
         if !consequenceSignals.isDisjoint(with: words) { return highImportance }
-        if let dueDate {
-            let days =
-                Calendar.current.dateComponents(
-                    [.day], from: Calendar.current.startOfDay(for: now),
-                    to: Calendar.current.startOfDay(for: dueDate)
-                ).day ?? .max
-            if days <= 2 { return highImportance }
+        if let dueDate, (TaskItem.daysUntil(dueDate, now: now) ?? .max) <= 2 {
+            return highImportance
         }
         return ordinaryImportance
     }

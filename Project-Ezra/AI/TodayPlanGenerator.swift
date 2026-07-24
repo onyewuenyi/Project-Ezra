@@ -49,18 +49,11 @@ struct PlanTaskSnapshot: Sendable, Codable, Hashable {
         let dueToday = task.dueDate.map { cal.isDate($0, inSameDayAs: now) } ?? false
         let overdueDays: Int? = {
             guard task.isOverdue(now: now), let due = task.dueDate else { return nil }
-            let days = cal.dateComponents(
-                [.day], from: cal.startOfDay(for: due), to: cal.startOfDay(for: now)
-            ).day
-            return days.map { max(1, $0) }
+            // Shared due-delta derivation (negative = overdue) → whole days late, floor 1.
+            return TaskItem.daysUntil(due, now: now).map { max(1, -$0) }
         }()
         let needsDecision = task.needsDecision && !task.status.isResolved
-        let blocksTitles =
-            tasks
-            .filter { other in
-                other.uuid != id && !other.status.isResolved && other.taskBlockerIDs.contains(id)
-            }
-            .map(\.title)
+        let blocksTitles = task.dependents(among: tasks).map(\.title)
 
         var facts: [String] = []
         if dueToday {

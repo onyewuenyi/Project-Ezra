@@ -80,22 +80,22 @@ A task carries three separate dimensions (this replaces the old flat `Blocked/Re
 
 | Flag | Stored? | Set by | Visible? | Effect |
 |---|---|---|---|---|
-| Needs Decision | **Yes** (`needsDecision`) | Triage (judgment call OR confidence < 0.5) or `escalateToDecision()` | **Chip** | Forced crisp top of the stack, overriding Priority and Blocked |
-| Blocked | Derived (`activeBlockers` non-empty) | Adding a `Blocker` (task ref or external note) | No | Sinks toward the back regardless of Priority (unless also Needs Decision) |
-| Blocking | Derived (`isBlocking(among:)` reverse edge) | AI inference / dependency graph | No | Modest boost within the Priority order |
-| Overdue | Derived (`isOverdue()` — dueDate < today) | The calendar | **Small marker** | Boost within Priority (never overriding it); surfaces on the Today Docket |
-| Stale | Derived (`isStale()` — undated, `updatedAt` past threshold) | The clock | No | Surfaces on the Docket; past `StalePolicy.archiveThreshold` triggers the silent, reversible auto-archive (`BrainSweeps`) |
+| Needs Decision | **Yes** (`needsDecision`) | Triage (judgment call OR confidence < 0.5) or `escalateToDecision()` | **Chip** | Forced crisp top of the stack, overriding the attention order and Blocked |
+| Blocked | Derived (`activeBlockers` non-empty) | Adding a `Blocker` (task ref or external note) | No | Sinks toward the back regardless of attention (unless also Needs Decision) |
+| Blocking | Derived (`isBlocking(among:)` reverse edge) | AI inference / dependency graph | No | Modest boost within the attention order |
+| Overdue | Derived (`isOverdue()` — dueDate < today) | The calendar | **Small marker** | Boost within the attention order (never overriding it); surfaces on the Today Docket |
+| Stale | Derived (`isStale()` — undated, no HUMAN touch past threshold) | The clock | No | Surfaces on the Docket; past `StalePolicy.archiveThreshold` triggers the silent, reversible auto-archive (`BrainSweeps`) |
 
-**Blocked is always derived, never written.** A task reads as blocked iff `activeBlockers(among:)` is non-empty — there is no `block()`. An Active task that gains a blocker STAYS Active. **Blocking, Overdue, and Stale are likewise derived** from data already on the record; `updatedAt` (bumped by every meaningful mutation) drives Stale.
+**Blocked is always derived, never written.** A task reads as blocked iff `activeBlockers(among:)` is non-empty — there is no `block()`. An Active task that gains a blocker STAYS Active. **Blocking, Overdue, and Stale are likewise derived** from data already on the record. Stale reads the **human clock** (`lastHumanTouchAt`, stamped only by `touchHuman()` on human-initiated edits; `createdAt` while nil) — `updatedAt` is also bumped by system paths (capture-time edge writes), which must never reset a task's staleness.
 
 ### Stack precedence (resolved)
 
-Implemented exactly in `Models/TaskRanking.swift` (`stackOrder` — every term a lexicographic sort-key component, **never an additive score**, so the comparator stays a strict weak ordering, property-tested):
+Implemented exactly in `Models/TaskRanking.swift` (`stackOrder` — every band term a lexicographic sort-key component, so the comparator stays a strict weak ordering, property-tested; the ONE deliberate additive layer lives *inside* the attention component only):
 
 1. **Needs Decision** → always crisp / top, full stop.
-2. **Blocked** → sinks, regardless of Priority (rule 1 wins if both).
-3. **Priority** → primary sort among the rest.
-4. **Blocking** → minor boost within equal priority.
+2. **Blocked** → sinks, regardless of attention (rule 1 wins if both).
+3. **Effective attention** (the persisted score + live `currentRelevance`, clamped ±25, precomputed per snapshot into `RankKey`) → primary sort among the rest.
+4. **Blocking** → minor boost within equal attention.
 5. **Overdue** → similar boost; then soonest-due, then stable tiebreak.
 
 There is **no manual "bump to top" override** — ranking is fully the AI's call. The compensating human control is the Confirm-Creation flow (§6).
@@ -122,7 +122,7 @@ One voice/text event can yield multiple tasks; if the raw text lived on Task, th
 
 Engines emit **`TaskIntent`** (`AI/TaskIntent.swift`), never finished tasks: `dateExpression` and `personReference` stay **raw, verbatim**. **`IntentResolver`** (`AI/IntentResolver.swift`) converts intents to `TaskDraft`s in app code — date resolution is a testable rule, not a generation artifact; person resolution happens against the roster in `AppBrain.resolveOwners`. The resolver stamps every creation `.inbox` and freezes the AI's field values (`TaskDraft.aiOriginal`).
 
-**Metadata completeness guarantee.** No candidate reaches the confirm card with a hole: whatever the engine extracted wins, and whatever it left empty the resolver **backfills deterministically** — `inferredPriority` (consequence signals and imminent dates read high, ordinary reads medium); `estimatedEffort` (quick-touch 15 / errand 30 / focused 60, the same bands the on-device model is instructed to use). The one deliberate exception is the **due date**: inventing a date with no time signal manufactures a future false Overdue, so an undated task stays honestly undated (the card shows an add-affordance instead). Backfill runs **before** the `aiOriginal` snapshot, so an un-edited confirm never records phantom corrections. The card renders **every** field — category, due, owner ("You" is a value, not an empty state), priority, effort, and any captured wait — each editable.
+**Metadata completeness guarantee.** No candidate reaches the confirm card with a hole: whatever the engine extracted wins, and whatever it left empty the resolver **backfills deterministically** — `inferredImportance` (consequence signals and imminent dates read high, ordinary reads middling; the slow AI-importance input to the attention score); `estimatedEffort` (quick-touch 15 / errand 30 / focused 60, the same bands the on-device model is instructed to use). The one deliberate exception is the **due date**: inventing a date with no time signal manufactures a future false Overdue, so an undated task stays honestly undated (the card shows an add-affordance instead). Backfill runs **before** the `aiOriginal` snapshot, so an un-edited confirm never records phantom corrections. The card renders **every** field — category, due, owner ("You" is a value, not an empty state), urgent, effort, and any captured wait — each editable.
 
 ### Confirm-Creation flow
 
