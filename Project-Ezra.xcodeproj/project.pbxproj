@@ -6,8 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		FF22FF22FF22FF22FF22FF22 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4B1A214A3008A247005DDBBF /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4B1A21513008A247005DDBBF;
+			remoteInfo = "Project-Ezra";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		4B1A21523008A247005DDBBF /* Project-Ezra.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Project-Ezra.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		CC11CC11CC11CC11CC11CC11 /* Project-EzraTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Project-EzraTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -29,10 +40,22 @@
 			path = "Project-Ezra";
 			sourceTree = "<group>";
 		};
+		AA11AA11AA11AA11AA11AA11 /* Project-EzraTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Project-EzraTests";
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		4B1A214F3008A247005DDBBF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD22DD22DD22DD22DD22DD22 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -47,6 +70,7 @@
 			children = (
 				4B1A21543008A247005DDBBF /* Project-Ezra */,
 				4B1A21533008A247005DDBBF /* Products */,
+				4BC28AFA30090EF30057D9E2 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -54,8 +78,17 @@
 			isa = PBXGroup;
 			children = (
 				4B1A21523008A247005DDBBF /* Project-Ezra.app */,
+				CC11CC11CC11CC11CC11CC11 /* Project-EzraTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		4BC28AFA30090EF30057D9E2 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				AA11AA11AA11AA11AA11AA11 /* Project-EzraTests */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -83,6 +116,29 @@
 			productReference = 4B1A21523008A247005DDBBF /* Project-Ezra.app */;
 			productType = "com.apple.product-type.application";
 		};
+		BB11BB11BB11BB11BB11BB11 /* Project-EzraTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EE11EE11EE11EE11EE11EE11 /* Build configuration list for PBXNativeTarget "Project-EzraTests" */;
+			buildPhases = (
+				DD11DD11DD11DD11DD11DD11 /* Sources */,
+				DD22DD22DD22DD22DD22DD22 /* Frameworks */,
+				DD33DD33DD33DD33DD33DD33 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FF11FF11FF11FF11FF11FF11 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA11AA11AA11AA11AA11AA11 /* Project-EzraTests */,
+			);
+			name = "Project-EzraTests";
+			packageProductDependencies = (
+			);
+			productName = "Project-EzraTests";
+			productReference = CC11CC11CC11CC11CC11CC11 /* Project-EzraTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -95,6 +151,10 @@
 				TargetAttributes = {
 					4B1A21513008A247005DDBBF = {
 						CreatedOnToolsVersion = 26.6;
+					};
+					BB11BB11BB11BB11BB11BB11 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 4B1A21513008A247005DDBBF;
 					};
 				};
 			};
@@ -113,12 +173,20 @@
 			projectRoot = "";
 			targets = (
 				4B1A21513008A247005DDBBF /* Project-Ezra */,
+				BB11BB11BB11BB11BB11BB11 /* Project-EzraTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		4B1A21503008A247005DDBBF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD33DD33DD33DD33DD33DD33 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,7 +203,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DD11DD11DD11DD11DD11DD11 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		FF11FF11FF11FF11FF11FF11 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4B1A21513008A247005DDBBF /* Project-Ezra */;
+			targetProxy = FF22FF22FF22FF22FF22FF22 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		4B1A21613008A248005DDBBF /* Debug */ = {
@@ -150,11 +233,13 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Project-Ezra/Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -184,11 +269,13 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Project-Ezra/Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -327,6 +414,48 @@
 			};
 			name = Release;
 		};
+		EE22EE22EE22EE22EE22EE22 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 43DTQTDS67;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "amanze-studios.Project-EzraTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Project-Ezra.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Project-Ezra";
+			};
+			name = Debug;
+		};
+		EE33EE33EE33EE33EE33EE33 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 43DTQTDS67;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "amanze-studios.Project-EzraTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Project-Ezra.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Project-Ezra";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -344,6 +473,15 @@
 			buildConfigurations = (
 				4B1A21613008A248005DDBBF /* Debug */,
 				4B1A21623008A248005DDBBF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EE11EE11EE11EE11EE11EE11 /* Build configuration list for PBXNativeTarget "Project-EzraTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EE22EE22EE22EE22EE22EE22 /* Debug */,
+				EE33EE33EE33EE33EE33EE33 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

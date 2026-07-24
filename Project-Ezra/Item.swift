@@ -2,17 +2,9 @@
 //  Item.swift
 //  Project-Ezra
 //
-//  Created by Charles Amanze Onyewuenyi on 7/16/26.
+//  Retired. The Xcode template's placeholder `Item` model has been replaced by
+//  `TaskItem` in Models/TaskItem.swift. This file is intentionally left empty so
+//  the template's schema no longer references a type that doesn't fit the domain.
 //
 
 import Foundation
-import SwiftData
-
-@Model
-final class Item {
-    var timestamp: Date
-    
-    init(timestamp: Date) {
-        self.timestamp = timestamp
-    }
-}
