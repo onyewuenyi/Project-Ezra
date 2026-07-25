@@ -37,9 +37,9 @@ struct TodayPlanServiceTests {
         // traps without the entitlement. With no entitlement and no on-device model
         // (test host), the chain must collapse to the deterministic tail.
         let overdue = TaskItem(
-            title: "Renew car insurance", status: .active, dueDate: days(-2), isUrgent: true)
+            title: "Renew car insurance", status: .todo, dueDate: days(-2), isUrgent: true)
         let dueToday = TaskItem(
-            title: "Submit the expense report", status: .active, dueDate: now)
+            title: "Submit the expense report", status: .todo, dueDate: now)
         let all = [overdue, dueToday]
         let request = TodayPlanRequest.make(
             candidateItems: all, allTasks: all, recapCount: 0, typicalCompleted: nil, now: now)

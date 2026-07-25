@@ -17,10 +17,9 @@ struct TasksHomeView: View {
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
     @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     @State private var tab: MyTasksTab = .assigned
-    @State private var statusFilter: TaskDisplayStatus?
+    @State private var statusFilter: TaskStatus?
     @State private var categoryFilter: String?
     @State private var showSearch = false
     @State private var showSettings = false
@@ -137,17 +136,12 @@ struct TasksHomeView: View {
     // MARK: - Tab bar (Assigned / Created + the filter pill)
 
     private var tabBar: some View {
-        // The selected pill is Liquid Glass; the glass-merge morph between tabs needs a
-        // GlassEffectContainer + glassEffectID (matchedGeometryEffect on a .glassEffect
-        // capsule resamples mid-flight). Under Reduce Transparency, a flat capsule +
-        // matchedGeometryEffect instead.
-        Group {
-            if reduceTransparency {
-                tabRow
-            } else {
-                GlassEffectContainer { tabRow }
-            }
-        }
+        // The selected pill is a SOLID raised surface, not Liquid Glass: glass carries a
+        // vibrancy that dims the label riding on it (verified — the selected text read
+        // dimmer than the unselected one, and no scrim behind the text could fix it, since
+        // the material desaturates the foreground itself). A text-bearing selection chip
+        // therefore uses a solid surface; the morph is a plain `matchedGeometryEffect`.
+        tabRow
     }
 
     private var tabRow: some View {
@@ -188,12 +182,14 @@ struct TasksHomeView: View {
     @ViewBuilder
     private func pillBackground(isSelected: Bool) -> some View {
         if isSelected {
-            // Neutral Liquid Glass — no tint. A 10% tint over the near-black list has
-            // nothing to refract and reads muddy; selection is carried by the bright
-            // semibold label instead. `interactive` gives the tappable pill the
-            // system's native press response; `morph` flows the glass between
-            // Assigned↔Created within the tabBar's single GlassEffectContainer.
-            Color.clear.glassCapsule(interactive: true, morph: (id: "tabPill", ns: tabPill))
+            // A solid raised chip (`elevatedSurface` + hairline) — NOT glass. Glass would
+            // impose vibrancy on the label and sap its contrast; a solid surface keeps the
+            // selected text crisp white. `matchedGeometryEffect` flows the pill between
+            // Assigned↔Created. (The text-on-glass rule: glass chrome is for icons/press
+            // affordances, never primary text — see Glass.swift.)
+            Capsule().fill(Palette.elevatedSurface)
+                .overlay { Capsule().strokeBorder(Palette.border, lineWidth: 0.5) }
+                .matchedGeometryEffect(id: "tabPill", in: tabPill)
         }
     }
 
@@ -205,7 +201,7 @@ struct TasksHomeView: View {
                 } label: {
                     filterLabel("All", checked: statusFilter == nil)
                 }
-                ForEach(TaskDisplayStatus.allCases) { status in
+                ForEach(TaskStatus.pickable) { status in
                     Button {
                         statusFilter = status
                     } label: {

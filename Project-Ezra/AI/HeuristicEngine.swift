@@ -134,8 +134,39 @@ struct HeuristicEngine: AIEngine {
             reasoning: reasoning,
             isUrgent: urgencySignal(for: lower),
             importance: importanceSignal(for: lower),
-            effortMinutes: effortMinutes(from: lower)
+            effortMinutes: effortMinutes(from: lower),
+            workIntent: isReference(lower) ? WorkIntent.reference.rawValue : nil
         )
+    }
+
+    /// Phrases that read as something to KEEP rather than something to do — "the wifi
+    /// password is hunter2", "gate code 4417", "remember that the vet closes at six".
+    ///
+    /// This is the one `WorkIntent` the heuristic path classifies, and it is **not a
+    /// test seam**. `workIntent` is otherwise on-device only, and Apple Intelligence
+    /// can be off by user setting or unavailable by region — so without this, every
+    /// non-AI user has nil intent, `countsAsWorkload` is universally true, and the
+    /// whole reference exclusion never fires for them. It is also what makes the five
+    /// gated sites verifiable in the simulator at all.
+    ///
+    /// Deliberately narrow: a false positive silently removes a real task from the
+    /// plan, the load counts, and the sweeps, so it only fires on wording that is
+    /// clearly a stored fact, never on a bare noun phrase.
+    static func isReference(_ lower: String) -> Bool {
+        // A record-keeping noun followed by a value: "password is …", "code: 4417".
+        let subjects = ["password", "passcode", "pin", "code", "wifi", "wi-fi", "login", "username"]
+        if subjects.contains(where: { lower.contains($0) }),
+            lower.contains(" is ") || lower.contains(":") || lower.contains("=")
+        {
+            return true
+        }
+        // An explicit "keep this" framing, but NOT "remember to …", which is a to-do.
+        if lower.hasPrefix("remember that ") || lower.hasPrefix("note that ")
+            || lower.hasPrefix("fyi ") || lower.hasPrefix("for reference")
+        {
+            return true
+        }
+        return false
     }
 
     private static func cleanTitle(_ line: String) -> String {

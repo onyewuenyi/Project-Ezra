@@ -93,7 +93,7 @@ private struct UndoNoticeModifier: ViewModifier {
 #Preview {
     @Previewable @State var notice: UndoNotice? = .resolution(
         "Completed", "Renew my passport",
-        unblocked: [TaskItem(title: "Book flights", status: .active)], undo: {})
+        unblocked: [TaskItem(title: "Book flights", status: .todo)], undo: {})
 
     return Palette.background
         .ignoresSafeArea()

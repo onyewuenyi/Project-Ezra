@@ -25,7 +25,6 @@ struct TaskCardView: View {
     /// gesture instead (`.swipeToComplete(...)`). Today/Inbox never set this.
     var showsLeadingAvatar: Bool = false
     var onComplete: (() -> Void)? = nil
-    var onAcceptSuggestion: (() -> Void)? = nil
     /// When set, the card body becomes tappable to open the detail sheet. The inner
     /// complete circle and Accept button still win their own touches (they're Buttons),
     /// so there's no gesture conflict — and the card is never wrapped in a Button.
@@ -123,7 +122,7 @@ struct TaskCardView: View {
                 }
 
                 if showsConfidence {
-                    ConfidenceRow(task: task, onAccept: onAcceptSuggestion)
+                    ConfidenceRow(task: task)
                         .padding(.top, 2)
                 }
             }
@@ -210,9 +209,6 @@ struct TaskCardView: View {
             if onComplete != nil {
                 Button("Complete") { complete() }
             }
-            if task.status == .inbox, task.autonomy == .suggest, let onAcceptSuggestion {
-                Button("Accept suggestion", action: onAcceptSuggestion)
-            }
         }
     }
 
@@ -237,10 +233,10 @@ struct TaskCardView: View {
                 .font(.system(size: IconSize.control, weight: .light))
                 .foregroundStyle(Palette.secondaryText)
                 .frame(
-                    width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.hitTarget,
+                    width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn,
                     alignment: .leading
                 )
-                .contentShape(Rectangle())
+                .minimumHitTarget()
         }
         .buttonStyle(.pressableIcon)
         .accessibilityLabel("Complete \(task.title)")

@@ -95,7 +95,7 @@ struct HouseholdTests {
         context.insert(maya)
 
         let task = TaskItem(
-            title: "Book venue", category: "Work", status: .active, confidence: 0.9,
+            title: "Book venue", category: "Work", status: .todo, confidence: 0.9,
             reasoning: "", ownerID: maya.uuid)
         context.insert(task)
 

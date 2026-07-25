@@ -22,24 +22,24 @@ struct FamilyMemberDisplayTests {
     @Test("ownerDisplayName resolves a set ownerID against the roster")
     func resolvesKnownOwner() {
         let sarah = FamilyMember(name: "Sarah")
-        let task = TaskItem(title: "Book venue", status: .active, confidence: 0.9, ownerID: sarah.uuid)
+        let task = TaskItem(title: "Book venue", status: .todo, confidence: 0.9, ownerID: sarah.uuid)
         #expect(task.ownerDisplayName(among: [sarah]) == "Sarah")
         #expect(!task.isMine(currentUserID: me))
     }
 
     @Test("A nil ownerID is shared/unassigned — not mine; an owner matching me is mine")
     func nilOwnerIsSharedOwnedByMeIsMine() {
-        let shared = TaskItem(title: "Pick up dry cleaning", status: .active, confidence: 0.9)
+        let shared = TaskItem(title: "Pick up dry cleaning", status: .todo, confidence: 0.9)
         #expect(shared.ownerDisplayName(among: [FamilyMember(name: "Sarah")]) == nil)
         #expect(!shared.isMine(currentUserID: me))  // nil now means shared, never "you"
 
-        let mine = TaskItem(title: "My errand", status: .active, confidence: 0.9, ownerID: me)
+        let mine = TaskItem(title: "My errand", status: .todo, confidence: 0.9, ownerID: me)
         #expect(mine.isMine(currentUserID: me))
     }
 
     @Test("An ownerID with no matching roster entry resolves to nil, not a crash")
     func deletedOwnerResolvesNil() {
-        let task = TaskItem(title: "Orphaned", status: .active, confidence: 0.9, ownerID: UUID())
+        let task = TaskItem(title: "Orphaned", status: .todo, confidence: 0.9, ownerID: UUID())
         #expect(task.ownerDisplayName(among: []) == nil)
         #expect(!task.isMine(currentUserID: me))  // a stranger's id is not mine
     }
@@ -55,36 +55,40 @@ struct CommitOwnerResolutionTests {
 
     private func draft(_ title: String, ownerName: String? = nil) -> TaskDraft {
         TaskDraft(
-            title: title, category: "Work", proposedStatus: .active, confidence: 0.9, autonomy: .silent,
+            title: title, category: "Work", confidence: 0.9, autonomy: .silent,
             isJudgmentCall: false, reasoning: "", dueDate: nil, ownerName: ownerName)
     }
 
-    @Test("A new owner name auto-creates a FamilyMember and assigns it")
-    func autoCreatesNewPerson() throws {
+    @Test("An UNMATCHED owner name creates no FamilyMember — the task stays shared")
+    func unmatchedNameMintsNobody() throws {
         let context = try makeContext()
         let brain = AppBrain()
         let created = brain.commit(
             [draft("Book venue for the offsite", ownerName: "Sarah")], rawCapture: "", into: context)
 
-        // A real capture also bootstraps the current user's own creator identity (the
-        // "Created" tab keys off it), so assert on the delegate we care about here.
+        // Minting a person from a misheard name used to look like the same mechanical
+        // filing philosophy applied to categorization — but a category is a label and a
+        // person is not. A phantom becomes an EXISTING member: it accrues category
+        // ownership, feeds the affinity denominator, and becomes proposable. So an
+        // unresolved name leaves the task shared and "Add person…" stays the human step.
         let members = try context.fetch(NSFetchRequest<FamilyMember>(entityName: "FamilyMember"))
-        let sarah = try #require(members.first { $0.name == "Sarah" })
-        #expect(created[0].ownerID == sarah.uuid)
+        #expect(!members.contains { $0.name == "Sarah" })
+        #expect(created[0].ownerID == nil)
     }
 
-    @Test("A second mention of the same name (different case) reuses the existing person")
-    func reusesExistingPersonCaseInsensitively() throws {
+    @Test("A name matching an EXISTING person resolves case-insensitively")
+    func resolvesExistingPersonCaseInsensitively() throws {
         let context = try makeContext()
+        let sarah = FamilyMember(name: "Sarah", in: context)
+        context.insert(sarah)
         let brain = AppBrain()
-        _ = brain.commit([draft("Book venue", ownerName: "Sarah")], rawCapture: "", into: context)
-        let created2 = brain.commit(
+        let created = brain.commit(
             [draft("Confirm caterer", ownerName: "sarah")], rawCapture: "", into: context)
 
         let members = try context.fetch(NSFetchRequest<FamilyMember>(entityName: "FamilyMember"))
         let sarahs = members.filter { $0.name.caseInsensitiveCompare("Sarah") == .orderedSame }
-        #expect(sarahs.count == 1)  // no duplicate "sarah" person across the two commits
-        #expect(created2[0].ownerID == sarahs.first?.uuid)
+        #expect(sarahs.count == 1)  // still one person; the commit added nobody
+        #expect(created[0].ownerID == sarah.uuid)
     }
 
     @Test("No owner name in the draft → the task is explicitly the current user's own")

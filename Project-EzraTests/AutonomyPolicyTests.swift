@@ -45,13 +45,18 @@ struct AutonomyPolicyTests {
     // MARK: - Entry status (always-confirm: every creation lands in the Inbox)
 
     @Test("The resolver stamps every creation into the Inbox, at any confidence")
-    func alwaysInbox() {
+    func alwaysTodo() {
+        // A draft no longer carries a proposed lifecycle position at all — the AI never
+        // proposes one, because a draft is not a task. Creation is what stamps `.todo`,
+        // and it only happens at Confirm.
         for (confidence, judgment) in [(0.9, false), (0.5, false), (0.3, false), (1.0, true)] {
             let draft = IntentResolver.resolve(
                 TaskIntent(
                     title: "x", category: "Home", confidence: confidence,
                     isJudgmentCall: judgment, reasoning: ""))
-            #expect(draft.proposedStatus == .inbox)
+            let task = draft.makeTaskItem(rawCapture: "x", in: PersistenceStack.scratch)
+            #expect(task.status == .todo)
+            #expect(task.confirmedAt != nil)
         }
     }
 
@@ -76,32 +81,27 @@ struct AutonomyPolicyTests {
     @Test("A judgment call reads as Needs Decision (human judgment) while flagged")
     func judgmentAssessment() {
         let t = TaskItem(
-            title: "should I quit the gym", status: .inbox, confidence: 1.0, isJudgmentCall: true,
+            title: "should I quit the gym", status: .todo, confidence: 1.0, isJudgmentCall: true,
             needsDecision: true)
         #expect(t.assessment(isBlocked: false).needsDecision == .humanJudgment)
     }
 
     @Test("Low confidence reads as Needs Decision (low confidence)")
     func lowConfidenceAssessment() {
-        let t = TaskItem(title: "vague thing", status: .inbox, confidence: 0.3, needsDecision: true)
+        let t = TaskItem(title: "vague thing", status: .todo, confidence: 0.3, needsDecision: true)
         #expect(t.assessment(isBlocked: false).needsDecision == .lowConfidence)
     }
 
-    @Test("Confirm clears a low-confidence flag but NOT a judgment call's")
-    func confirmClearsOnlyLowConfidence() {
-        // Low confidence: the confirm glance validated the fields — flag settled.
-        let vague = TaskItem(title: "vague thing", status: .inbox, confidence: 0.3, needsDecision: true)
-        vague.confirm()
-        #expect(vague.assessment(isBlocked: false).needsDecision == nil)
-
-        // Judgment call: confirming the task exists is not making the call. The
-        // flag survives (forced-top in the stack) until an explicit resolution —
-        // the permanent judgment-category carve-out.
+    @Test("A judgment call's flag survives creation; only an explicit decision clears it")
+    func judgmentFlagSurvivesCreation() {
+        // Creation IS the confirm now, so a task that exists has already been through
+        // the one human-in-the-loop moment. That does NOT make the call for them: the
+        // flag survives (forced-top in the stack) until an explicit resolution — the
+        // permanent judgment-category carve-out.
         let judgment = TaskItem(
-            title: "should I quit the gym", status: .inbox, confidence: 1.0, isJudgmentCall: true,
+            title: "should I quit the gym", status: .todo, confidence: 1.0, isJudgmentCall: true,
             needsDecision: true)
-        judgment.confirm()
-        #expect(judgment.status == .active)
+        #expect(judgment.status.isLive)
         #expect(judgment.assessment(isBlocked: false).needsDecision == .humanJudgment)
         // Only the human explicitly deciding clears it; provenance stays honest.
         judgment.resolveDecision()
@@ -111,33 +111,12 @@ struct AutonomyPolicyTests {
 
     @Test("Blocked and unowned are orthogonal observations, not statuses")
     func blockedUnownedAreObservations() {
-        let t = TaskItem(title: "x", status: .active, confidence: 0.9, ownerPending: true)
+        let t = TaskItem(title: "x", status: .todo, confidence: 0.9)
         let a = t.assessment(isBlocked: true)
         #expect(a.isBlocked)
         #expect(a.isUnowned)
         // The observations didn't move the status.
-        #expect(t.status == .active)
+        #expect(t.status.isLive)
     }
 
-    // MARK: - User override (review)
-
-    @Test("userOverride accepts a proposal to Active at the silent tier, judgment flag intact")
-    func userOverrideAccepts() {
-        var draft = TaskDraft(
-            title: "should I quit the gym",
-            category: "Health",
-            proposedStatus: .inbox,
-            confidence: 1.0,
-            autonomy: .ask,
-            isJudgmentCall: true,
-            reasoning: "Your call to make.",
-            dueDate: nil
-        )
-        draft.userOverride(status: .active)
-        #expect(draft.proposedStatus == .active)
-        #expect(draft.autonomy == .silent)
-        // A human resolving the call satisfies the rule; the provenance stays honest.
-        #expect(draft.isJudgmentCall)
-        #expect(draft.reasoning == "Your call to make.")
-    }
 }

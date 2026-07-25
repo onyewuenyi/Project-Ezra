@@ -17,6 +17,13 @@ import Foundation
 /// nothing here is persisted, so there's no stale-chain state to manage.
 struct TaskChain: Identifiable {
     let members: [TaskItem]
+    /// The rank keys the LANE uses to position this chain — passed in so the front card
+    /// (`root`) is chosen under the SAME population-dependent keys that place the whole
+    /// chain in the lane. A member-only re-rank would compute different relevance/blocking
+    /// terms (a `.parent` umbrella outside the chain, due-proximity, isBlocked all shift
+    /// with the population), so the collapsed stack's front card and its lane position
+    /// could be driven by different `effectiveAttention` values.
+    let rankKeys: [UUID: RankKey]
 
     /// Stable enough for a single render pass: the sorted member uuids joined.
     var id: String {
@@ -28,9 +35,8 @@ struct TaskChain: Identifiable {
     /// collapsed stack shows) sorts first under the stack precedence.
     var root: TaskItem {
         let roots = members.filter { $0.activeBlockerTasks(among: members).isEmpty }
-        let keys = TaskRanking.rankKeys(for: members)
         return roots.min { a, b in
-            guard let ka = a.uuid.flatMap({ keys[$0] }), let kb = b.uuid.flatMap({ keys[$0] })
+            guard let ka = a.uuid.flatMap({ rankKeys[$0] }), let kb = b.uuid.flatMap({ rankKeys[$0] })
             else { return false }
             return TaskRanking.stackOrder(ka, kb)
         } ?? members[0]
@@ -62,8 +68,14 @@ enum TaskChainGrouping {
     /// Partitions `tasks` into connected dependency chains (2+ members, linked by
     /// active blocker references) and loose standalones (no active connection to
     /// anything else in the set).
-    static func computeChains(in tasks: [TaskItem]) -> (chains: [TaskChain], loose: [TaskItem]) {
+    /// `rankKeys` are the keys the caller positions lanes with (over the FULL working set);
+    /// chain roots and layering use the same keys so selection and placement agree. A caller
+    /// that omits them (tests) falls back to a member-scoped ranking.
+    static func computeChains(
+        in tasks: [TaskItem], rankKeys: [UUID: RankKey]? = nil
+    ) -> (chains: [TaskChain], loose: [TaskItem]) {
         guard !tasks.isEmpty else { return ([], []) }
+        let keys = rankKeys ?? TaskRanking.rankKeys(for: tasks)
 
         var byID: [UUID: TaskItem] = [:]
         for task in tasks { if let id = task.uuid { byID[id] = task } }
@@ -105,7 +117,8 @@ enum TaskChainGrouping {
             if members.count <= 1 {
                 loose.append(contentsOf: members)
             } else {
-                chains.append(TaskChain(members: topologicallyLayer(members)))
+                chains.append(
+                    TaskChain(members: topologicallyLayer(members, keys: keys), rankKeys: keys))
             }
         }
         return (chains, loose)
@@ -117,8 +130,9 @@ enum TaskChainGrouping {
     /// whatever's left if nothing is ever ready (shouldn't happen — `addBlocker`
     /// already prevents cycles at write time — but this keeps grouping from
     /// infinite-looping if one somehow existed).
-    private static func topologicallyLayer(_ members: [TaskItem]) -> [TaskItem] {
-        let keys = TaskRanking.rankKeys(for: members)
+    private static func topologicallyLayer(
+        _ members: [TaskItem], keys: [UUID: RankKey]
+    ) -> [TaskItem] {
         func precedes(_ a: TaskItem, _ b: TaskItem) -> Bool {
             guard let ka = a.uuid.flatMap({ keys[$0] }), let kb = b.uuid.flatMap({ keys[$0] })
             else { return false }

@@ -17,7 +17,7 @@ struct TaskChainGroupingTests {
 
     @Test("A standalone task with no dependency links is loose, not a chain")
     func standaloneIsLoose() {
-        let task = TaskItem(title: "Water the plants", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "Water the plants", status: .todo, confidence: 0.9)
         let (chains, loose) = TaskChainGrouping.computeChains(in: [task])
         #expect(chains.isEmpty)
         #expect(loose.map(\.title) == ["Water the plants"])
@@ -25,12 +25,12 @@ struct TaskChainGroupingTests {
 
     @Test("A simple 3-link chain groups into one component, ordered root-first")
     func simpleChain() {
-        let passport = TaskItem(title: "Renew passport", status: .active, confidence: 0.9)
+        let passport = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
         let flights = TaskItem(
-            title: "Book flights", status: .active, confidence: 0.9,
+            title: "Book flights", status: .todo, confidence: 0.9,
             blockedBy: [passport.uuid].compactMap { $0 })
         let timeOff = TaskItem(
-            title: "Request time off", status: .active, confidence: 0.9,
+            title: "Request time off", status: .todo, confidence: 0.9,
             blockedBy: [flights.uuid].compactMap { $0 })
         let (chains, loose) = TaskChainGrouping.computeChains(in: [timeOff, passport, flights])
 
@@ -43,14 +43,14 @@ struct TaskChainGroupingTests {
 
     @Test("Two independent chains, in unrelated categories, never merge")
     func independentChainsStaySeparate() {
-        let passport = TaskItem(title: "Renew passport", category: "Travel", status: .active, confidence: 0.9)
+        let passport = TaskItem(title: "Renew passport", category: "Travel", status: .todo, confidence: 0.9)
         let flights = TaskItem(
-            title: "Book flights", category: "Travel", status: .active, confidence: 0.9,
+            title: "Book flights", category: "Travel", status: .todo, confidence: 0.9,
             blockedBy: [passport.uuid].compactMap { $0 })
         let movers = TaskItem(
-            title: "Schedule the movers", category: "Home", status: .active, confidence: 0.9)
+            title: "Schedule the movers", category: "Home", status: .todo, confidence: 0.9)
         let mailingAddress = TaskItem(
-            title: "Change mailing address", category: "Admin", status: .active, confidence: 0.9,
+            title: "Change mailing address", category: "Admin", status: .todo, confidence: 0.9,
             blockedBy: [movers.uuid].compactMap { $0 })
 
         let (chains, loose) = TaskChainGrouping.computeChains(
@@ -64,10 +64,10 @@ struct TaskChainGroupingTests {
 
     @Test("A task blocked by two others in the same set forms one 3-member chain")
     func multiBlockerFormsOneComponent() {
-        let a = TaskItem(title: "Renew passport", status: .active, confidence: 0.9)
-        let b = TaskItem(title: "Book flights", status: .active, confidence: 0.9)
+        let a = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
+        let b = TaskItem(title: "Book flights", status: .todo, confidence: 0.9)
         let visa = TaskItem(
-            title: "Apply for visa", status: .active, confidence: 0.9,
+            title: "Apply for visa", status: .todo, confidence: 0.9,
             blockedBy: [a.uuid, b.uuid].compactMap { $0 })
         let (chains, loose) = TaskChainGrouping.computeChains(in: [a, b, visa])
 
@@ -81,10 +81,10 @@ struct TaskChainGroupingTests {
 
     @Test("A done blocker contributes no edge — its dependent is loose, not chained")
     func doneBlockerBreaksTheEdge() {
-        let blocker = TaskItem(title: "Renew passport", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
         blocker.complete()
         let dependent = TaskItem(
-            title: "Book flights", status: .active, confidence: 0.9,
+            title: "Book flights", status: .todo, confidence: 0.9,
             blockedBy: [blocker.uuid].compactMap { $0 })
         // Only the still-active set would normally reach this function (Tasks screen
         // scope excludes .done), but even if a done task were present, activeBlockers
@@ -97,10 +97,10 @@ struct TaskChainGroupingTests {
     @Test("Root selection picks whichever root sorts first under focusOrder")
     func rootPicksMostUrgentAmongMultipleRoots() {
         // Two independent roots (a fan-in): urgent "b" should out-anchor normal "a".
-        let a = TaskItem(title: "Normal root", status: .active, confidence: 0.9)
-        let b = TaskItem(title: "Urgent root", status: .active, confidence: 0.9, isUrgent: true)
+        let a = TaskItem(title: "Normal root", status: .todo, confidence: 0.9)
+        let b = TaskItem(title: "Urgent root", status: .todo, confidence: 0.9, isUrgent: true)
         let dependent = TaskItem(
-            title: "Needs both", status: .active, confidence: 0.9,
+            title: "Needs both", status: .todo, confidence: 0.9,
             blockedBy: [a.uuid, b.uuid].compactMap { $0 })
         // Score the set so "b"'s urgent signal actually raises its attention (the
         // comparator reads the persisted score, which is neutral until computed).
@@ -109,5 +109,43 @@ struct TaskChainGroupingTests {
         let (chains, _) = TaskChainGrouping.computeChains(in: all)
         #expect(chains.count == 1)
         #expect(chains[0].root.title == "Urgent root")
+    }
+
+    @Test("Chain root follows the caller's rank keys, not a member-only re-rank")
+    func rootFollowsCallerKeys() {
+        // A fan-in: two independent roots feed one dependent.
+        let a = TaskItem(title: "Root A", status: .todo, confidence: 0.9)
+        let b = TaskItem(title: "Root B", status: .todo, confidence: 0.9)
+        let dependent = TaskItem(
+            title: "Needs both", status: .todo, confidence: 0.9,
+            blockedBy: [a.uuid, b.uuid].compactMap { $0 })
+        let members = [a, b, dependent]
+
+        func key(_ t: TaskItem, attention: Double) -> RankKey {
+            RankKey(
+                needsDecision: false, isBlocked: t.hasActiveBlockers(among: members),
+                effectiveAttention: attention, isBlocking: false, isOverdue: false,
+                dueDate: nil, createdAt: t.createdAt, id: t.uuid!)
+        }
+
+        // Keys the LANE positions the chain under decide the front card — so root
+        // selection and lane placement can never disagree (the population-dependence bug,
+        // where a member-only re-rank saw different relevance/blocking terms).
+        let bWins: [UUID: RankKey] = [
+            a.uuid!: key(a, attention: 10), b.uuid!: key(b, attention: 90),
+            dependent.uuid!: key(dependent, attention: 50),
+        ]
+        #expect(
+            TaskChainGrouping.computeChains(in: members, rankKeys: bWins).chains.first?.root.title
+                == "Root B")
+
+        // Flip the keys → the OTHER root wins, proving the passed keys drive selection.
+        let aWins: [UUID: RankKey] = [
+            a.uuid!: key(a, attention: 90), b.uuid!: key(b, attention: 10),
+            dependent.uuid!: key(dependent, attention: 50),
+        ]
+        #expect(
+            TaskChainGrouping.computeChains(in: members, rankKeys: aWins).chains.first?.root.title
+                == "Root A")
     }
 }

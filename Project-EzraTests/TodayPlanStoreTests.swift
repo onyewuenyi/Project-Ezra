@@ -96,10 +96,10 @@ struct TodayPlanStoreTests {
         let context = TestStore.makeContext()
         let store = TodayPlanStore(defaults: freshDefaults())
 
-        let done1 = TaskItem(title: "d1", status: .active)
+        let done1 = TaskItem(title: "d1", status: .todo)
         done1.complete(now: now)
-        let open = TaskItem(title: "o", status: .active)
-        let done2 = TaskItem(title: "d2", status: .active)
+        let open = TaskItem(title: "o", status: .todo)
+        let done2 = TaskItem(title: "d2", status: .todo)
         done2.complete(now: now)
         let tasks = [done1, open, done2]
 
@@ -128,10 +128,10 @@ struct TodayPlanStoreTests {
         let yesterday = now.addingTimeInterval(-24 * 3600)
         let birth = yesterday.addingTimeInterval(-3600)
 
-        let untouched = TaskItem(title: "untouched", status: .active, createdAt: birth)
-        let worked = TaskItem(title: "worked", status: .active, createdAt: birth)
-        let systemTouched = TaskItem(title: "system", status: .active, createdAt: birth)
-        let finished = TaskItem(title: "finished", status: .active, createdAt: birth)
+        let untouched = TaskItem(title: "untouched", status: .todo, createdAt: birth)
+        let worked = TaskItem(title: "worked", status: .todo, createdAt: birth)
+        let systemTouched = TaskItem(title: "system", status: .todo, createdAt: birth)
+        let finished = TaskItem(title: "finished", status: .todo, createdAt: birth)
         let tasks = [untouched, worked, systemTouched, finished]
         for task in tasks { task.lastSurfacedAt = yesterday }
 
@@ -157,7 +157,7 @@ struct TodayPlanStoreTests {
     func reconciliationSkipsToday() throws {
         let context = TestStore.makeContext()
         let store = TodayPlanStore(defaults: freshDefaults())
-        let task = TaskItem(title: "t", status: .active)
+        let task = TaskItem(title: "t", status: .todo)
         task.complete(now: now)
         store.save(cache(for: now, actions: [PlannedAction(taskID: task.uuid!, rationale: nil)]))
 

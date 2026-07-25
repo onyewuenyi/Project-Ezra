@@ -103,7 +103,7 @@ struct TodayTaskRow: View {
                     .foregroundStyle(isDone ? Palette.success : Palette.secondaryText)
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn)
-                    .contentShape(Rectangle())
+                    .minimumHitTarget()
             }
             .buttonStyle(.pressableIcon)
             .disabled(isDone)

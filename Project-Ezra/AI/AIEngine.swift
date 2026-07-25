@@ -18,13 +18,13 @@ import Foundation
 /// A proposed graph edge from a new capture to an EXISTING task — the confirm card's
 /// duplicate / child chip. Never auto-executed: an accepted proposal rides the confirm
 /// tap. Tiered by the model's confidence at resolution (see `IntentResolver`).
-struct EdgeProposal: Hashable {
-    enum Kind: String, Hashable { case duplicateOf, childOf }
+struct EdgeProposal: Hashable, Codable {
+    enum Kind: String, Hashable, Codable { case duplicateOf, childOf }
     /// `.undecided` is DUPLICATE-ONLY: a merge destroys user data, so it stays
     /// confidence-tiered (0.85/0.5). A child link is additive and reversible, so
     /// `childOf` is auto-accepted above the suppression floor — the auto-accept
     /// invariant's single destructive-inference exception is the duplicate merge.
-    enum Decision: String, Hashable {
+    enum Decision: String, Hashable, Codable {
         case accepted  // pre-selected, still confirm-gated
         case undecided  // duplicate 0.5–0.85 — shown as a question, user chooses
         case rejected  // the user said no → a suppression record at commit
@@ -37,13 +37,19 @@ struct EdgeProposal: Hashable {
 }
 
 /// A structured task the AI proposes from raw capture, before it is persisted.
-struct TaskDraft: Identifiable, Hashable {
-    let id = UUID()
+struct TaskDraft: Identifiable, Hashable, Codable {
+    // `var`, not `let`. Synthesized `Codable` SILENTLY SKIPS an immutable property with
+    // an initial value: it compiles, encodes fine, and every decode mints a fresh id.
+    // Nothing would have caught it — the suppression capture-form keys on a normalized
+    // title by design, so it survives — but any draft identity carried across the
+    // park/restore boundary (`ConfirmCreationList`'s ForEach, the remove-by-id path)
+    // would break invisibly. See `Capture.parkedDrafts`.
+    var id = UUID()
     var title: String
     var category: String
-    /// The status the AI proposes this task enter. The AI proposes this *once*, at
-    /// triage — it never sets a status again.
-    var proposedStatus: TaskStatus
+    // NOTE: there is no `proposedStatus`. The AI never proposes a lifecycle position,
+    // because a draft is not a task — a `TaskItem` comes into existence at Confirm,
+    // born `.todo`. Before that this struct lives on a parked `Capture`.
     var confidence: Double
     /// The confidence/judgment tier, carried on the draft so `AppBrain.commit` can
     /// decide whether to log a silent-filing trail entry and the review UI can render
@@ -68,10 +74,16 @@ struct TaskDraft: Identifiable, Hashable {
     /// The other person's name when the capture delegates the task ("ask Sarah to…");
     /// nil means it's the user's own. The 1→N multiplayer seam starts here.
     var ownerName: String? = nil
-    /// Mirrors `TaskItem.ownerPending`. Always `false` out of both engines — the
-    /// ownership gate is applied once, centrally, by `AppBrain.applyOwnershipGate`,
-    /// which is the only place household roster size is known.
-    var ownerPending: Bool = false
+    /// Why this owner, in one short phrase — rendered as a caption under the owner
+    /// chip, and the thing the ✦ "assumed" mark keys off. **Nil for `.defaultSelf`**:
+    /// defaulting to the capturer is not an inference, and marking it as one would be
+    /// worse for trust than the abstention it replaced. Set by `OwnerProposer`.
+    var ownerReason: String? = nil
+    /// How the owner was chosen. Drives three things: whether the ✦ shows, whether a
+    /// corrected owner may teach a name-alias (only `.spoken` may — see
+    /// `TaskDraft.corrections`), and whether `resolveOwners` is allowed to match a
+    /// name the roster doesn't have.
+    var ownerBasis: OwnerProposal.Basis = .defaultSelf
     /// Rough effort in minutes when clearly implied; nil otherwise.
     var effortMinutes: Int? = nil
     /// Open tasks that should WAIT ON this new task once it exists — the reverse
@@ -119,7 +131,15 @@ struct TaskDraft: Identifiable, Hashable {
             diffs.append(("urgent", ai.isUrgent ? "true" : "false", isUrgent ? "true" : "false"))
         }
         if ownerName != ai.ownerName {
-            diffs.append(("owner", ai.ownerName ?? "you", ownerName ?? "you"))
+            // Only a SPOKEN owner may teach a name-alias. `CorrectionProfile` turns a
+            // `"owner"` correction into `ownerAlias(spoken:actual:)` — correct when the
+            // AI used a name the user actually said, and actively harmful otherwise: if
+            // the proposer *inferred* Maya and the user changes it to Alex, learning
+            // "Maya means Alex" would rewrite every future capture where they really do
+            // say Maya. A proposer-derived correction is recorded under a field the
+            // profile ignores, so the signal is kept and nothing is learned from it yet.
+            let field = ownerBasis == .spoken ? "owner" : "ownerProposed"
+            diffs.append((field, ai.ownerName ?? "you", ownerName ?? "you"))
         }
         if effortMinutes != ai.effortMinutes {
             diffs.append(
@@ -156,50 +176,46 @@ struct TaskDraft: Identifiable, Hashable {
         date.formatted(.iso8601.year().month().day())
     }
 
-    /// The user accepting/adjusting a draft's proposed status during review.
-    /// This satisfies the judgment-category rule (which forbids the *AI* deciding, not
-    /// the human): the override moves to the silent tier while keeping
-    /// `isJudgmentCall`/`reasoning` intact, so provenance is honest even though a
-    /// person made the call. Ownership is a separate axis and is left untouched.
-    mutating func userOverride(status newStatus: TaskStatus) {
-        proposedStatus = newStatus
-        autonomy = .silent
-    }
-
-    /// Materialize into a persistable model. Neither the blocker nor the owner
-    /// *reference* is set here — the blocked-on task may be elsewhere in the same
-    /// batch, and the owner name needs resolving against the `FamilyMember` roster
-    /// (or auto-creating one), so `AppBrain.commit` resolves both `blockedBy` and
-    /// `ownerName` (the phrases) into real references after all tasks are inserted.
+    /// Materialize into a persistable model. **This is the moment the task comes into
+    /// existence** — it is only ever called from `AppBrain.commit`, which is the
+    /// Confirm boundary, so the task is born `.todo` with `confirmedAt` stamped.
+    ///
+    /// Neither the blocker nor the owner *reference* is set here — the blocked-on task
+    /// may be elsewhere in the same batch, and the owner name needs resolving against
+    /// the `FamilyMember` roster, so `commit` resolves both phrases into real
+    /// references after every task in the batch is inserted.
     func makeTaskItem(
-        rawCapture: String, captureID: UUID? = nil, in context: NSManagedObjectContext
+        rawCapture: String, captureID: UUID? = nil, now: Date = Date(),
+        in context: NSManagedObjectContext
     )
         -> TaskItem
     {
         let task = TaskItem(
             title: title,
             category: category,
-            status: proposedStatus,
+            status: .todo,
             confidence: confidence,
             isJudgmentCall: isJudgmentCall,
             needsDecision: needsDecision,
             reasoning: reasoning,
             dueDate: dueDate,
             isUrgent: isUrgent,
-            ownerPending: ownerPending,
+            ownerOrigin: ownerBasis == .spoken ? .human : .inferred,
             effortMinutes: effortMinutes,
             captureID: captureID,
             rawCapture: rawCapture,
+            createdAt: now,
             in: context
         )
         task.workIntent = workIntent  // a pure field write — NEVER touches needsDecision
+        task.confirmedAt = now  // creation IS the confirm; there is no later transition
         return task
     }
 }
 
 /// The AI-inferred field values at resolution time, frozen. What the Correction
 /// diff compares against — never mutated by the review UI.
-struct AIFieldSnapshot: Hashable {
+struct AIFieldSnapshot: Hashable, Codable {
     var title: String
     var category: String
     var dueDate: Date?
@@ -226,7 +242,7 @@ struct RosterPerson: Sendable, Hashable {
 /// retrieval at capture time — without dragging a NSManagedObjectContext. Enriched
 /// (category/updatedAt/dueDate/isBlocked) so `ContextRetrieval` can rank a new capture
 /// against the open set to surface near-duplicates and parents.
-struct OpenTaskSnapshot: Sendable, Hashable {
+struct OpenTaskSnapshot: Sendable, Hashable, Codable {
     var id: UUID
     var title: String
     /// The task's unresolved external blocker notes ("passport") — a note that
@@ -320,10 +336,10 @@ enum AutonomyPolicy {
         }
     }
 
-    // NOTE: there is no proposedStatus any more. Creation ALWAYS lands in `.inbox`
-    // awaiting the one-tap Confirm-Creation glance (always-confirm) — the resolver
-    // stamps it. The tier still governs everything that happens to a task *after*
-    // it exists: affordances, sweeps, and how much the AI may do silently.
+    // NOTE: the tier does not gate creation. A task exists only once the human taps
+    // Confirm (`AppBrain.commit`), and it is born `.todo` regardless of how sure the
+    // AI was. The tier governs everything that happens *after* it exists: affordances,
+    // sweeps, and how much the AI may do silently.
 }
 
 // MARK: - Category vocabulary (shared by both engines)

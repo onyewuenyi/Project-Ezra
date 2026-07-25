@@ -39,7 +39,7 @@ struct MemberLoad: Identifiable, Equatable {
     enum Kind: Equatable {
         case you  // the current user (ownerID == the device's linked member id)
         case member(UUID)  // another FamilyMember by uuid
-        case shared  // ownerPending or nil owner — filed for the household, nobody owns it
+        case shared  // nil owner — handed back to the household, nobody owns it
     }
 
     var kind: Kind
@@ -166,7 +166,7 @@ enum HouseholdEngine {
         let overdueTotal = loads.reduce(0) { $0 + $1.overdueCount }
         let blockedTotal = loads.reduce(0) { $0 + $1.blockedCount }
         let needsDecisionTotal = open.filter { $0.needsDecision }.count
-        let unownedTotal = open.filter { $0.ownerPending }.count
+        let unownedTotal = open.filter { $0.ownerID == nil }.count
         let anyOverloaded = loads.contains { $0.isOverloaded }
         let hasActiveWork = loads.contains { $0.activeCount > 0 }
 
@@ -209,17 +209,22 @@ enum HouseholdEngine {
     ) -> [MemberLoad] {
         let cal = Calendar.current
 
-        // Bucket every open task by owner. Precedence: unowned (ownerPending, or a nil
-        // owner) is shared household work — never on anyone's plate. An owner matching
-        // the device's linked member is "you"; any other owner is that member.
+        // Bucket every open task by owner. A nil owner is shared household work — a
+        // deliberate human hand-back, never on anyone's plate. An owner matching the
+        // device's linked member is "you"; any other owner is that member.
         func bucket(_ task: TaskItem) -> MemberLoad.Kind {
-            if task.ownerPending { return .shared }
             guard let ownerID = task.ownerID else { return .shared }
             return ownerID == currentUserID ? .you : .member(ownerID)
         }
 
+        // `countsAsWorkload` keeps reference items off every plate. A saved wifi
+        // password is owned and live but never resolves, so counting it would inflate
+        // someone's plate permanently — and through the overload modifier AND the
+        // affinity denominator, a shelf of notes would stop them being proposed work.
         func load(for kind: MemberLoad.Kind, name: String) -> MemberLoad {
-            let mine = open.filter { sameBucket(bucket($0), kind) && $0.status == .active }
+            let mine = open.filter {
+                sameBucket(bucket($0), kind) && $0.status.isLive && $0.countsAsWorkload
+            }
             let dueToday = mine.filter {
                 $0.dueDate.map { cal.isDate($0, inSameDayAs: now) } ?? false
             }
@@ -243,7 +248,7 @@ enum HouseholdEngine {
         }
         // The shared bucket only appears when there's genuinely unowned work.
         let shared = load(for: .shared, name: "Shared")
-        if shared.activeCount > 0 || open.contains(where: { $0.ownerPending }) {
+        if shared.activeCount > 0 {
             loads.append(shared)
         }
 
@@ -319,7 +324,7 @@ enum HouseholdEngine {
         }
 
         // 2. Live states — waiting on the world.
-        for task in open where task.status == .active {
+        for task in open where task.status.isLive {
             let active = task.activeBlockers(among: open)
             guard !active.isEmpty, active.allSatisfy({ $0.kind == .external }) else { continue }
             let note = active.first?.note ?? "something else"
@@ -335,7 +340,7 @@ enum HouseholdEngine {
         }
 
         // 3. Live states — filed for the household, nobody owns it.
-        for task in open where task.ownerPending {
+        for task in open where task.ownerID == nil {
             items.append(
                 CoordinationEvent(
                     id: "grabs-\(task.uuid?.uuidString ?? task.title)",
@@ -397,10 +402,7 @@ enum HouseholdEngine {
         return dated.prefix(Budget.timeline).map { task in
             let due = task.dueDate ?? now
             let kind: MemberLoad.Kind =
-                task.ownerPending
-                ? .shared
-                : (task.ownerID.map { $0 == currentUserID ? .you : MemberLoad.Kind.member($0) }
-                    ?? .shared)
+                task.ownerID.map { $0 == currentUserID ? .you : MemberLoad.Kind.member($0) } ?? .shared
             return TimelineEntry(
                 id: "timeline-\(task.uuid?.uuidString ?? task.title)",
                 taskID: task.uuid,

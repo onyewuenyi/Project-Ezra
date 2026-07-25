@@ -23,7 +23,7 @@ struct CaptureCommitTests {
         _ title: String, edges: [EdgeProposal] = []
     ) -> TaskDraft {
         var d = TaskDraft(
-            title: title, category: "Admin", proposedStatus: .inbox, confidence: 0.9,
+            title: title, category: "Admin", confidence: 0.9,
             autonomy: .silent, isJudgmentCall: false, reasoning: "")
         d.edgeProposals = edges
         return d
@@ -33,7 +33,7 @@ struct CaptureCommitTests {
     func mergeFoldAndUndo() throws {
         let context = TestStore.makeContext()
         let brain = AppBrain()
-        let existing = TaskItem(title: "Renew passport", status: .active, in: context)
+        let existing = TaskItem(title: "Renew passport", status: .todo, in: context)
         context.insert(existing)
         try context.save()
 
@@ -51,14 +51,14 @@ struct CaptureCommitTests {
         merged.undone = true
         ChangeLogUndo.revert(merged, in: context)
         let tasks = try context.fetch(NSFetchRequest<TaskItem>(entityName: "TaskItem"))
-        #expect(tasks.contains { $0.title == "Renew the passport" && $0.status == .inbox })
+        #expect(tasks.contains { $0.title == "Renew the passport" && $0.status == .todo })
     }
 
     @Test("A merge records a duplicate-accepted Correction")
     func mergeRecordsCorrection() throws {
         let context = TestStore.makeContext()
         let brain = AppBrain()
-        let existing = TaskItem(title: "Renew passport", status: .active, in: context)
+        let existing = TaskItem(title: "Renew passport", status: .todo, in: context)
         context.insert(existing)
         try context.save()
 
@@ -75,7 +75,7 @@ struct CaptureCommitTests {
     func rejectedSuppression() throws {
         let context = TestStore.makeContext()
         let brain = AppBrain()
-        let existing = TaskItem(title: "Renew passport", status: .active, in: context)
+        let existing = TaskItem(title: "Renew passport", status: .todo, in: context)
         context.insert(existing)
         try context.save()
 
@@ -115,7 +115,7 @@ struct CaptureCommitTests {
     func childLinkAndUndo() throws {
         let context = TestStore.makeContext()
         let brain = AppBrain()
-        let parent = TaskItem(title: "Plan the trip", status: .active, in: context)
+        let parent = TaskItem(title: "Plan the trip", status: .todo, in: context)
         context.insert(parent)
         try context.save()
 
@@ -132,10 +132,73 @@ struct CaptureCommitTests {
         #expect(created.first?.parentTaskID == nil)
     }
 
+    @Test("Rejected duplicate is keyed on the AI's original title, not the user-edited title")
+    func rejectedSuppressionUsesAIOriginalTitle() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        let existing = TaskItem(title: "Renew passport", status: .todo, in: context)
+        context.insert(existing)
+        try context.save()
+
+        let dup = EdgeProposal(
+            kind: .duplicateOf, targetID: existing.uuid!, targetTitle: "Renew passport",
+            confidence: 0.9, decision: .rejected)
+        var d = draft("A totally renamed title", edges: [dup])
+        // The resolver checks suppression against `normalizeTitle(intent.title)` — the AI's
+        // ORIGINAL title — so the record must be keyed on it too, or a renamed-then-rejected
+        // duplicate re-surfaces pre-accepted next capture. The user renamed the draft.
+        d.aiOriginal = AIFieldSnapshot(
+            title: "Renew passport again", category: d.category, dueDate: nil, isUrgent: false,
+            ownerName: nil, effortMinutes: nil, blocksIDs: [], edgeProposals: [])
+        let created = brain.commit([d], rawCapture: "", into: context)
+
+        let suppressions = SuppressionStore.load(
+            in: context, existingTaskIDs: Set([existing.uuid!, created[0].uuid!]))
+        #expect(
+            suppressions.contains {
+                $0.suppresses(
+                    kind: .duplicateMerge, targetID: existing.uuid!,
+                    normalizedTitle: RelationshipSuppression.normalizeTitle("Renew passport again"))
+            })
+        #expect(
+            !suppressions.contains {
+                $0.suppresses(
+                    kind: .duplicateMerge, targetID: existing.uuid!,
+                    normalizedTitle: RelationshipSuppression.normalizeTitle("A totally renamed title"))
+            })
+    }
+
+    @Test("Undoing an AI blocker-link doesn't fabricate a recently-unblocked boost")
+    func undoLinkedClearsUnblockStamp() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        let existing = TaskItem(title: "Start renovation", status: .todo, in: context)
+        context.insert(existing)
+        try context.save()
+        #expect(existing.lastUnblockedAt == nil)
+
+        // A newly-captured task that an existing open task should wait on → an AI "linked"
+        // reverse-dependency edge makes `existing` blocked by the new task.
+        var d = draft("Pick a contractor")
+        d.blocks = [OpenTaskSnapshot(id: existing.uuid!, title: existing.title)]
+        _ = brain.commit([d], rawCapture: "", into: context)
+        #expect(existing.hasActiveBlockers(among: TaskItem.fetchAll(in: context)))
+
+        // Undo the mis-added edge. Removing `existing`'s last active blocker would normally
+        // stamp `lastUnblockedAt` — but undoing a wrong edge must not hand the +12 boost.
+        let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
+        let linked = try #require(
+            entries.first { $0.action == "linked" && $0.fieldChanged == "blockers" })
+        ChangeLogUndo.revert(linked, in: context)
+        linked.undone = true
+        #expect(!existing.hasActiveBlockers(among: TaskItem.fetchAll(in: context)))  // edge gone
+        #expect(existing.lastUnblockedAt == nil)  // NOT fabricated by the undo
+    }
+
     @Test("Suppression hygiene: rows expire past maxAge and prune when their target is gone")
     func suppressionHygiene() throws {
         let context = TestStore.makeContext()
-        let live = TaskItem(title: "live", status: .active, in: context)
+        let live = TaskItem(title: "live", status: .todo, in: context)
         context.insert(live)
         try context.save()
 

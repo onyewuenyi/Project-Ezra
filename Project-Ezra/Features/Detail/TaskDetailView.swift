@@ -117,12 +117,13 @@ struct TaskDetailView: View {
         .onDisappear {
             // Backstop for a dismiss mid-edit (focus never formally left the field). The
             // coalescing in `logHumanEdit` makes a double-fire with the focus path harmless.
+            // These commits (and every chip edit) already stamp the human clock via
+            // `logHumanEdit` — so there is deliberately NO blanket `touchHuman` here:
+            // `task.hasChanges` is authorship-blind, and a stray pending change (a failed
+            // save elsewhere, an unrelated bump) opening/closing the detail must not fake
+            // engagement on the clock staleness and the deferral discriminator trust.
             commitTitleEdit()
             commitNotesEdit()
-            // Scoped to THIS task, not the context: several pages share one context in the
-            // pager, and a dirty neighbour must never stamp this task's `updatedAt` — Stale
-            // detection and the auto-archive depend on that timestamp being honest.
-            if task.hasChanges { task.touchHuman() }
             try? context.save()
         }
         .alert("New person", isPresented: $showAddPerson) {
@@ -147,7 +148,40 @@ struct TaskDetailView: View {
                 .foregroundStyle(Palette.primaryText)
                 .textInputAutocapitalization(.sentences)
                 .focused($focusedField, equals: .title)
+            provenanceLine
         }
+    }
+
+    /// Where this task came from, when it didn't come from you. One quiet caption —
+    /// material, never a badge.
+    ///
+    /// A task that ARRIVED on your plate carries information a task you wrote does
+    /// not: who sent it. That is what lets the assignee hand it back without guessing,
+    /// and it is the same provenance instinct the relationship work already applies to
+    /// edges. Both facts are already stored (`creatorID`, and the `actorID` on the most
+    /// recent `"assigned"` entry) and were simply never read.
+    @ViewBuilder private var provenanceLine: some View {
+        if let line = provenanceText {
+            Text(line)
+                .font(.chipLabel)
+                .foregroundStyle(Palette.secondaryText)
+        }
+    }
+
+    private var provenanceText: String? {
+        // A reassignment is the more recent fact, so it wins over authorship.
+        if let assigned = activityEntries.first(where: { $0.action == "assigned" && !$0.undone }),
+            let actor = assigned.actorID, actor != currentUserID,
+            let name = familyMembers.first(where: { $0.uuid == actor })?.name
+        {
+            return "Assigned by \(name)"
+        }
+        if let creator = task.creatorID, creator != currentUserID,
+            let name = familyMembers.first(where: { $0.uuid == creator })?.name
+        {
+            return "Created by \(name)"
+        }
+        return nil
     }
 
     // MARK: - Property chips (Linear-style wrapping row)
@@ -161,6 +195,7 @@ struct TaskDetailView: View {
                 dueChip
                 categoryChip
                 effortChip
+                workIntentChip
                 addBlockerChip
             }
             if showDatePicker {
@@ -194,23 +229,23 @@ struct TaskDetailView: View {
 
     private var statusChip: some View {
         Menu {
-            ForEach(TaskDisplayStatus.allCases) { state in
+            ForEach(TaskStatus.pickable) { state in
                 Button {
                     applyStatus(state)
                 } label: {
                     Label {
                         Text(state.label)
                     } icon: {
-                        Image(systemName: state == task.displayStatus ? "checkmark" : state.symbol)
+                        Image(systemName: state == task.status ? "checkmark" : state.symbol)
                     }
                 }
             }
         } label: {
             chip {
-                Image(systemName: task.displayStatus.symbol)
+                Image(systemName: task.status.symbol)
                     .font(.system(size: IconSize.caption))
-                    .foregroundStyle(task.displayStatus.tint)
-                Text(task.displayStatus.label)
+                    .foregroundStyle(task.status.tint)
+                Text(task.status.label)
             }
         }
     }
@@ -229,10 +264,18 @@ struct TaskDetailView: View {
                 }
             }
             Divider()
+            // Handing a task back to the household. Every task is now born owned, so
+            // this is the ONLY way an unowned task comes to exist — and until this
+            // existed the state was reachable only by undoing an assignment.
+            Button("Shared / up for grabs") { setOwner(nil) }
             Button("Add person…") { showAddPerson = true }
         } label: {
             chip {
-                if let name = task.ownerDisplayName(among: otherMembers) {
+                if task.ownerID == nil {
+                    Image(systemName: "person.crop.circle.dashed")
+                        .font(.system(size: IconSize.caption))
+                    Text("Up for grabs")
+                } else if let name = task.ownerDisplayName(among: otherMembers) {
                     OwnerAvatarBadge(
                         name: name, photoData: task.ownerPhotoData(among: otherMembers), size: 18)
                     Text(name)
@@ -298,6 +341,34 @@ struct TaskDetailView: View {
                 Image(systemName: TaskCategory.symbol(for: task.category))
                     .font(.system(size: IconSize.caption))
                 Text(task.category)
+            }
+        }
+    }
+
+    /// The work-intent correction. Reachable but unprominent, on purpose.
+    ///
+    /// Type gates which capability the detail offers (`TaskCapabilities.available`), so
+    /// a misclassification silently withholds the Thinking Partner from a task that
+    /// needed it — and the classifier will sometimes read a decision as an action. This
+    /// is the human's one-tap fix, and the correction it writes is exactly the training
+    /// signal the correction-as-data architecture wants.
+    ///
+    /// On the heuristic path (and for any user whose Apple Intelligence is off or
+    /// unavailable) `workIntent` is nil, so this renders as a muted add-affordance
+    /// rather than hiding — it is one of the few places that path can be corrected at all.
+    private var workIntentChip: some View {
+        Menu {
+            ForEach(WorkIntent.allCases) { intent in
+                Button(intent.label) { setWorkIntent(intent) }
+            }
+            if task.workIntent != nil {
+                Divider()
+                Button("Clear", role: .destructive) { setWorkIntent(nil) }
+            }
+        } label: {
+            chip(muted: task.workIntent == nil) {
+                Image(systemName: "square.stack.3d.up").font(.system(size: IconSize.caption))
+                Text(task.workIntent?.label ?? "Kind of work")
             }
         }
     }
@@ -546,10 +617,10 @@ struct TaskDetailView: View {
 
     // MARK: - Mutations wiring
 
-    private func applyStatus(_ state: TaskDisplayStatus) {
-        guard state != task.displayStatus else { return }
+    private func applyStatus(_ state: TaskStatus) {
+        guard state != task.status else { return }
         actionPulse += 1
-        Motion.withMotion(Motion.decide) { task.applyDisplayStatus(state, in: context) }
+        Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
         try? context.save()
         if state.isResolved { onResolved() }
     }
@@ -583,6 +654,28 @@ struct TaskDetailView: View {
         task.logHumanEdit(
             field: "category", oldValue: old, newValue: cat,
             summary: "Recategorized to \(cat)", in: context)
+        try? context.save()
+    }
+
+    /// A HUMAN type correction. Logged as a plain field edit (coalescing, out of the
+    /// Inbox feed) plus a `Correction` row — distinct from the classifier's own
+    /// `reclassify`, which writes an `.ai` entry when it crosses the workload boundary.
+    private func setWorkIntent(_ intent: WorkIntent?) {
+        guard intent != task.workIntent else { return }
+        let old = task.workIntent
+        actionPulse += 1
+        task.workIntent = intent
+        task.logHumanEdit(
+            field: "workIntent", oldValue: old?.rawValue, newValue: intent?.rawValue,
+            summary: intent.map { "Set kind to \($0.label)" } ?? "Cleared the kind of work",
+            in: context)
+        if let old {
+            context.insert(
+                Correction(
+                    taskUUID: task.uuid, captureID: task.captureID,
+                    fieldCorrected: "workIntent", aiValue: old.rawValue,
+                    userValue: intent?.rawValue ?? "none", in: context))
+        }
         try? context.save()
     }
 
@@ -693,11 +786,17 @@ struct TaskDetailView: View {
     /// (a no-op in the simulator, where the classifier returns nil); the cached value is
     /// only overwritten when a fresh classification arrives. Constitutional guard: this
     /// only ever writes `workIntent`, never `needsDecision`.
+    ///
+    /// **Resolved tasks are never reclassified.** Changing which module renders on
+    /// something already finished helps nobody and burns a model call.
     private func reclassifyWorkIntent() {
+        guard !task.status.isResolved else { return }
         let snapshot = WorkIntentContext(task: task, among: allTasks)
         Task {
             guard let intent = await WorkIntentClassifier().classify(snapshot) else { return }
-            task.workIntent = intent
+            // Routed through the mutation seam so a move across the workload boundary
+            // is logged and reversible rather than silently re-scoping five systems.
+            task.reclassify(to: intent, in: context)
             try? context.save()
         }
     }
@@ -767,7 +866,7 @@ extension View {
 #Preview {
     @Previewable @State var task: TaskItem? = {
         TaskItem(
-            title: "Renew passport", category: "Travel", status: .active, stage: .inProgress,
+            title: "Renew passport", category: "Travel", status: .doing,
             confidence: 0.85, reasoning: "Filed under Travel from the wording.",
             isUrgent: true, rawCapture: "renew my passport before the trip")
     }()

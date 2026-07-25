@@ -217,11 +217,11 @@ struct TaskMoreMenu: View {
         .onAppear {
             let made = [
                 TaskItem(
-                    title: "Renew passport", category: "Travel", status: .active, stage: .inProgress,
+                    title: "Renew passport", category: "Travel", status: .doing,
                     confidence: 0.85, reasoning: "Filed under Travel from the wording.",
                     isUrgent: true, rawCapture: "renew my passport before the trip"),
-                TaskItem(title: "Book the flights", category: "Travel", status: .active, stage: .todo),
-                TaskItem(title: "Call the plumber", category: "Home", status: .active, stage: .todo),
+                TaskItem(title: "Book the flights", category: "Travel", status: .todo),
+                TaskItem(title: "Call the plumber", category: "Home", status: .todo),
             ]
             peers = made
             opened = made[1]

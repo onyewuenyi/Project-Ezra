@@ -25,7 +25,7 @@ struct InboxFeedTests {
   @Test("completeAndResurface logs a reversible human 'completed' with an actorID")
   func completeLogsHumanEntry() throws {
     let context = context()
-    let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+    let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
     context.insert(task)
     task.completeAndResurface(in: context)
     let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
@@ -40,7 +40,7 @@ struct InboxFeedTests {
   @Test("A human 'completed' undo reopens the task — never sends it to the Inbox")
   func completedRevertReopens() throws {
     let context = context()
-    let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+    let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
     context.insert(task)
     task.completeAndResurface(in: context)
     try? context.save()
@@ -48,21 +48,21 @@ struct InboxFeedTests {
     let completed = try #require(entries.first { $0.action == "completed" })
 
     ChangeLogUndo.revert(completed, in: context)
-    #expect(task.status == .active)  // reopened, NOT .inbox
+    #expect(task.status.isLive)  // reopened, NOT .inbox
     #expect(!task.status.isResolved)
   }
 
   @Test("A human 'killed' undo reopens the task, not to the Inbox")
   func killedRevertReopens() throws {
     let context = context()
-    let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+    let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
     context.insert(task)
     task.killAndResurface(in: context)
     let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
     let killed = try #require(entries.first { $0.action == "killed" })
 
     ChangeLogUndo.revert(killed, in: context)
-    #expect(task.status == .active)
+    #expect(task.status.isLive)
   }
 
   @Test("An 'assigned' undo restores the previous owner (old/new ride the entry)")
@@ -70,25 +70,29 @@ struct InboxFeedTests {
     let context = context()
     let me = UUID()
     let maya = UUID()
-    let task = TaskItem(title: "x", status: .active, confidence: 0.9, ownerID: me)
+    let task = TaskItem(title: "x", status: .todo, confidence: 0.9, ownerID: me)
     context.insert(task)
     task.claimAndLog(ownerID: maya, among: [task], in: context)
     #expect(task.ownerID == maya)
 
     let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
     let assigned = try #require(entries.first { $0.action == "assigned" })
-    #expect(assigned.oldValue == me.uuidString)
-    #expect(assigned.newValue == maya.uuidString)
+    // Old/new carry the ORIGIN alongside the id. Without it, undo would restore the
+    // owner but leave the origin reading `.human`, polluting the affinity denominator
+    // with an ownership no human established (the undo-completeness rule).
+    #expect(TaskItem.decodeOwnership(assigned.oldValue).ownerID == me)
+    #expect(TaskItem.decodeOwnership(assigned.newValue).ownerID == maya)
 
     ChangeLogUndo.revert(assigned, in: context)
     #expect(task.ownerID == me)
+    #expect(task.ownerOrigin == .inferred)  // restored, not left marked human
   }
 
   @Test("A 'decided' undo re-escalates the open decision")
   func decidedRevertReescalates() throws {
     let context = context()
     let task = TaskItem(
-      title: "x", status: .active, confidence: 0.95, isJudgmentCall: true, needsDecision: true)
+      title: "x", status: .todo, confidence: 0.95, isJudgmentCall: true, needsDecision: true)
     context.insert(task)
     task.resolveDecisionAndLog(in: context)
     #expect(!task.needsDecision)
@@ -102,7 +106,7 @@ struct InboxFeedTests {
   @Test("A 'filed' AI entry undo returns the task to the Inbox (the default path)")
   func filedRevertToInbox() throws {
     let context = context()
-    let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+    let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
     context.insert(task)
     let entry = ChangeLogEntry(
       summary: "Filed", action: "filed", initiatedBy: .ai, isReversible: true,
@@ -110,14 +114,14 @@ struct InboxFeedTests {
     context.insert(entry)
 
     ChangeLogUndo.revert(entry, in: context)
-    #expect(task.status == .inbox)
+    #expect(task.status == .todo)
   }
 
   @Test("A 'linked' entry undo removes exactly that dependency edge")
   func linkedRevertRemovesEdge() throws {
     let context = context()
-    let blocker = TaskItem(title: "passport", status: .active, confidence: 0.9)
-    let dependent = TaskItem(title: "flights", status: .active, confidence: 0.9)
+    let blocker = TaskItem(title: "passport", status: .todo, confidence: 0.9)
+    let dependent = TaskItem(title: "flights", status: .todo, confidence: 0.9)
     context.insert(blocker)
     context.insert(dependent)
     dependent.addTaskBlocker(blocker.uuid!, among: [blocker, dependent])

@@ -47,7 +47,7 @@ struct HouseholdEngineTests {
 
     @Test("Solo (no members) is quiet and hasHousehold is false, even with active work")
     func soloIsQuiet() {
-        let mine = TaskItem(title: "mow the lawn", status: .active, ownerID: me, createdAt: now)
+        let mine = TaskItem(title: "mow the lawn", status: .todo, ownerID: me, createdAt: now)
         let snap = compute([mine])
         #expect(snap.status == .quiet)
         #expect(snap.hasHousehold == false)
@@ -59,7 +59,7 @@ struct HouseholdEngineTests {
     func overdueNeedsAttention() {
         let maya = FamilyMember(name: "Maya")
         let overdue = TaskItem(
-            title: "pay the bill", status: .active, dueDate: days(-2), ownerID: me, createdAt: now)
+            title: "pay the bill", status: .todo, dueDate: days(-2), ownerID: me, createdAt: now)
         let snap = compute([overdue], members: [maya])
         #expect(snap.status == .needsAttention)
         #expect(snap.headline == "Needs attention")
@@ -69,7 +69,7 @@ struct HouseholdEngineTests {
     func decisionNeedsAttention() {
         let maya = FamilyMember(name: "Maya")
         let call = TaskItem(
-            title: "should we move", status: .active, isJudgmentCall: true, needsDecision: true,
+            title: "should we move", status: .todo, isJudgmentCall: true, needsDecision: true,
             createdAt: now)
         let snap = compute([call], members: [maya])
         #expect(snap.status == .needsAttention)
@@ -78,7 +78,7 @@ struct HouseholdEngineTests {
     @Test("Unowned household work pushes to needs-attention and adds a Shared bucket")
     func upForGrabsNeedsAttention() {
         let maya = FamilyMember(name: "Maya")
-        let grab = TaskItem(title: "book the caterer", status: .active, ownerPending: true, createdAt: now)
+        let grab = TaskItem(title: "book the caterer", status: .todo, createdAt: now)
         let snap = compute([grab], members: [maya])
         #expect(snap.status == .needsAttention)
         #expect(shared(snap) != nil)
@@ -89,7 +89,7 @@ struct HouseholdEngineTests {
     func smoothWhenClean() {
         let maya = FamilyMember(name: "Maya")
         let mine = TaskItem(
-            title: "prep dinner", status: .active, dueDate: days(3), ownerID: me, createdAt: now)
+            title: "prep dinner", status: .todo, dueDate: days(3), ownerID: me, createdAt: now)
         let snap = compute([mine], members: [maya])
         #expect(snap.status == .operatingSmoothly)
     }
@@ -97,7 +97,7 @@ struct HouseholdEngineTests {
     @Test("No Shared bucket when there is no unowned work")
     func noSharedBucketWithoutUnowned() {
         let maya = FamilyMember(name: "Maya")
-        let mine = TaskItem(title: "prep dinner", status: .active, ownerID: me, createdAt: now)
+        let mine = TaskItem(title: "prep dinner", status: .todo, ownerID: me, createdAt: now)
         let snap = compute([mine], members: [maya])
         #expect(shared(snap) == nil)
     }
@@ -110,10 +110,10 @@ struct HouseholdEngineTests {
         let ezra = FamilyMember(name: "Ezra")
         // you: 4 active, each member: 1 → median 1, floor 4 → you overloaded.
         var tasks = (0..<4).map {
-            TaskItem(title: "mine \($0)", status: .active, ownerID: me, createdAt: now)
+            TaskItem(title: "mine \($0)", status: .todo, ownerID: me, createdAt: now)
         }
-        tasks.append(TaskItem(title: "maya", status: .active, ownerID: maya.uuid, createdAt: now))
-        tasks.append(TaskItem(title: "ezra", status: .active, ownerID: ezra.uuid, createdAt: now))
+        tasks.append(TaskItem(title: "maya", status: .todo, ownerID: maya.uuid, createdAt: now))
+        tasks.append(TaskItem(title: "ezra", status: .todo, ownerID: ezra.uuid, createdAt: now))
         let snap = compute(tasks, members: [maya, ezra])
         #expect(you(snap)?.isOverloaded == true)
         #expect(loadFor(snap, member: maya)?.isOverloaded == false)
@@ -124,10 +124,10 @@ struct HouseholdEngineTests {
         let maya = FamilyMember(name: "Maya")
         let ezra = FamilyMember(name: "Ezra")
         var tasks = (0..<3).map {
-            TaskItem(title: "mine \($0)", status: .active, ownerID: me, createdAt: now)
+            TaskItem(title: "mine \($0)", status: .todo, ownerID: me, createdAt: now)
         }
-        tasks.append(TaskItem(title: "maya", status: .active, ownerID: maya.uuid, createdAt: now))
-        tasks.append(TaskItem(title: "ezra", status: .active, ownerID: ezra.uuid, createdAt: now))
+        tasks.append(TaskItem(title: "maya", status: .todo, ownerID: maya.uuid, createdAt: now))
+        tasks.append(TaskItem(title: "ezra", status: .todo, ownerID: ezra.uuid, createdAt: now))
         let snap = compute(tasks, members: [maya, ezra])
         #expect(you(snap)?.isOverloaded == false)
     }
@@ -136,7 +136,7 @@ struct HouseholdEngineTests {
     func soloCarrierNeverOverloaded() {
         let maya = FamilyMember(name: "Maya")  // owns nothing
         let tasks = (0..<10).map {
-            TaskItem(title: "mine \($0)", status: .active, ownerID: me, createdAt: now)
+            TaskItem(title: "mine \($0)", status: .todo, ownerID: me, createdAt: now)
         }
         let snap = compute(tasks, members: [maya])
         #expect(you(snap)?.isOverloaded == false)
@@ -147,16 +147,19 @@ struct HouseholdEngineTests {
     @Test("Per-member counts (active / due-today / blocked / overdue) match the tasks")
     func memberCountsAreExact() {
         let maya = FamilyMember(name: "Maya")
-        let active = TaskItem(title: "venue", status: .active, ownerID: maya.uuid, createdAt: now)
+        let active = TaskItem(title: "venue", status: .todo, ownerID: maya.uuid, createdAt: now)
         let dueToday = TaskItem(
-            title: "school run", status: .active, dueDate: now, ownerID: maya.uuid, createdAt: now)
+            title: "school run", status: .todo, dueDate: now, ownerID: maya.uuid, createdAt: now)
         let overdue = TaskItem(
-            title: "insurance", status: .active, dueDate: days(-1), ownerID: maya.uuid, createdAt: now)
-        let blocked = TaskItem(title: "remodel", status: .active, ownerID: maya.uuid, createdAt: now)
+            title: "insurance", status: .todo, dueDate: days(-1), ownerID: maya.uuid, createdAt: now)
+        let blocked = TaskItem(title: "remodel", status: .todo, ownerID: maya.uuid, createdAt: now)
         blocked.addExternalBlocker("the plumber", among: [blocked])
-        // An inbox item is not on the plate yet — it's an unconfirmed capture.
-        let inbox = TaskItem(title: "someday", status: .inbox, ownerID: maya.uuid, createdAt: now)
-        let snap = compute([active, dueToday, overdue, blocked, inbox], members: [maya])
+        // A reference item is NOT on the plate: it is owned and live but never
+        // resolves, so counting it would inflate the plate forever and (through the
+        // overload modifier and the affinity denominator) stop Maya being proposed work.
+        let note = TaskItem(title: "gate code", status: .todo, ownerID: maya.uuid, createdAt: now)
+        note.workIntent = .reference
+        let snap = compute([active, dueToday, overdue, blocked, note], members: [maya])
         let load = loadFor(snap, member: maya)
         #expect(load?.activeCount == 4)
         #expect(load?.dueTodayCount == 1)
@@ -170,7 +173,7 @@ struct HouseholdEngineTests {
     func feedIsBoundedAndExplainable() {
         let maya = FamilyMember(name: "Maya")
         let grabs = (0..<8).map {
-            TaskItem(title: "grab \($0)", status: .active, ownerPending: true, createdAt: now)
+            TaskItem(title: "grab \($0)", status: .todo, createdAt: now)
         }
         let snap = compute(grabs, members: [maya])
         #expect(snap.coordination.count <= HouseholdEngine.Budget.feed)
@@ -180,7 +183,7 @@ struct HouseholdEngineTests {
     @Test("Undone change-log entries never surface in the coordination feed")
     func feedSkipsUndone() {
         let maya = FamilyMember(name: "Maya")
-        let mine = TaskItem(title: "prep dinner", status: .active, dueDate: days(2), createdAt: now)
+        let mine = TaskItem(title: "prep dinner", status: .todo, dueDate: days(2), createdAt: now)
         let live = ChangeLogEntry(
             summary: "Maya was assigned the venue", action: "assigned", initiatedBy: .human,
             timestamp: now)
@@ -196,7 +199,7 @@ struct HouseholdEngineTests {
     @Test("Plain AI filings are not coordination events")
     func feedSkipsFilings() {
         let maya = FamilyMember(name: "Maya")
-        let mine = TaskItem(title: "prep dinner", status: .active, dueDate: days(2), createdAt: now)
+        let mine = TaskItem(title: "prep dinner", status: .todo, dueDate: days(2), createdAt: now)
         let filed = ChangeLogEntry(
             summary: "Filed 'prep dinner' under Home", action: "filed", initiatedBy: .ai,
             timestamp: now)
@@ -210,14 +213,14 @@ struct HouseholdEngineTests {
     func timelineSpansOwnersAndFilters() {
         let maya = FamilyMember(name: "Maya")
         let mine = TaskItem(
-            title: "my thing", status: .active, dueDate: days(1), ownerID: me, createdAt: now)
+            title: "my thing", status: .todo, dueDate: days(1), ownerID: me, createdAt: now)
         let hers = TaskItem(
-            title: "her thing", status: .active, dueDate: days(2), ownerID: maya.uuid, createdAt: now)
-        let resolved = TaskItem(title: "done thing", status: .active, dueDate: days(1), createdAt: now)
+            title: "her thing", status: .todo, dueDate: days(2), ownerID: maya.uuid, createdAt: now)
+        let resolved = TaskItem(title: "done thing", status: .todo, dueDate: days(1), createdAt: now)
         resolved.complete(now: now)
-        let undated = TaskItem(title: "someday thing", status: .active, createdAt: now)
-        let overdue = TaskItem(title: "late thing", status: .active, dueDate: days(-1), createdAt: now)
-        let farOff = TaskItem(title: "next month", status: .active, dueDate: days(30), createdAt: now)
+        let undated = TaskItem(title: "someday thing", status: .todo, createdAt: now)
+        let overdue = TaskItem(title: "late thing", status: .todo, dueDate: days(-1), createdAt: now)
+        let farOff = TaskItem(title: "next month", status: .todo, dueDate: days(30), createdAt: now)
         let snap = compute(
             [mine, hers, resolved, undated, overdue, farOff], members: [maya])
         let titles = snap.timeline.map(\.title)
@@ -237,12 +240,12 @@ struct HouseholdEngineTests {
     func factsMatchSnapshot() {
         let maya = FamilyMember(name: "Maya")
         let overdue = TaskItem(
-            title: "insurance", status: .active, dueDate: days(-1), ownerID: maya.uuid, createdAt: now)
-        let blocked = TaskItem(title: "remodel", status: .active, ownerID: maya.uuid, createdAt: now)
+            title: "insurance", status: .todo, dueDate: days(-1), ownerID: maya.uuid, createdAt: now)
+        let blocked = TaskItem(title: "remodel", status: .todo, ownerID: maya.uuid, createdAt: now)
         blocked.addExternalBlocker("the plumber", among: [blocked])
-        let grab = TaskItem(title: "caterer", status: .active, ownerPending: true, createdAt: now)
+        let grab = TaskItem(title: "caterer", status: .todo, createdAt: now)
         let call = TaskItem(
-            title: "should we move", status: .active, isJudgmentCall: true, needsDecision: true,
+            title: "should we move", status: .todo, isJudgmentCall: true, needsDecision: true,
             createdAt: now)
         let snap = compute([overdue, blocked, grab, call], members: [maya])
         let facts = HouseholdEngine.facts(from: snap)

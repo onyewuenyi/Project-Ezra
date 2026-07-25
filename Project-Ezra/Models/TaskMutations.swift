@@ -48,15 +48,6 @@ extension TaskItem {
         touch(now: now)
     }
 
-    /// Move the task along the working pipeline (`TaskStage`). Stage is a sub-state of
-    /// `.active` — this writes only `stageRaw` (and the touch clock); it NEVER touches
-    /// the status. Setting a stage on an inbox/resolved task is harmless: the display
-    /// layer ignores stage unless the status is `.active` (see `TaskDisplayStatus`).
-    func setStage(_ stage: TaskStage, now: Date = Date()) {
-        self.stage = stage
-        touch(now: now)
-    }
-
     /// Set the Urgent signal. No-op guard, recompute the attention score (urgent is a
     /// contributor), and log a reversible "edited" row for the task's Activity timeline.
     /// `logHumanEdit` bumps the touch clock and handles coalescing/round-trip deletion.
@@ -90,28 +81,57 @@ extension TaskItem {
     /// retro), or silent past the long stale threshold (auto-archive) — always
     /// reversible via Undo either way.
     func kill(now: Date = Date()) {
-        transition(to: .killed, now: now)
+        transition(to: .canceled, now: now)
         completedAt = now  // "when resolved", for timeToResolution and open-set checks
         killedAt = now
     }
 
-    /// Confirm-Creation: the single human-in-the-loop moment. Moves Inbox →
-    /// Active, stamps `confirmedAt`, and clears the flags a creation glance
-    /// settles: a low-confidence Needs Decision (the human just validated the
-    /// fields) and pending ownership. A JUDGMENT call's flag survives — confirming
-    /// that "figure out if X" exists is not making the call; only
-    /// `resolveDecision()` clears that (the permanent judgment-category carve-out).
-    /// Deliberately does NOT drop blockers — confirming creation is the routine
-    /// human moment, not an override; a dependency named at capture survives it.
-    func confirm(now: Date = Date()) {
-        if !isJudgmentCall { needsDecision = false }
-        ownerPending = false
-        // A freshly-confirmed task lands ready to work: stamp the default stage the
-        // first time only, so a re-confirm never clobbers a stage the user has moved.
-        if isStageUnset { stage = TaskStage.defaultOnConfirm }
-        confirmedAt = now
-        transition(to: .active, now: now)
-        touchHuman(now: now)  // transition no-ops if already active; the confirm still counts as a touch
+    // NOTE: there is no `confirm()`. Confirm is no longer a transition a task makes —
+    // it is the moment a task comes into existence. `AppBrain.commit` IS the confirm:
+    // it turns parked drafts into `TaskItem`s born `.todo`, stamping `confirmedAt` at
+    // creation. Before that there is no task, only a parked `Capture`. A judgment
+    // call's `needsDecision` still survives creation — confirming that "figure out if
+    // X" exists is not making the call; only `resolveDecision()` clears that.
+
+    /// Apply a fresh `WorkIntent` from the classifier.
+    ///
+    /// **A reclassification that crosses the workload boundary must be logged.** Via
+    /// `countsAsWorkload`, the intent gates five operational systems — member loads,
+    /// the affinity denominator, Today candidacy, ranked-stack membership, and the
+    /// stale auto-archive. An `action → reference` move would therefore remove a task
+    /// from all five on a model call, with no human action and nothing in any log.
+    /// That is the one thing every other consequential AI write in this codebase is
+    /// forbidden from doing, so it gets a reversible `.ai` entry the user can see and
+    /// undo.
+    ///
+    /// A reclassification that does NOT cross the boundary (`action → decision`) stays
+    /// silent: it changes which module the detail renders, not what the system counts.
+    func reclassify(
+        to intent: WorkIntent, in context: NSManagedObjectContext, now: Date = Date()
+    ) {
+        guard intent != workIntent else { return }
+        let wasWorkload = countsAsWorkload
+        let previous = workIntent
+        workIntent = intent
+        touch(now: now)
+        guard wasWorkload != countsAsWorkload else { return }
+        let phrase =
+            countsAsWorkload
+            ? "counts as work again" : "reads as a reference note, so it's out of your workload"
+        context.insert(
+            ChangeLogEntry(
+                summary: "Reclassified “\(title)” — \(phrase)",
+                detail: "It no longer affects your plan, load, or sweeps.",
+                action: "reclassified",
+                fieldChanged: "workIntent",
+                oldValue: previous?.rawValue,
+                newValue: intent.rawValue,
+                initiatedBy: .ai,
+                isReversible: true,
+                taskTitle: title,
+                taskUUID: uuid,
+                timestamp: now, in: context
+            ))
     }
 
     /// The human explicitly making the call a Needs Decision flag was waiting on.
@@ -137,13 +157,20 @@ extension TaskItem {
     }
 
     /// Set who owns this task — the current user (pass `UserProfile.currentMemberID`),
-    /// another family member (their uuid), or unassign/share it (`nil`) — clearing the
-    /// ownership gate. Ownership is its own axis: this never touches the status or the
-    /// blocker list. `tasks` is unused (kept for call-site symmetry with the other
-    /// graph-aware mutations).
-    func claim(ownerID: UUID?, among tasks: [TaskItem]) {
+    /// another family member (their uuid), or hand it back to the household (`nil`).
+    /// Ownership is its own axis: this never touches the status or the blocker list.
+    /// `tasks` is unused (kept for call-site symmetry with the other graph-aware
+    /// mutations).
+    ///
+    /// **This is a human path, so it stamps `ownerOrigin = .human`** — which is what
+    /// the affinity denominator counts. `origin` is a parameter only so
+    /// `ChangeLogUndo` can restore the *prior* origin when reverting an `"assigned"`
+    /// entry: without that, undoing a reassignment would leave an AI-inferred owner
+    /// marked human and quietly pollute the denominator (the undo-completeness rule —
+    /// an undo restores every field the action wrote, not just the headline one).
+    func claim(ownerID: UUID?, among tasks: [TaskItem], origin: OwnerOrigin = .human) {
         self.ownerID = ownerID
-        self.ownerPending = false
+        self.ownerOrigin = origin
         touchHuman()
     }
 
@@ -181,21 +208,24 @@ extension TaskItem {
         touchHuman(now: now)
     }
 
-    /// Reopen a resolved task, restoring the status it left when it was resolved
-    /// (from the state timeline) rather than guessing — a reopened proposal
-    /// returns to Inbox. Falls back to `.active` when there's no recorded
-    /// history. Dependents re-block automatically: `self` is unresolved again, so
-    /// it counts as an active blocker on the next read. `tasks` is unused (kept
-    /// for call-site symmetry).
+    /// Reopen a resolved task, restoring the live status it left when it was resolved
+    /// (from the state timeline) rather than guessing — a task killed mid-flight comes
+    /// back `.doing`. Dependents re-block automatically: `self` is unresolved again, so
+    /// it counts as an active blocker on the next read. `tasks` is unused (kept for
+    /// call-site symmetry).
+    ///
+    /// **The floor is `.todo`.** The timeline is stored as raw strings and can outlive
+    /// an enum change, so an unrecognized or resolved value must never route a task
+    /// somewhere unreachable — it lands `.todo`, the state every task is born into.
     func reopen(among tasks: [TaskItem]) {
         completedAt = nil
         killedAt = nil
         let restored =
             stateTimeline.last { visit in
-                TaskStatus.fold(legacyRaw: visit.state).map { !$0.isResolved } ?? false
+                TaskStatus(rawValue: visit.state).map(\.isLive) ?? false
             }
-            .flatMap { TaskStatus.fold(legacyRaw: $0.state) } ?? .active
-        status = restored
+            .flatMap { TaskStatus(rawValue: $0.state) } ?? .todo
+        status = restored.isLive ? restored : .todo
     }
 
     /// Add a tracked dependency (a `.blocks` edge). No-ops on self, a live duplicate, or
@@ -276,15 +306,13 @@ extension TaskItem {
 /// live assessment. Fuses what used to be two parallel switches (button title +
 /// behavior) into one value, so the label and the action can never drift apart.
 enum RecommendedAction {
-    case confirm  // confirm an Inbox item into the working set
-    case claim  // take ownership of an unowned one
+    case claim  // take ownership of one handed back to the household
     case unblock  // drop the blockers holding it
     case resolve  // mark an actionable task done
     case reopen  // bring a resolved task back
 
     var title: String {
         switch self {
-        case .confirm: return "Confirm"
         case .claim: return "That's mine"
         case .unblock: return "Unblock"
         case .resolve: return "Mark done"
@@ -299,21 +327,19 @@ enum RecommendedAction {
 
 extension TaskItem {
     /// The recommended next action, derived from status + assessment. Precedence:
-    /// a resolved task reopens; a blocked one wants unblocking; an inbox item
-    /// wants confirming; an unowned one wants claiming; otherwise it's ready to
-    /// finish.
+    /// a resolved task reopens; a blocked one wants unblocking; one handed back to
+    /// the household wants claiming; otherwise it's ready to finish. (There is no
+    /// `.confirm` any more — a task that exists has already been confirmed.)
     func recommendedAction(among tasks: [TaskItem]) -> RecommendedAction {
         if status.isResolved { return .reopen }
         if hasActiveBlockers(among: tasks) { return .unblock }
-        if status == .inbox { return .confirm }
-        if ownerPending { return .claim }
+        if ownerID == nil { return .claim }
         return .resolve
     }
 
     /// Run whatever `recommendedAction` currently returns. Callers own `save()`.
     func performRecommendedAction(among tasks: [TaskItem], in context: NSManagedObjectContext) {
         switch recommendedAction(among: tasks) {
-        case .confirm: confirm()
         case .claim: claimAndLog(ownerID: UserProfile.currentMemberID(in: context), among: tasks, in: context)
         case .unblock: unblock()
         case .resolve: completeAndResurface(in: context)
@@ -335,7 +361,7 @@ extension TaskItem {
         complete(now: now)
         touchHuman(now: now)  // only a human can attest a real-world completion
         logHumanResolution(action: "completed", verb: "Completed", now: now, in: context)
-        return Self.resurfaceDependents(of: self, in: context)
+        return Self.resurfaceDependents(of: self, in: context, now: now)
     }
 
     /// Kill also resolves the dependency — the blocker is settled either way, so
@@ -346,7 +372,7 @@ extension TaskItem {
         kill(now: now)
         touchHuman(now: now)  // the manual cancel path (the silent auto-archive calls `kill` directly)
         logHumanResolution(action: "killed", verb: "Canceled", now: now, in: context)
-        return Self.resurfaceDependents(of: self, in: context)
+        return Self.resurfaceDependents(of: self, in: context, now: now)
     }
 
     /// The one place a human resolution (complete/cancel) is logged for the Inbox
@@ -445,29 +471,21 @@ extension TaskItem {
         return recent
     }
 
-    /// Apply one of the six visible Linear states, composing the underlying lifecycle
-    /// + stage moves. The SINGLE seam both the row glyph menu and the detail picker
-    /// call, so those two can never drift. A resolved/inbox task is first brought into
-    /// the working set (reopen, then confirm if it landed back in Inbox), then the
-    /// stage is stamped; Done/Canceled route through the resurfacing resolution seams.
+    /// Apply a lifecycle state. The SINGLE seam both the row glyph menu and the detail
+    /// picker call, so those two can never drift. Done/Canceled route through the
+    /// resurfacing resolution seams (which log their own entries and return early);
+    /// a resolved task moved back to live work reopens first.
     ///
-    /// A move between the four active stages is a manual field edit, logged to the task's
-    /// timeline (Done/Canceled already log via the resolution seams, so they return early).
-    func applyDisplayStatus(_ target: TaskDisplayStatus, in context: NSManagedObjectContext) {
-        let previous = displayStatus
+    /// A `todo ↔ doing` move is a manual field edit, logged with `logHumanEdit` so it
+    /// coalesces, self-deletes on a round-trip, and stays OUT of the Inbox feed —
+    /// nudging a task in and out of flight while you work is not household news.
+    func setStatus(_ target: TaskStatus, in context: NSManagedObjectContext) {
+        let previous = status
         switch target {
-        case .backlog:
-            ensureActive(in: context)
-            setStage(.backlog)
-        case .todo:
-            ensureActive(in: context)
-            setStage(.todo)
-        case .inProgress:
-            ensureActive(in: context)
-            setStage(.inProgress)
-        case .inReview:
-            ensureActive(in: context)
-            setStage(.inReview)
+        case .todo, .doing:
+            ensureLive(in: context)
+            guard status != target else { return }
+            transition(to: target)
         case .done:
             completeAndResurface(in: context)
             return
@@ -476,33 +494,39 @@ extension TaskItem {
             return
         }
         logHumanEdit(
-            field: "stage", oldValue: previous.rawValue, newValue: target.rawValue,
+            field: "status", oldValue: previous.rawValue, newValue: target.rawValue,
             summary: "Moved to \(target.label)", in: context)
     }
 
-    /// Bring a task into the working set from wherever it is: a resolved task reopens
-    /// (restoring its prior status via the timeline), and anything still sitting in the
-    /// Inbox is confirmed. A task already `.active` is untouched.
-    private func ensureActive(in context: NSManagedObjectContext) {
+    /// Bring a task back into the working set: a resolved task reopens, restoring the
+    /// live status it left via the timeline. A task already live is untouched. (There
+    /// is no confirm step any more — a task that exists was created by one.)
+    private func ensureLive(in context: NSManagedObjectContext) {
         if status.isResolved { reopenAndReblock(in: context) }
-        if status == .inbox { confirm() }
     }
 
     /// Claim ownership AND record a reversible HUMAN "assigned" entry for the Inbox
-    /// feed — old/new owner ids ride in `oldValue`/`newValue` so undo can restore the
-    /// previous owner. Used by the detail owner picker and the recommended-action
-    /// claim; capture-time ownership (`AppBrain.resolveOwners`) stays unlogged (it's
-    /// covered by the "filed" entry).
+    /// feed. Used by the detail owner picker and the recommended-action claim;
+    /// capture-time ownership (`AppBrain.resolveOwners`) stays unlogged — it is
+    /// covered by the "filed" entry.
+    ///
+    /// **Undo-completeness:** the entry records the previous `ownerOrigin` alongside
+    /// the previous owner id (`"<uuid>|<origin>"`), because `claim` stamps
+    /// `.human` and the affinity denominator counts `.human` only. Without it,
+    /// AI-infers-Maya → human-reassigns-to-Alex → undo would restore Maya as owner but
+    /// leave the origin reading `.human`, silently polluting the denominator with an
+    /// ownership no human ever established.
     func claimAndLog(ownerID newOwner: UUID?, among tasks: [TaskItem], in context: NSManagedObjectContext) {
         let previous = ownerID
+        let previousOrigin = ownerOrigin
         claim(ownerID: newOwner, among: tasks)
         context.insert(
             ChangeLogEntry(
                 summary: "Reassigned “\(title)”",
                 action: "assigned",
                 fieldChanged: "ownerID",
-                oldValue: previous?.uuidString,
-                newValue: newOwner?.uuidString,
+                oldValue: TaskItem.encodeOwnership(previous, previousOrigin),
+                newValue: TaskItem.encodeOwnership(newOwner, .human),
                 initiatedBy: .human,
                 isReversible: true,
                 taskTitle: title,
@@ -510,6 +534,25 @@ extension TaskItem {
                 actorID: UserProfile.currentMemberID(in: context),
                 in: context
             ))
+    }
+
+    /// The `"assigned"` old/new codec: `"<uuid>|<origin>"`, or `"|<origin>"` when the
+    /// owner is nil (handed back to the household). Kept beside `claimAndLog` and
+    /// `ChangeLogUndo`'s `"assigned"` arm — the only two readers — so the pair can
+    /// never drift.
+    static func encodeOwnership(_ ownerID: UUID?, _ origin: OwnerOrigin) -> String {
+        "\(ownerID?.uuidString ?? "")|\(origin.rawValue)"
+    }
+
+    /// Decode an ownership stamp. Tolerates a bare uuid (or empty string) with no
+    /// separator, so an entry written before the origin was recorded still reverts —
+    /// it just falls back to `.inferred`, the safe direction for the denominator.
+    static func decodeOwnership(_ raw: String?) -> (ownerID: UUID?, origin: OwnerOrigin) {
+        guard let raw else { return (nil, .inferred) }
+        let parts = raw.split(separator: "|", omittingEmptySubsequences: false)
+        let id = parts.first.flatMap { UUID(uuidString: String($0)) }
+        let origin = parts.count > 1 ? OwnerOrigin(rawValue: String(parts[1])) : nil
+        return (id, origin ?? .inferred)
     }
 
     /// The human explicitly making a judgment call, logged for the Inbox feed — the
@@ -534,10 +577,13 @@ extension TaskItem {
     /// Reopen seam (the inverse of resurface): reopen self against its live blockers.
     /// Dependents that reference self re-block automatically — self is unresolved
     /// again, so it counts as an active blocker on the next read; there is nothing
-    /// to mutate. User-initiated, so it isn't logged.
-    func reopenAndReblock(in context: NSManagedObjectContext) {
+    /// to mutate. User-initiated (every caller is a human tap or an Undo), so it stamps
+    /// the HUMAN clock — a revival resets staleness, or an undone stale auto-archive would
+    /// read as stale again on the next hourly sweep and be re-killed indefinitely.
+    func reopenAndReblock(in context: NSManagedObjectContext, now: Date = Date()) {
         let all = TaskItem.fetchAll(in: context)
         reopen(among: all)
+        touchHuman(now: now)
         // Self re-entered the open set → every task it waits on regains a dependent, and
         // self's own centrality returns. Recompute those in place.
         AttentionEngine.recompute(dependentTargets(among: all) + [self], among: all)
@@ -557,7 +603,9 @@ extension TaskItem {
     /// AI action and returned so the flow can surface it. Blocked is derived, so
     /// no dependent is mutated; we report the ones that just came free.
     @discardableResult
-    static func resurfaceDependents(of resolved: TaskItem, in context: NSManagedObjectContext) -> [TaskItem] {
+    static func resurfaceDependents(
+        of resolved: TaskItem, in context: NSManagedObjectContext, now: Date = Date()
+    ) -> [TaskItem] {
         guard let resolvedID = resolved.uuid else { return [] }
         let all = TaskItem.fetchAll(in: context)
         var freed: [TaskItem] = []
@@ -570,17 +618,14 @@ extension TaskItem {
             // it *was* blocked. It comes free iff nothing else still blocks it.
             guard !dependent.hasActiveBlockers(among: all) else { continue }
             // The blocker cleared just now — record the fact (the recently-unblocked
-            // boost reads it). A fact write only: no touch, so staleness stays honest.
-            dependent.lastUnblockedAt = Date()
+            // boost reads it) against the threaded `now`, not wall-clock. A fact write
+            // only: no touch, so staleness stays honest.
+            dependent.lastUnblockedAt = now
             freed.append(dependent)
-            let detail: String
-            if dependent.ownerPending {
-                detail = "It was waiting on that; it still needs someone assigned."
-            } else if dependent.status == .inbox {
-                detail = "It was waiting on that; it still needs your confirm."
-            } else {
-                detail = "It was waiting on that, so it's back in your list."
-            }
+            let detail =
+                dependent.ownerID == nil
+                ? "It was waiting on that; it still needs someone to pick it up."
+                : "It was waiting on that, so it's back in your list."
             context.insert(
                 ChangeLogEntry(
                     summary: "Unblocked \"\(dependent.title)\" — \"\(resolved.title)\" is resolved",

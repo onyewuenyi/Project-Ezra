@@ -67,7 +67,7 @@ enum TodayFixtures {
         // MARK: Recap — completed inside (and just outside) the 24h window
         func completed(_ title: String, _ category: String, agoHours: Double) {
             let task = TaskItem(
-                title: title, category: category, status: .active, confidence: 0.9,
+                title: title, category: category, status: .todo, confidence: 0.9,
                 reasoning: "", ownerID: me,
                 createdAt: now.addingTimeInterval(-2 * day), in: context)
             task.complete(now: now.addingTimeInterval(-agoHours * hour))
@@ -82,22 +82,22 @@ enum TodayFixtures {
 
         // MARK: Docket — due today
         let expenseReport = TaskItem(
-            title: "Submit the expense report", category: "Work", status: .active, confidence: 0.9,
+            title: "Submit the expense report", category: "Work", status: .todo, confidence: 0.9,
             reasoning: "Filed under Work.", dueDate: now, ownerID: me,
             effortMinutes: 30, createdAt: now.addingTimeInterval(-day), in: context)
         _ = TaskItem(
-            title: "Call the pharmacy about the refill", category: "Health", status: .active,
+            title: "Call the pharmacy about the refill", category: "Health", status: .todo,
             confidence: 0.9, reasoning: "Filed under Health.", dueDate: now, ownerID: me, effortMinutes: 10,
             createdAt: now.addingTimeInterval(-day), in: context)
 
         // MARK: Docket — overdue (drives the warm material edge cue)
         _ = TaskItem(
-            title: "Renew the car insurance", category: "Car", status: .active, confidence: 0.9,
+            title: "Renew the car insurance", category: "Car", status: .todo, confidence: 0.9,
             reasoning: "Filed under Car.", dueDate: now.addingTimeInterval(-2 * day),
             isUrgent: true, ownerID: me, effortMinutes: 20,
             createdAt: now.addingTimeInterval(-6 * day), in: context)
         let amazonReturn = TaskItem(
-            title: "Return the Amazon package", category: "Errands", status: .active,
+            title: "Return the Amazon package", category: "Errands", status: .todo,
             confidence: 0.9, reasoning: "Filed under Errands.",
             dueDate: now.addingTimeInterval(-5 * day), ownerID: me,
             effortMinutes: 15, createdAt: now.addingTimeInterval(-8 * day), in: context)
@@ -105,59 +105,59 @@ enum TodayFixtures {
         // MARK: Docket — Needs Decision (judgment call + low confidence)
         _ = TaskItem(
             title: "Decide whether to keep the gym membership", category: "Finance",
-            status: .inbox, confidence: 0.9, isJudgmentCall: true, needsDecision: true,
+            status: .todo, confidence: 0.9, isJudgmentCall: true, needsDecision: true,
             reasoning: "A personal judgment call — yours to make.", ownerID: me,
             createdAt: now.addingTimeInterval(-3 * day), in: context)
         _ = TaskItem(
-            title: "Sort out the invoice discrepancy", category: "Work", status: .inbox,
+            title: "Sort out the invoice discrepancy", category: "Work", status: .todo,
             confidence: 0.35, needsDecision: true,
             reasoning: "Not enough detail to file confidently.", ownerID: me,
             createdAt: now.addingTimeInterval(-2 * day), in: context)
 
         // MARK: Chain — a blocked-AND-blocking middle (chain routing signal)
         let photos = TaskItem(
-            title: "Get passport photos", category: "Travel", status: .active, confidence: 0.9,
+            title: "Get passport photos", category: "Travel", status: .todo, confidence: 0.9,
             reasoning: "Filed under Travel.", ownerID: me, effortMinutes: 20,
             createdAt: now.addingTimeInterval(-3 * day), in: context)
         let passport = TaskItem(
-            title: "Renew the passport", category: "Travel", status: .active, confidence: 0.9,
+            title: "Renew the passport", category: "Travel", status: .todo, confidence: 0.9,
             reasoning: "Filed under Travel.", blockedBy: [photos.uuid!], ownerID: me, effortMinutes: 45,
             createdAt: now.addingTimeInterval(-3 * day),
             in: context)
         let flights = TaskItem(
-            title: "Book the flights for the trip", category: "Travel", status: .active,
+            title: "Book the flights for the trip", category: "Travel", status: .todo,
             confidence: 0.9, reasoning: "Filed under Travel.", blockedBy: [passport.uuid!],
             ownerID: me, effortMinutes: 30,
             createdAt: now.addingTimeInterval(-3 * day), in: context)
 
         // MARK: General working set (fuller plan + a Tasks tab worth browsing)
         _ = TaskItem(
-            title: "Draft the Q3 deck", category: "Work", status: .active, confidence: 0.85,
+            title: "Draft the Q3 deck", category: "Work", status: .todo, confidence: 0.85,
             reasoning: "Filed under Work.", dueDate: now.addingTimeInterval(2 * day),
             ownerID: me, effortMinutes: 90,
             createdAt: now.addingTimeInterval(-day), in: context)
         _ = TaskItem(
-            title: "Water the plants", category: "Home", status: .active, confidence: 0.9,
+            title: "Water the plants", category: "Home", status: .todo, confidence: 0.9,
             reasoning: "Filed under Home.", ownerID: me, effortMinutes: 5,
             createdAt: now.addingTimeInterval(-day), in: context)
         _ = TaskItem(
-            title: "Schedule the team offsite", category: "Work", status: .active, confidence: 0.8,
+            title: "Schedule the team offsite", category: "Work", status: .todo, confidence: 0.8,
             reasoning: "Filed under Work.", ownerID: me, effortMinutes: 60,
             createdAt: now.addingTimeInterval(-4 * day), in: context)
         _ = TaskItem(
-            title: "Prep for the trip", category: "Travel", status: .active, confidence: 0.8,
+            title: "Prep for the trip", category: "Travel", status: .todo, confidence: 0.8,
             reasoning: "Filed under Travel.", dueDate: now.addingTimeInterval(3 * day),
             ownerID: me, effortMinutes: 120,
             createdAt: now.addingTimeInterval(-day), in: context)
         // External wait — blocked on the world, not a task.
         let analytics = TaskItem(
-            title: "Wire up the analytics events", category: "Work", status: .active,
+            title: "Wire up the analytics events", category: "Work", status: .todo,
             confidence: 0.85, reasoning: "Filed under Work.", ownerID: me,
             effortMinutes: 45, createdAt: now.addingTimeInterval(-2 * day), in: context)
         analytics.addExternalBlocker("the API keys from IT", among: [])
         // A plain quick win — position comes from the computed attention score.
         _ = TaskItem(
-            title: "Call the accountant back", category: "Finance", status: .active,
+            title: "Call the accountant back", category: "Finance", status: .todo,
             confidence: 0.9, reasoning: "Filed under Finance.", ownerID: me,
             effortMinutes: 15, createdAt: now.addingTimeInterval(-day), in: context)
 
@@ -165,7 +165,7 @@ enum TodayFixtures {
         // A genuine choice that is NOT a needsDecision judgment call: `workIntent == .decision`
         // alone unlocks the Thinking Partner (the "A decision to make" card, no "Mark decided").
         let apartmentDecision = TaskItem(
-            title: "Choose between the two apartment offers", category: "Personal", status: .active,
+            title: "Choose between the two apartment offers", category: "Personal", status: .todo,
             confidence: 0.9, reasoning: "Weighing the commute against the rent.", ownerID: me,
             effortMinutes: 30, createdAt: now.addingTimeInterval(-2 * day), in: context)
         apartmentDecision.workIntent = .decision
@@ -175,7 +175,7 @@ enum TodayFixtures {
         // steps (they ALSO form the dependency chain among themselves — an edge is not a
         // status). Exercises `parentTaskID`, the child-link result, and the framing context.
         let italyPlan = TaskItem(
-            title: "Plan the Italy trip", category: "Travel", status: .active, confidence: 0.85,
+            title: "Plan the Italy trip", category: "Travel", status: .todo, confidence: 0.85,
             reasoning: "The umbrella task the trip steps hang off.", ownerID: me,
             effortMinutes: 60, createdAt: now.addingTimeInterval(-3 * day), in: context)
         for step in [photos, passport, flights] { step.linkParent(italyPlan.uuid!) }
@@ -185,7 +185,7 @@ enum TodayFixtures {
         // suppression records (never an edge) that stop the pairing being re-proposed
         // on the next similar capture.
         let bestBuyReturn = TaskItem(
-            title: "Return the Best Buy package", category: "Errands", status: .active,
+            title: "Return the Best Buy package", category: "Errands", status: .todo,
             confidence: 0.9, reasoning: "A separate return — kept apart from the Amazon one.",
             ownerID: me, effortMinutes: 15, createdAt: now.addingTimeInterval(-2 * day), in: context)
         SuppressionStore.recordRejectedDuplicate(
@@ -195,10 +195,10 @@ enum TodayFixtures {
         // MARK: Capture Graph — a merged capture (the accepted-duplicate result)
         // A later capture of the same task folded INTO the expense report: the target keeps
         // the capture provenance, and a reversible `.human` "merged" entry shows in the Inbox
-        // feed (Undo resurrects the folded draft as an inbox task).
+        // feed (Undo resurrects the folded draft as a real task).
         expenseReport.notes = "Also captured: Send in the expense report"
         let mergedDraft = TaskDraft(
-            title: "Send in the expense report", category: "Work", proposedStatus: .inbox,
+            title: "Send in the expense report", category: "Work",
             confidence: 0.9, autonomy: .silent, isJudgmentCall: false,
             reasoning: "Same as the expense report already on the list.")
         context.insert(
@@ -227,10 +227,21 @@ enum TodayFixtures {
         // Light: 3 days → below the 5-sample floor → cold-starts to the static default.
         logDays(.light, completions: [2, 1, 2], startOffset: 15)
 
-        // Authorship, a light stage spread, and a WorkIntent spread so My Tasks + the
-        // detail read correctly (fixtures bypass the model's classification, so stamp a
-        // plausible intent per task — decision/waiting/planning/action; the on-device
-        // classifier would refine it later on a real device).
+        // A reference item, so the five workload exclusions are actually exercisable in
+        // the simulator: this must NOT appear in Today, must not count toward anyone's
+        // load, and must never be auto-archived as stale. It also lands in its own
+        // My Tasks section rather than under Todo.
+        let wifi = TaskItem(
+            title: "Wifi password is hunter2-guest", category: "Home",
+            confidence: 0.9, reasoning: "Reads as something to keep, not something to do.",
+            ownerID: me, ownerOrigin: .inferred, createdAt: now.addingTimeInterval(-9 * day),
+            in: context)
+        wifi.workIntent = .reference
+
+        // Authorship and a WorkIntent spread so My Tasks + the detail read correctly
+        // (fixtures bypass the model's classification, so stamp a plausible intent per
+        // task — decision/planning/action; the on-device classifier would refine it
+        // later on a real device).
         let all = TaskItem.fetchAll(in: context)
         for task in all {
             if task.creatorID == nil { task.creatorID = me }
@@ -238,8 +249,6 @@ enum TodayFixtures {
                 let title = task.title.lowercased()
                 if title.contains("decide") || title.contains("choose") || title.contains("whether") {
                     task.workIntent = .decision
-                } else if task.hasActiveBlockers(among: all) {
-                    task.workIntent = .waiting
                 } else if ["plan", "draft", "schedule", "prep", "sort out"].contains(where: {
                     title.contains($0)
                 }) {
@@ -249,8 +258,7 @@ enum TodayFixtures {
                 }
             }
         }
-        photos.stage = .inProgress
-        analytics.stage = .backlog
+        photos.status = .doing
 
         // Score every seeded task so the stack ranks by real attention (fixtures build
         // TaskItems directly, bypassing the commit-time stamp).

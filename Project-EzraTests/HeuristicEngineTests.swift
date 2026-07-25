@@ -69,12 +69,11 @@ struct HeuristicEngineTests {
         #expect(HeuristicEngine.intent(from: "figure out if the gym is worth it").isJudgmentCall)
     }
 
-    @Test("A judgment intent resolves to ask-tier, Needs Decision, landing in the Inbox")
+    @Test("A judgment intent resolves to ask-tier and Needs Decision")
     func judgmentDraftRouting() {
         let draft = IntentResolver.resolve(
             HeuristicEngine.intent(from: "should I keep paying for the gym"))
         #expect(draft.autonomy == .ask)
-        #expect(draft.proposedStatus == .inbox)
         #expect(draft.needsDecision)
     }
 
@@ -159,8 +158,9 @@ struct HeuristicEngineTests {
         #expect(intents.count == 3)
         #expect(intents.contains { $0.isJudgmentCall })
         #expect(intents.contains { $0.category == "Travel" })
-        // The resolver stamps every creation into the Inbox — always-confirm.
+        // Every intent resolves to a draft — and a draft carries no lifecycle position
+        // at all. Creation only happens at Confirm, which is what stamps `.todo`.
         let drafts = IntentResolver.resolve(intents)
-        #expect(drafts.allSatisfy { $0.proposedStatus == .inbox })
+        #expect(drafts.count == intents.count)
     }
 }

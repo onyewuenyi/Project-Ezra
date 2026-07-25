@@ -26,49 +26,86 @@ enum MyTasksTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// One display-status section on the Assigned tab: a header (the status) and the
-/// chain-grouped entries under it, already stack-ordered.
+/// What a section on the Assigned tab is headed by. Almost always a lifecycle state
+/// — but `.reference` is deliberately NOT one.
+///
+/// A reference item ("the wifi password is hunter2") is owned and live yet never
+/// needs to complete, so filing it under "Todo" claims it is queued work, which it
+/// is not. Giving it its own section is the honest rendering, and it is also the
+/// visible symptom of a deferred question: the task primitive is currently doing two
+/// jobs (execution and knowledge). This section is the seam a future
+/// knowledge/execution split would cut along — see `docs/task-model.md`.
+enum MyTasksSectionKind: Hashable {
+    case status(TaskStatus)
+    case reference
+
+    var label: String {
+        switch self {
+        case .status(let status): return status.label
+        case .reference: return "Reference"
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .status(let status): return status.rawValue
+        case .reference: return "reference"
+        }
+    }
+}
+
+/// One section on the Assigned tab: a header and the chain-grouped entries under it,
+/// already stack-ordered.
 struct MyTasksSection: Identifiable {
-    let status: TaskDisplayStatus
+    let kind: MyTasksSectionKind
     let entries: [TaskLaneEntry]
 
-    var id: String { status.rawValue }
+    var id: String { kind.rawValue }
 }
 
 enum MyTasksSlices {
-    /// The canonical section order — active pipeline first (In Progress → In Review →
-    /// Todo → Backlog), then the resolution ledger (Done → Canceled) at the bottom.
-    static let sectionOrder: [TaskDisplayStatus] = [
-        .inProgress, .inReview, .todo, .backlog, .done, .canceled,
+    /// The canonical section order — live pipeline first (In Progress → Todo), then
+    /// the resolution ledger (Done → Canceled), then the reference shelf last. Kept
+    /// last on purpose: it is a record you consult, never a queue you work.
+    static let sectionOrder: [MyTasksSectionKind] = [
+        .status(.doing), .status(.todo), .status(.done), .status(.canceled), .reference,
     ]
 
-    /// The filter-menu predicate: an optional display-status filter and an optional
-    /// category filter. `nil` means "All" for either axis. This is also how the
-    /// Done/Canceled ledger stays reachable now that the Completed slice is gone —
-    /// pick the Done (or Canceled) filter.
-    static func applyFilters(_ task: TaskItem, status: TaskDisplayStatus?, category: String?) -> Bool {
-        if let status, task.displayStatus != status { return false }
+    /// Which section a task heads. A LIVE reference item goes to the reference shelf;
+    /// a resolved one goes to Done/Canceled like anything else, because at that point
+    /// it really is a resolution record.
+    static func sectionKind(for task: TaskItem) -> MyTasksSectionKind {
+        if task.status.isLive, task.workIntent == .reference { return .reference }
+        return .status(task.status)
+    }
+
+    /// The filter-menu predicate: an optional status filter and an optional category
+    /// filter. `nil` means "All" for either axis. This is also how the Done/Canceled
+    /// ledger stays reachable now that the Completed slice is gone — pick the Done
+    /// (or Canceled) filter.
+    static func applyFilters(_ task: TaskItem, status: TaskStatus?, category: String?) -> Bool {
+        if let status, task.status != status { return false }
         if let category, task.category != category { return false }
         return true
     }
 
     /// The Assigned tab: work owned by the current user, chain-grouped, then split
-    /// into display-status sections by each entry's ANCHOR (so a dependency chain
-    /// sections once, by the state of its front task, and never fractures across
-    /// headers). Within a section, entries keep their stack order — Needs Decision
-    /// still floats to the top, because `TaskRanking.stackOrder` forces it.
+    /// into sections by each entry's ANCHOR (so a dependency chain sections once, by
+    /// the state of its front task, and never fractures across headers). Within a
+    /// section, entries keep their stack order — Needs Decision still floats to the
+    /// top, because `TaskRanking.stackOrder` forces it.
     static func assigned(
         tasks: [TaskItem], currentUserID: UUID?,
-        status: TaskDisplayStatus? = nil, category: String? = nil
+        status: TaskStatus? = nil, category: String? = nil
     ) -> [MyTasksSection] {
         let scoped = tasks.filter {
             $0.isMine(currentUserID: currentUserID) && applyFilters($0, status: status, category: category)
         }
         let entries = laneEntries(from: scoped, allTasks: tasks)
-        let grouped = Dictionary(grouping: entries) { $0.anchor.displayStatus }
-        return sectionOrder.compactMap { status in
-            guard let items = grouped[status], !items.isEmpty else { return nil }
-            return MyTasksSection(status: status, entries: items)
+        let grouped = Dictionary(grouping: entries) { sectionKind(for: $0.anchor) }
+        return sectionOrder.compactMap { kind in
+            guard let items = grouped[kind], !items.isEmpty else { return nil }
+            return MyTasksSection(kind: kind, entries: items)
         }
     }
 
@@ -76,7 +113,7 @@ enum MyTasksSlices {
     /// first, flat, across every status — a plain authorship record, not a pipeline.
     static func created(
         tasks: [TaskItem], currentUserID: UUID?,
-        status: TaskDisplayStatus? = nil, category: String? = nil
+        status: TaskStatus? = nil, category: String? = nil
     ) -> [TaskItem] {
         tasks
             .filter {
@@ -92,7 +129,7 @@ enum MyTasksSlices {
     /// Assigned's job); Created reads chronologically.
     static func createdEntries(
         tasks: [TaskItem], currentUserID: UUID?,
-        status: TaskDisplayStatus? = nil, category: String? = nil
+        status: TaskStatus? = nil, category: String? = nil
     ) -> [TaskLaneEntry] {
         let scoped = tasks.filter {
             $0.creatorID != nil && $0.creatorID == currentUserID

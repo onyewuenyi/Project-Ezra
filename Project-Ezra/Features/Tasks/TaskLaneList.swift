@@ -31,15 +31,18 @@ enum TaskSlice {
 /// `TaskChain`, everything else stays a standalone task — then sorts both kinds
 /// together under the one stack precedence.
 func laneEntries(from scoped: [TaskItem], allTasks: [TaskItem]) -> [TaskLaneEntry] {
-    let (chains, loose) = TaskChainGrouping.computeChains(in: scoped)
+    // One rank-key pass over the FULL working set, shared by chain construction (root
+    // selection + layering) and lane ordering — so a chain's front card is chosen under the
+    // exact keys that position the chain in the lane.
+    let keys = TaskRanking.rankKeys(for: allTasks)
+    let (chains, loose) = TaskChainGrouping.computeChains(in: scoped, rankKeys: keys)
     return sortedLaneEntries(
-        chains.map(TaskLaneEntry.chain) + loose.map(TaskLaneEntry.single), allTasks: allTasks)
+        chains.map(TaskLaneEntry.chain) + loose.map(TaskLaneEntry.single), keys: keys)
 }
 
 /// Orders mixed chain/single entries by each entry's anchor under the stack
 /// precedence, so a chain and a loose task interleave by real priority.
-func sortedLaneEntries(_ entries: [TaskLaneEntry], allTasks: [TaskItem]) -> [TaskLaneEntry] {
-    let keys = TaskRanking.rankKeys(for: allTasks)
+func sortedLaneEntries(_ entries: [TaskLaneEntry], keys: [UUID: RankKey]) -> [TaskLaneEntry] {
     return entries.sorted { a, b in
         guard let ka = a.anchor.uuid.flatMap({ keys[$0] }),
             let kb = b.anchor.uuid.flatMap({ keys[$0] })
@@ -92,7 +95,7 @@ struct TaskLaneEntryView: View {
     var body: some View {
         switch entry {
         case .single(let task):
-            let resolved = task.displayStatus.isResolved
+            let resolved = task.status.isResolved
             TaskRow(
                 task: task,
                 allTasks: allTasks,
@@ -162,10 +165,10 @@ struct AssignedSectionsView: View {
 
     private func sectionHeader(_ section: MyTasksSection) -> some View {
         HStack(spacing: Spacing.xs) {
-            Image(systemName: section.status.symbol)
+            Image(systemName: section.kind.symbol)
                 .font(.system(size: IconSize.caption, weight: .semibold))
-                .foregroundStyle(section.status.tint)
-            Text(section.status.label)
+                .foregroundStyle(section.kind.tint)
+            Text(section.kind.label)
                 .metadataStyle()
                 .textCase(.uppercase)
                 .tracking(0.6)

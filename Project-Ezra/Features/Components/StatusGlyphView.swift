@@ -2,12 +2,12 @@
 //  StatusGlyphView.swift
 //  Project-Ezra
 //
-//  The Linear-style leading status glyph — the one place a task's six-state display
-//  status is drawn and changed. Interactive by default: a tap opens a menu of all
-//  six states, and picking one composes the underlying lifecycle + stage moves
-//  through `applyDisplayStatus`, so complete / cancel / re-stage are one tap from any
-//  row (and the detail picker calls the exact same seam, so they never drift). A
-//  static variant renders the glyph without the menu for a resolved record row.
+//  The Linear-style leading status glyph — the one place a task.s lifecycle state is
+//  drawn and changed. Interactive by default: a tap opens a menu of the four states,
+//  and picking one routes through `setStatus`, so complete / cancel / start are one
+//  tap from any row (and the detail picker calls the exact same seam, so they never
+//  drift). A static variant renders the glyph without the menu for a resolved record
+//  row.
 //
 
 import CoreData
@@ -25,16 +25,16 @@ struct StatusGlyphView: View {
     /// When set, the parent handles applying the picked state (e.g. to route a
     /// Done/Canceled through its own undo-notice path). When nil, the glyph applies
     /// the transition itself.
-    var onPick: ((TaskDisplayStatus) -> Void)? = nil
+    var onPick: ((TaskStatus) -> Void)? = nil
 
     @Environment(\.managedObjectContext) private var context
 
-    private var display: TaskDisplayStatus { task.displayStatus }
+    private var display: TaskStatus { task.status }
 
     var body: some View {
         if interactive {
             Menu {
-                ForEach(TaskDisplayStatus.allCases) { state in
+                ForEach(TaskStatus.pickable) { state in
                     Button {
                         pick(state)
                     } label: {
@@ -66,25 +66,25 @@ struct StatusGlyphView: View {
             .contentShape(Rectangle())
     }
 
-    private func pick(_ state: TaskDisplayStatus) {
+    private func pick(_ state: TaskStatus) {
         guard state != display else { return }
         if let onPick {
             onPick(state)
             return
         }
         Motion.withMotion(Motion.decide) {
-            task.applyDisplayStatus(state, in: context)
+            task.setStatus(state, in: context)
         }
         try? context.save()
     }
 }
 
 #Preview {
-    let todo = TaskItem(title: "Todo task", status: .active, stage: .todo)
-    let review = TaskItem(title: "In review", status: .active, stage: .inReview)
+    let todo = TaskItem(title: "Todo task", status: .todo)
+    let doing = TaskItem(title: "In progress", status: .doing)
     return HStack(spacing: Spacing.lg) {
         StatusGlyphView(task: todo)
-        StatusGlyphView(task: review)
+        StatusGlyphView(task: doing)
         StatusGlyphView(task: todo, interactive: false)
     }
     .padding()

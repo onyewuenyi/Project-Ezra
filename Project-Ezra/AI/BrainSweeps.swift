@@ -21,6 +21,7 @@ enum BrainSweeps {
     /// One sweep's outcome, for logging/testing.
     struct Result {
         var archived: [TaskItem] = []
+        var prunedCaptures: [Capture] = []
     }
 
     /// Run the maintenance pass. Pure with respect to time — callers inject `now`
@@ -34,18 +35,27 @@ enum BrainSweeps {
         // Stale auto-archive: undated, untouched past the archive threshold, and
         // carrying no judgment or open decision (those are a human's to resolve,
         // never silently killable). Reversible via the trail, always.
+        //
+        // `countsAsWorkload` excludes reference items. A saved wifi password is
+        // *supposed* to sit untouched forever — archiving it as rot would be exactly
+        // backwards for something whose whole job is to persist. Manual Kill is how a
+        // reference item leaves.
         for task in all
         where !task.status.isResolved
+            && task.countsAsWorkload
             && !task.isJudgmentCall
             && !task.needsDecision
             && task.isStale(now: now, threshold: StalePolicy.archiveThreshold)
         {
-            let idleDays = Int(now.timeIntervalSince(task.updatedAt) / 86_400)
+            // Read the SAME clock the stale trigger did (`humanTouchedAt`, via `isStale`),
+            // not `updatedAt` — otherwise a task archived right after a system edge-write
+            // reads "untouched for 0 days" while it was genuinely idle for weeks.
+            let idleDays = Int(now.timeIntervalSince(task.humanTouchedAt) / 86_400)
             task.kill(now: now)
             context.insert(
                 ChangeLogEntry(
                     summary: "Archived “\(task.title)” — untouched for \(idleDays) days",
-                    detail: "Undo brings it back to your Inbox for another look.",
+                    detail: "Undo brings it back to your list for another look.",
                     action: "archived",
                     initiatedBy: .ai,
                     isReversible: true,
@@ -56,7 +66,38 @@ enum BrainSweeps {
             result.archived.append(task)
         }
 
-        if !result.archived.isEmpty { try? context.save() }
+        // Parked captures decay like everything else. The "N captures waiting" line is
+        // the one surface with no resolution path other than reopening the composer, so
+        // left alone it only ever grows — and a product where everything else decays
+        // should not have one permanent nag.
+        //
+        // **The prune is logged and reversible, never silent.** A silent prune would
+        // reintroduce the exact failure this whole feature exists to prevent — park a
+        // thought, come back later, it has vanished — just on a longer clock. Nothing
+        // else lists past captures, so `rawText` surviving in a row nothing renders is
+        // the letter of the promise, not the spirit. Undo re-parks it.
+        for capture in AppBrain.parkedCaptures(in: context)
+        where now.timeIntervalSince(capture.createdAt) > StalePolicy.archiveThreshold {
+            let idleDays = Int(now.timeIntervalSince(capture.createdAt) / 86_400)
+            capture.parkedDrafts = nil  // the derived half; `rawText` is kept forever
+            context.insert(
+                ChangeLogEntry(
+                    summary: "Let go of a capture from \(idleDays) days ago",
+                    detail: "“\(capture.rawText.prefix(60))” — the raw text is kept.",
+                    action: "prunedCapture",
+                    fieldChanged: "capture",
+                    // The capture id rides in `oldValue`, the same way the "merged" arm
+                    // carries its snapshot — this entry points at a Capture, not a task,
+                    // so `taskUUID` stays nil and the undo arm resolves it from here.
+                    oldValue: capture.uuid?.uuidString,
+                    initiatedBy: .ai,
+                    isReversible: true,
+                    timestamp: now, in: context
+                ))
+            result.prunedCaptures.append(capture)
+        }
+
+        if !result.archived.isEmpty || !result.prunedCaptures.isEmpty { try? context.save() }
         return result
     }
 }

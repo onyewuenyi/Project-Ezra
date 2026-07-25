@@ -320,11 +320,10 @@ struct OnboardingView: View {
     }
 
     private func commit() {
-        let created = brain.commit(drafts, rawCapture: text, into: context)
-        // The onboarding reveal ("here's your mess, sorted") doubles as the
-        // Confirm-Creation glance — the user saw the set and tapped through, so
-        // the batch confirms into the working set here.
-        for task in created { task.confirm() }
+        brain.commit(drafts, rawCapture: text, into: context)
+        // The onboarding reveal ("here.s your mess, sorted") doubles as the
+        // Confirm-Creation glance — the user saw the set and tapped through, and
+        // `commit` is what brings the tasks into existence.
         try? context.save()
         onComplete()
     }

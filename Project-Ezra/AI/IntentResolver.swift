@@ -40,7 +40,6 @@ enum IntentResolver {
         var draft = TaskDraft(
             title: intent.title,
             category: intent.category,
-            proposedStatus: .inbox,
             confidence: min(max(intent.confidence, 0), 1),
             autonomy: AutonomyPolicy.tier(
                 confidence: intent.confidence, isJudgmentCall: intent.isJudgmentCall),

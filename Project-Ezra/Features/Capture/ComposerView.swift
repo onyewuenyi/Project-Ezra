@@ -31,14 +31,15 @@ struct ComposerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppBrain.self) private var brain
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Gates the ownership check (see `AppBrain.applyOwnershipGate`), backs the
-    /// on-device resolve-person tool — a non-empty roster is what makes "who does
-    /// this belong to?" a genuinely open question.
+    /// Backs the owner proposal (see `OwnerProposer`) and the on-device
+    /// resolve-person tool. A solo install has nobody to hand work to, so the whole
+    /// ownership ladder terminates at the capturer.
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
     private var familyMembers: [FamilyMember] { Array(familyMembersResults) }
     /// The learning loop's inputs: past corrections (+ tasks, for keyword context).
     @FetchRequest(sortDescriptors: []) private var correctionsResults: FetchedResults<Correction>
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
+    @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
     private var corrections: [Correction] { Array(correctionsResults) }
     private var allTasks: [TaskItem] { Array(allTasksResults) }
 
@@ -56,7 +57,23 @@ struct ComposerView: View {
     /// its result instead of clobbering fresher candidates.
     @State private var triageGeneration = 0
     @State private var triageTask: Task<Void, Never>?
+    /// The user's past "no"s, loaded once per composer session — they only change at commit
+    /// (which writes new `SuppressionRecord`s and dismisses). Loading also lazily prunes
+    /// expired/orphaned rows, so caching keeps that off the per-keystroke path.
+    @State private var loadedSuppressions: [RelationshipSuppression]?
+    /// The durable row behind this session. Created at PARSE time, not commit time, so
+    /// dismissing the sheet parks the thought instead of destroying it. Adopted by
+    /// `commit` on confirm; deleted only by an explicit Discard.
+    @State private var parked: Capture?
+    /// The capture this session restored from, if any — so reopening resumes rather
+    /// than starting a second parked row for the same thought.
+    private let resuming: Capture?
+    @State private var showDiscardConfirm = false
     @FocusState private var focused: Bool
+
+    init(resuming: Capture? = nil) {
+        self.resuming = resuming
+    }
 
     var body: some View {
         NavigationStack {
@@ -93,10 +110,20 @@ struct ComposerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    // Cancel is a real choice now, because swiping away no longer
+                    // destroys anything. "Keep it" is the default; discarding is the
+                    // deliberate, destructive one.
+                    if drafts.isEmpty && text.isEmpty {
+                        Button("Cancel") { dismiss() }
+                    } else {
+                        Button("Discard", role: .destructive) { showDiscardConfirm = true }
+                    }
                 }
             }
-            .onAppear { focused = true }
+            .onAppear {
+                focused = true
+                restoreIfResuming()
+            }
             // Live transcript flows into the field: base text + everything heard so far.
             .onChange(of: speech.transcript) { _, transcript in
                 text = dictationBase + transcript
@@ -113,6 +140,18 @@ struct ComposerView: View {
             .onDisappear {
                 speech.stop()
                 triageTask?.cancel()
+                // The backstop that makes this whole phase worth having: a swipe-down,
+                // a phone call, anything that tears the sheet down mid-thought leaves
+                // the raw text and every edited draft on disk.
+                parkIfUnfinished()
+            }
+            .confirmationDialog(
+                "Discard this capture?", isPresented: $showDiscardConfirm, titleVisibility: .visible
+            ) {
+                Button("Discard", role: .destructive) { discard() }
+                Button("Keep it", role: .cancel) {}
+            } message: {
+                Text("The text and everything parsed from it will be deleted.")
             }
         }
         .presentationDetents([.large])
@@ -134,27 +173,29 @@ struct ComposerView: View {
             return
         }
 
-        let roster = rosterSnapshot
-        let learned = CorrectionProfile.rules(
-            from: corrections.map { $0 }, tasks: allTasks.map { $0 })
-        let openTasks = openTaskSnapshots
-        // The user's past "no"s (rejected merges/links) — the resolver drops matching
-        // proposals so a rejection sticks across captures. Loading also lazily prunes
-        // expired/orphaned rows.
-        let suppressions = SuppressionStore.load(
-            in: context, existingTaskIDs: Set(allTasks.compactMap(\.uuid)))
-        // Load persisted title vectors into the retrieval memo (once per process) so
-        // the first capture of the session doesn't re-embed the whole open set.
-        EmbeddingStore.warmUp(openTaskIDs: Set(openTasks.map(\.id)), in: context)
         triageTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, generation == triageGeneration else { return }
+            // Everything below is real work (correction-profile build, open-set snapshot,
+            // suppression load + prune, embedding warm-up). It runs only AFTER the debounce
+            // survives cancellation — never once per keystroke — so a fast typist doesn't
+            // pay for parses that are immediately superseded.
+            let roster = rosterSnapshot
+            let learned = CorrectionProfile.rules(
+                from: corrections.map { $0 }, tasks: allTasks.map { $0 })
+            let openTasks = openTaskSnapshots
+            let suppressions = sessionSuppressions()
+            let ownership = ownershipSnapshot
+            // Load persisted title vectors into the retrieval memo (once per process) so
+            // the first capture of the session doesn't re-embed the whole open set.
+            EmbeddingStore.warmUp(openTaskIDs: Set(openTasks.map(\.id)), in: context)
             let result = await brain.triage(
                 captured,
                 roster: roster,
                 learned: learned,
                 openTasks: openTasks,
                 suppressions: suppressions,
+                ownership: ownership,
                 onPartial: { partial in
                     // Streaming (device): candidates fill in while the model is
                     // still generating. Stale snapshots drop; edits survive merge.
@@ -174,6 +215,10 @@ struct ComposerView: View {
             Motion.withMotion(Motion.settle) {
                 drafts = merge(fresh: result, into: drafts)
             }
+            // Park as soon as there is something worth keeping, not only on dismiss —
+            // it shrinks the window in which the thought lives only in memory to a
+            // single debounce.
+            parkIfUnfinished()
         }
     }
 
@@ -201,12 +246,64 @@ struct ComposerView: View {
         }
     }
 
+    /// The session's suppression set — loaded (and pruned) once, then reused for every
+    /// re-parse. Invalidated at commit, which is also when new records are written.
+    private func sessionSuppressions() -> [RelationshipSuppression] {
+        if let cached = loadedSuppressions { return cached }
+        let loaded = SuppressionStore.load(
+            in: context, existingTaskIDs: Set(allTasks.compactMap(\.uuid)))
+        loadedSuppressions = loaded
+        return loaded
+    }
+
     /// Household roster as value snapshots (live members only — soft-deleted
     /// people keep attribution but aren't "the household" any more).
     private var rosterSnapshot: [RosterPerson] {
         familyMembers
             .filter { !$0.isRemoved }
             .map { RosterPerson(name: $0.name, relationship: $0.relationship.label) }
+    }
+
+    /// Everything `OwnerProposer` needs, snapshotted as values so the proposer stays a
+    /// pure function. Empty on a solo install, which makes the whole feature a no-op.
+    private var ownershipSnapshot: OwnershipContext {
+        let me = profiles.first?.linkedMemberID
+        let others = familyMembers.filter { !$0.isRemoved && $0.uuid != me }
+        guard !others.isEmpty else { return .none }
+
+        let namesByID = Dictionary(uniqueKeysWithValues: others.map { ($0.uuid, $0.name) })
+        // Loads count LIVE, workload-counting tasks only — the same basis as
+        // `MemberLoad.activeCount`, so a shelf of reference notes can't make someone
+        // read as overloaded and stop receiving proposals.
+        let live = allTasks.filter { $0.status.isLive && $0.countsAsWorkload }
+        let counts = live.reduce(into: [UUID: Int]()) { totals, task in
+            if let owner = task.ownerID { totals[owner, default: 0] += 1 }
+        }
+        let plates = others.map { counts[$0.uuid] ?? 0 }.sorted()
+        let median = plates.isEmpty ? 0 : plates[plates.count / 2]
+
+        let candidates = others.map { member in
+            let count = counts[member.uuid] ?? 0
+            return OwnerCandidate(
+                memberID: member.uuid, name: member.name, activeCount: count,
+                isOverloaded: count >= 4 && count >= median * 2)
+        }
+        // History spans EVERY task, resolved included — how work has been divided is a
+        // longer-running fact than what is open right now.
+        let history = allTasks.compactMap { task -> OwnerHistoryEntry? in
+            guard task.countsAsWorkload, let owner = task.ownerID, let name = namesByID[owner]
+            else { return nil }
+            return OwnerHistoryEntry(
+                category: task.category, ownerName: name,
+                isHumanEstablished: task.ownerOrigin == .human)
+        }
+        let ownersByTaskID = allTasks.reduce(into: [UUID: String]()) { map, task in
+            if let id = task.uuid, let owner = task.ownerID, let name = namesByID[owner] {
+                map[id] = name
+            }
+        }
+        return OwnershipContext(
+            candidates: candidates, history: history, ownersByTaskID: ownersByTaskID)
     }
 
     /// Keep an edited card stable across re-parses: match fresh candidates to
@@ -260,18 +357,65 @@ struct ComposerView: View {
         return "Add \(drafts.count) task\(drafts.count == 1 ? "" : "s")"
     }
 
+    /// Persist the in-flight capture. Called on dismiss and after each parse, so the
+    /// window in which a thought exists only in memory is as small as possible.
+    private func parkIfUnfinished() {
+        guard !drafts.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        parked = brain.park(
+            drafts, rawCapture: text, source: usedDictation ? .voice : .text,
+            into: parked, in: context)
+    }
+
+    /// Resume a parked capture: its verbatim text and its edited drafts, exactly as
+    /// they were left. A payload that can no longer be decoded (a `TaskDraft` shape
+    /// change) falls back to re-parsing from `rawText` — the raw text is irreplaceable,
+    /// the drafts are derived.
+    private func restoreIfResuming() {
+        guard let resuming, parked == nil else { return }
+        parked = resuming
+        text = resuming.rawText
+        if let restored = resuming.parkedDrafts, !restored.isEmpty {
+            drafts = restored
+        } else {
+            scheduleTriage()
+        }
+    }
+
+    private func discard() {
+        speech.stop()
+        triageTask?.cancel()
+        if let parked { AppBrain.discard(parked, in: context) }
+        parked = nil
+        drafts = []
+        text = ""
+        dismiss()
+    }
+
     private func commitAll() {
         guard !drafts.isEmpty else { return }
         speech.stop()
         triageTask?.cancel()
         committed += 1
+        // Adopt the parked row rather than creating a second one for the same event.
         let created = brain.commit(
-            drafts, rawCapture: text, source: usedDictation ? .voice : .text, into: context)
-        // "Add N tasks" IS the Confirm-Creation moment: every field was visible
-        // and editable, so the batch moves Inbox → Active here. (A judgment
-        // call's Needs Decision flag survives confirm — see `TaskItem.confirm`.)
-        for task in created { task.confirm() }
+            drafts, rawCapture: text, source: usedDictation ? .voice : .text, parked: parked,
+            into: context)
+        // "Add N tasks" IS the Confirm-Creation moment, and `commit` IS the creation:
+        // every field was visible and editable, and the tasks come into existence here,
+        // born `.todo`. There is no second confirm step to run. (A judgment call's Needs
+        // Decision flag survives creation — confirming that "figure out if X" exists is
+        // not making the call.)
+        //
+        // Clearing the session state is REQUIRED, not tidiness: `.onDisappear` runs
+        // `parkIfUnfinished` after this, and it keys off `drafts`/`text`. Leaving them
+        // populated would park a phantom duplicate of the capture just committed, and
+        // Today would read "1 capture waiting" after every successful add.
+        parked = nil
+        drafts = []
+        text = ""
         try? context.save()
+        loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         dismiss()
     }
 

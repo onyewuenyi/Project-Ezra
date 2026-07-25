@@ -22,7 +22,7 @@ import FoundationModels
 struct WorkIntentClassification {
     @Guide(
         description:
-            "Exactly one of: action, decision, planning, waiting, reference. Use decision ONLY when the task is choosing between options."
+            "Exactly one of: action, decision, planning, reference. Use decision ONLY when the task is choosing between options."
     )
     let workIntent: String
 }
@@ -63,9 +63,11 @@ struct WorkIntentClassifier {
     private static let instructions = """
         You classify a single task by the KIND of work it represents: action (a concrete
         thing to do), decision (a choice between options), planning (figuring out an
-        approach or breaking something down), waiting (parked on someone/something else),
-        or reference (a note to keep, not really a to-do). Answer with exactly one word.
+        approach or breaking something down), or reference (a note to keep, not really a
+        to-do). Answer with exactly one word.
         Use "decision" ONLY when the task is genuinely choosing between options.
+        There is NO "waiting" kind: being blocked is a separate axis the app derives
+        from the task graph, so classify blocked work by what it actually is.
         """
 
     private static func prompt(_ context: WorkIntentContext) -> String {

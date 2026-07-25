@@ -39,7 +39,7 @@ enum TaskTimeline {
     /// Resolved: lead with how long it took end-to-end.
     private static func resolvedSummary(_ task: TaskItem) -> String? {
         guard let total = task.timeToResolution, let took = compactDuration(total) else { return nil }
-        return "\(task.status == .killed ? "Killed" : "Done") · took \(took)"
+        return "\(task.status == .canceled ? "Canceled" : "Done") · took \(took)"
     }
 
     /// Unresolved: how long it has been sitting in the state it's in now.
@@ -50,10 +50,10 @@ enum TaskTimeline {
 
     private static func phrase(for state: TaskStatus) -> String {
         switch state {
-        case .inbox: return "Awaiting your confirm for"
-        case .active: return "Active for"
+        case .todo: return "Queued for"
+        case .doing: return "In progress for"
         case .done: return "Done"
-        case .killed: return "Killed"
+        case .canceled: return "Canceled"
         }
     }
 }

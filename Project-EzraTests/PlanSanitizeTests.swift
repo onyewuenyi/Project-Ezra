@@ -22,9 +22,9 @@ struct PlanSanitizeTests {
 
     /// Three candidates; `gamma` is overdue so it carries a non-empty fact line.
     private func request() -> TodayPlanRequest {
-        let alpha = TaskItem(title: "alpha", status: .active)
-        let beta = TaskItem(title: "beta", status: .active)
-        let gamma = TaskItem(title: "gamma", status: .active, dueDate: days(-1))
+        let alpha = TaskItem(title: "alpha", status: .todo)
+        let beta = TaskItem(title: "beta", status: .todo)
+        let gamma = TaskItem(title: "gamma", status: .todo, dueDate: days(-1))
         let all = [alpha, beta, gamma]
         return TodayPlanRequest.make(
             candidateItems: all, allTasks: all, recapCount: 0, typicalCompleted: nil, now: now)
@@ -73,7 +73,7 @@ struct PlanSanitizeTests {
 
     @Test("Caps at maxActions")
     func capsAtMax() {
-        let tasks = (0..<9).map { TaskItem(title: "t\($0)", status: .active) }
+        let tasks = (0..<9).map { TaskItem(title: "t\($0)", status: .todo) }
         let req = TodayPlanRequest.make(
             candidateItems: tasks, allTasks: tasks, recapCount: 0, typicalCompleted: nil, now: now)
         let raw = GeneratedPlan(

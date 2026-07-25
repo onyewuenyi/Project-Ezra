@@ -32,22 +32,20 @@ struct HumanEditLogTests {
 
     // MARK: - One entry per field, stamped as a human edit
 
-    @Test("A stage move logs one reversible human 'edited' entry with old/new + actor")
-    func stageMoveLogsEditedEntry() throws {
+    @Test("A status move logs one reversible human .edited. entry with old/new + actor")
+    func statusMoveLogsEditedEntry() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
-        task.setStage(.todo)
-
-        task.applyDisplayStatus(.inProgress, in: context)
+        task.setStatus(.doing, in: context)
 
         let entries = try editedEntries(for: task, in: context)
         #expect(entries.count == 1)
         let entry = try #require(entries.first)
         #expect(entry.initiatedBy == .human)
-        #expect(entry.fieldChanged == "stage")
+        #expect(entry.fieldChanged == "status")
         #expect(entry.oldValue == "todo")
-        #expect(entry.newValue == "inProgress")
+        #expect(entry.newValue == "doing")
         #expect(entry.actorID != nil)
         #expect(entry.isReversible)
     }
@@ -55,7 +53,7 @@ struct HumanEditLogTests {
     @Test("Editing urgent / due / title / notes / category / effort each logs one edit")
     func scalarEditsEachLogOnce() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
 
         task.isUrgent = true
@@ -77,7 +75,7 @@ struct HumanEditLogTests {
     @Test("Re-picking the current value logs nothing")
     func noOpGuardInsertsNothing() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
 
         task.logHumanEdit(
@@ -91,7 +89,7 @@ struct HumanEditLogTests {
     @Test("Two same-field edits in the window fold into one; oldValue is the pre-burst value")
     func coalesceWithinWindow() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
         let t0 = Date(timeIntervalSinceReferenceDate: 700_000_000)
 
@@ -113,7 +111,7 @@ struct HumanEditLogTests {
     @Test("An edit past the window opens a new entry")
     func outsideWindowInsertsNew() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
         let t0 = Date(timeIntervalSinceReferenceDate: 700_000_000)
 
@@ -131,7 +129,7 @@ struct HumanEditLogTests {
     @Test("A round-trip back to the pre-burst value deletes the coalesced entry")
     func roundTripDeletes() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
         let t0 = Date(timeIntervalSinceReferenceDate: 700_000_000)
 
@@ -149,7 +147,7 @@ struct HumanEditLogTests {
     @Test("A same-field edit by a different actor does not coalesce")
     func differentActorDoesNotCoalesce() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
         let t0 = Date(timeIntervalSinceReferenceDate: 700_000_000)
 
@@ -172,9 +170,9 @@ struct HumanEditLogTests {
     @Test("Blocker add/remove never coalesce — each is a distinct event")
     func blockersDoNotCoalesce() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
-        let a = TaskItem(title: "a", status: .active, confidence: 0.9)
-        let b = TaskItem(title: "b", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
+        let a = TaskItem(title: "a", status: .todo, confidence: 0.9)
+        let b = TaskItem(title: "b", status: .todo, confidence: 0.9)
         [task, a, b].forEach(context.insert)
         let t0 = Date(timeIntervalSinceReferenceDate: 700_000_000)
 
@@ -197,7 +195,7 @@ struct HumanEditLogTests {
     @Test("Undo restores the Urgent signal")
     func undoRestoresUrgent() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
         task.isUrgent = true
         task.logHumanEdit(
@@ -212,7 +210,7 @@ struct HumanEditLogTests {
     func undoRestoresDueDate() throws {
         let context = context()
         let due = Date(timeIntervalSinceReferenceDate: 700_000_000)
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         task.dueDate = due
         context.insert(task)
 
@@ -226,18 +224,17 @@ struct HumanEditLogTests {
         #expect(task.dueDate == due)
     }
 
-    @Test("Undo restores the prior stage")
-    func undoRestoresStage() throws {
+    @Test("Undo restores the prior lifecycle state")
+    func undoRestoresStatus() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
-        task.setStage(.todo)
-        task.applyDisplayStatus(.inProgress, in: context)
-        #expect(task.displayStatus == .inProgress)
+        task.setStatus(.doing, in: context)
+        #expect(task.status == .doing)
 
         let entry = try #require(try editedEntries(for: task, in: context).first)
         ChangeLogUndo.revert(entry, in: context)
-        #expect(task.displayStatus == .todo)
+        #expect(task.status == .todo)
     }
 
     @Test("Undo of a coalesced entry restores the pre-burst value")
@@ -245,7 +242,7 @@ struct HumanEditLogTests {
         let context = context()
         // Category is a scalar with several distinct values — ideal for exercising a
         // same-field coalescing burst (the boolean signals can only round-trip).
-        let task = TaskItem(title: "x", category: "Admin", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", category: "Admin", status: .todo, confidence: 0.9)
         context.insert(task)
         let t0 = Date(timeIntervalSinceReferenceDate: 700_000_000)
 
@@ -267,8 +264,8 @@ struct HumanEditLogTests {
     @Test("Undo of a blocker add removes exactly that edge")
     func undoBlockerAddRemovesEdge() throws {
         let context = context()
-        let dependent = TaskItem(title: "flights", status: .active, confidence: 0.9)
-        let blocker = TaskItem(title: "passport", status: .active, confidence: 0.9)
+        let dependent = TaskItem(title: "flights", status: .todo, confidence: 0.9)
+        let blocker = TaskItem(title: "passport", status: .todo, confidence: 0.9)
         [dependent, blocker].forEach(context.insert)
 
         dependent.addTaskBlocker(blocker.uuid!, among: [dependent, blocker])
@@ -287,7 +284,7 @@ struct HumanEditLogTests {
     @Test("'edited' entries are excluded from the Inbox but reachable by taskUUID")
     func editedExcludedFromInbox() throws {
         let context = context()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         context.insert(task)
         let filed = ChangeLogEntry(
             summary: "Filed", action: "filed", initiatedBy: .ai, taskTitle: task.title,

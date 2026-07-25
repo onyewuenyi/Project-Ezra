@@ -22,9 +22,9 @@ struct TaskMutationTests {
 
     @Test("kill() resolves as killed, with resolution and kill timestamps")
     func killSetsState() {
-        let task = TaskItem(title: "x", status: .active)
+        let task = TaskItem(title: "x", status: .todo)
         task.kill()
-        #expect(task.status == .killed)
+        #expect(task.status == .canceled)
         #expect(task.status.isResolved)
         #expect(task.completedAt != nil)
         #expect(task.killedAt != nil)
@@ -32,7 +32,7 @@ struct TaskMutationTests {
 
     @Test("complete() resolves as done, not killed")
     func completeSetsState() {
-        let task = TaskItem(title: "x", status: .active)
+        let task = TaskItem(title: "x", status: .todo)
         task.complete()
         #expect(task.status == .done)
         #expect(task.killedAt == nil)
@@ -42,7 +42,7 @@ struct TaskMutationTests {
     @Test("Mutations bump updatedAt — the untouched-since clock stays honest")
     func mutationsBumpUpdatedAt() {
         let born = Date(timeIntervalSinceNow: -10 * 24 * 3600)
-        let task = TaskItem(title: "x", status: .active, createdAt: born)
+        let task = TaskItem(title: "x", status: .todo, createdAt: born)
         #expect(task.updatedAt == born)
         task.addExternalBlocker("something", among: [])
         #expect(task.updatedAt > born)
@@ -52,39 +52,40 @@ struct TaskMutationTests {
 
     @Test("reopen() restores the exact status the task left")
     func reopenRestoresStatus() {
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         task.complete()
         task.reopen(among: [])
-        #expect(task.status == .active)
+        #expect(task.status.isLive)
         #expect(task.completedAt == nil)
     }
 
-    @Test("reopen() on a judgment call resolved from Inbox returns to Inbox (still Needs Decision)")
-    func reopenJudgmentCallRestoresInbox() {
+    @Test("reopen() on a resolved judgment call restores it live, still Needs Decision")
+    func reopenJudgmentCallStaysFlagged() {
         let task = TaskItem(
-            title: "should I quit", status: .inbox, confidence: 1.0, isJudgmentCall: true,
+            title: "should I quit", status: .todo, confidence: 1.0, isJudgmentCall: true,
             needsDecision: true)
-        task.complete()  // resolved straight from the Inbox
+        task.complete()
         task.reopen(among: [])
-        #expect(task.status == .inbox)
+        #expect(task.status == .todo)
         #expect(task.assessment(isBlocked: false).needsDecision == .humanJudgment)
     }
 
-    @Test("reopen() falls back to Active when there is no recorded prior status")
-    func reopenFallsBackToActive() {
-        // Constructed directly as done: its only recorded visit is `.done`, so there's
-        // no earlier status to restore — fall back to Active.
+    @Test("reopen() floors at Todo when there is no recorded prior live status")
+    func reopenFloorsAtTodo() {
+        // Constructed directly as done: its only recorded visit is `.done`, so there is
+        // no earlier live status to restore. The floor is `.todo` — the timeline is
+        // stored as raw strings and must never route a task somewhere unreachable.
         let task = TaskItem(title: "x", status: .done, confidence: 0.9)
         task.reopen(among: [])
-        #expect(task.status == .active)
+        #expect(task.status == .todo)
     }
 
     @Test("reopen() after a kill clears killedAt")
     func reopenClearsKilledAt() {
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         task.kill()
         task.reopen(among: [])
-        #expect(task.status == .active)
+        #expect(task.status.isLive)
         #expect(task.killedAt == nil)
         #expect(task.completedAt == nil)
     }
@@ -93,122 +94,113 @@ struct TaskMutationTests {
 
     @Test("An external blocker reads as blocked; unblock() clears it, status untouched")
     func externalBlockThenUnblock() {
-        let task = TaskItem(title: "book flights", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "book flights", status: .todo, confidence: 0.9)
         task.addExternalBlocker("the travel agent", among: [])
         #expect(task.hasActiveBlockers(among: []))
         #expect(task.taskBlockerIDs.isEmpty)  // untracked — no graph edge
-        #expect(task.status == .active)  // blocking never moved the status
+        #expect(task.status.isLive)  // blocking never moved the status
         task.unblock()
         #expect(!task.hasActiveBlockers(among: []))
-        #expect(task.status == .active)
+        #expect(task.status.isLive)
         #expect(task.blockers.isEmpty)
     }
 
     @Test("The invariant: reads as blocked iff there is an active blocker")
     func blockedIffActiveBlocker() {
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         #expect(!task.hasActiveBlockers(among: []))
         task.addExternalBlocker(nil, among: [])
         #expect(task.hasActiveBlockers(among: []))
         task.removeBlocker(task.blockers[0].id, among: [])
         #expect(!task.hasActiveBlockers(among: []))
-        #expect(task.status == .active)  // through it all, the status never changed
+        #expect(task.status.isLive)  // through it all, the status never changed
     }
 
     @Test("A judgment call stays Needs Decision through block/unblock — the flag is independent")
     func judgmentCallSurvivesBlockUnblock() {
         let task = TaskItem(
-            title: "should I move", status: .inbox, confidence: 1.0, isJudgmentCall: true,
+            title: "should I move", status: .todo, confidence: 1.0, isJudgmentCall: true,
             needsDecision: true)
         task.addExternalBlocker(nil, among: [])
         #expect(task.assessment(isBlocked: true).needsDecision == .humanJudgment)
         task.unblock()
         #expect(task.assessment(isBlocked: false).needsDecision == .humanJudgment)
-        #expect(task.status == .inbox)
+        #expect(task.status == .todo)
     }
 
-    // MARK: - Confirm-Creation (the single human-in-the-loop moment)
+    // MARK: - Confirm-Creation (creation IS the confirm)
 
-    @Test("confirm() moves Inbox → Active, stamps confirmedAt, clears needsDecision")
-    func confirmMovesToActive() {
-        let task = TaskItem(title: "x", status: .inbox, confidence: 0.3, needsDecision: true)
-        task.confirm()
-        #expect(task.status == .active)
+    @Test("A committed draft is born Todo with confirmedAt stamped")
+    func creationIsTheConfirm() {
+        let draft = TaskDraft(
+            title: "x", category: "Admin", confidence: 0.3, autonomy: .ask,
+            isJudgmentCall: false, reasoning: "")
+        let task = draft.makeTaskItem(rawCapture: "x", in: PersistenceStack.scratch)
+        #expect(task.status == .todo)
         #expect(task.confirmedAt != nil)
-        #expect(!task.needsDecision)
-        #expect(task.assessment(isBlocked: false).needsDecision == nil)
-        // Autonomy is derived, not forced — a low-confidence item is still `.ask` tier
-        // even once confirmed; that's honest provenance, not a status concern.
+        // Creation does NOT settle a low-confidence flag — the draft's own
+        // `needsDecision` rides onto the task, and only the human clears it.
+        #expect(task.assessment(isBlocked: false).needsDecision == .lowConfidence)
+        // Autonomy is derived, not forced — a low-confidence item is still `.ask` tier;
+        // that's honest provenance, not a status concern.
         #expect(task.autonomy == .ask)
     }
 
-    @Test("confirm() KEEPS blockers — confirming creation is routine, not an override")
-    func confirmKeepsBlockers() {
-        let blocker = TaskItem(title: "blocker", status: .active, confidence: 0.9)
-        let task = TaskItem(title: "x", status: .inbox, confidence: 0.9)
+    @Test("Creation KEEPS blockers — a dependency named at capture survives it")
+    func creationKeepsBlockers() {
+        let blocker = TaskItem(title: "blocker", status: .todo, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         task.addTaskBlocker(blocker.uuid!, among: [blocker, task])
-        task.confirm()
-        #expect(task.status == .active)
+        #expect(task.status.isLive)
         #expect(task.hasActiveBlockers(among: [blocker, task]))
     }
 
-    @Test("confirm() clears ownerPending — a later block/unblock never resurfaces unowned")
-    func confirmClearsOwnerPendingRegression() {
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9, ownerPending: true)
-        task.confirm()
-        #expect(task.status == .active)
-        #expect(!task.ownerPending)
-        // Block then unblock must not resurface the unowned flag.
-        task.addExternalBlocker(nil, among: [])
-        task.unblock()
-        #expect(!task.ownerPending)
-        #expect(task.status == .active)
-    }
-
-    @Test("escalateToDecision() sets the one visible flag; confirm() clears it")
+    @Test("escalateToDecision() sets the one visible flag; resolveDecision() clears it")
     func escalateThenConfirm() {
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         #expect(task.assessment(isBlocked: false).needsDecision == nil)
         task.escalateToDecision()
         #expect(task.needsDecision)
         #expect(task.assessment(isBlocked: false).needsDecision == .lowConfidence)
-        task.confirm()
+        task.resolveDecision()
         #expect(!task.needsDecision)
     }
 
     @Test("A resolved task never reads as Needs Decision, even with the flag still set")
     func resolvedNeverNeedsDecision() {
-        let task = TaskItem(title: "x", status: .inbox, confidence: 0.3, needsDecision: true)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.3, needsDecision: true)
         task.kill()
         #expect(task.assessment(isBlocked: false).needsDecision == nil)
     }
 
-    // MARK: - Ownership (claim clears the unowned flag; nothing else)
+    // MARK: - Ownership (claim sets the owner + origin; nothing else)
 
-    @Test("claim() clears ownerPending, leaving the status at Active")
-    func claimClearsUnowned() {
+    @Test("claim() sets the owner and marks the origin human, leaving the status alone")
+    func claimSetsOwnerAndOrigin() {
         let me = UUID()
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9, ownerPending: true)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9, ownerOrigin: .inferred)
         task.claim(ownerID: me, among: [])
-        #expect(task.status == .active)
-        #expect(!task.ownerPending)
+        #expect(task.status == .todo)
         #expect(task.isMine(currentUserID: me))  // claiming it to yourself makes it mine
+        // A human established this ownership — the affinity denominator counts it.
+        #expect(task.ownerOrigin == .human)
     }
 
     @Test("claim() on a task with an active task-blocker still reads as blocked")
     func claimOnBlockedTaskStaysBlocked() {
-        let blocker = TaskItem(title: "blocker", status: .active, confidence: 0.9)
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9, ownerPending: true)
+        let blocker = TaskItem(title: "blocker", status: .todo, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         task.addTaskBlocker(blocker.uuid!, among: [blocker, task])
         task.claim(ownerID: nil, among: [blocker, task])
         #expect(task.hasActiveBlockers(among: [blocker, task]))
-        #expect(!task.ownerPending)
+        // Handed back to the household: unowned is now exactly `ownerID == nil`.
+        #expect(task.assessment(isBlocked: true).isUnowned)
     }
 
     @Test("An external blocker survives claim() and task-blocker churn")
     func externalBlockerSurvivesChurn() {
-        let other = TaskItem(title: "other", status: .active, confidence: 0.9)
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9, ownerPending: true)
+        let other = TaskItem(title: "other", status: .todo, confidence: 0.9)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         task.addExternalBlocker("the contractor", among: [task, other])
         #expect(task.hasActiveBlockers(among: [task, other]))
 
@@ -225,12 +217,12 @@ struct TaskMutationTests {
         #expect(!task.hasActiveBlockers(among: [task, other]))
     }
 
-    @Test("reopen() with ownerPending still set restores the status and reads as unowned")
-    func reopenWithOwnerPendingReadsUnowned() {
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9, ownerPending: true)
+    @Test("reopen() on an unowned task restores the status and still reads as unowned")
+    func reopenUnownedReadsUnowned() {
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
         task.complete()
         task.reopen(among: [])
-        #expect(task.status == .active)
+        #expect(task.status.isLive)
         #expect(task.assessment(isBlocked: false).isUnowned)
     }
 
@@ -239,19 +231,19 @@ struct TaskMutationTests {
     @Test("Overdue: a past due date on an open task; never on a resolved one")
     func overdueDerivation() {
         let overdue = TaskItem(
-            title: "late", status: .active, dueDate: Date(timeIntervalSinceNow: -2 * 24 * 3600))
+            title: "late", status: .todo, dueDate: Date(timeIntervalSinceNow: -2 * 24 * 3600))
         #expect(overdue.isOverdue())
         overdue.complete()
         #expect(!overdue.isOverdue())
         let future = TaskItem(
-            title: "later", status: .active, dueDate: Date(timeIntervalSinceNow: 2 * 24 * 3600))
+            title: "later", status: .todo, dueDate: Date(timeIntervalSinceNow: 2 * 24 * 3600))
         #expect(!future.isOverdue())
     }
 
     @Test("Stale: undated + untouched past the threshold; a due date exempts it (that's Overdue's job)")
     func staleDerivation() {
         let old = Date(timeIntervalSinceNow: -10 * 24 * 3600)
-        let stale = TaskItem(title: "x", status: .active, createdAt: old)
+        let stale = TaskItem(title: "x", status: .todo, createdAt: old)
         #expect(stale.isStale())
         // A SYSTEM touch does NOT reset the clock — staleness reads the human clock,
         // so a capture-time edge write can't fake engagement…
@@ -262,20 +254,20 @@ struct TaskMutationTests {
         #expect(!stale.isStale())
         // A dated task is never stale — it goes overdue instead.
         let dated = TaskItem(
-            title: "y", status: .active, dueDate: Date(timeIntervalSinceNow: 30 * 24 * 3600),
+            title: "y", status: .todo, dueDate: Date(timeIntervalSinceNow: 30 * 24 * 3600),
             createdAt: old)
         #expect(!dated.isStale())
         // Past the longer threshold → auto-archive eligible.
         let ancient = TaskItem(
-            title: "z", status: .active, createdAt: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+            title: "z", status: .todo, createdAt: Date(timeIntervalSinceNow: -30 * 24 * 3600))
         #expect(ancient.isStale(threshold: StalePolicy.archiveThreshold))
     }
 
     @Test("Blocking: derived from the reverse edge; resolved dependents don't count")
     func blockingDerivation() {
-        let blocker = TaskItem(title: "A", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "A", status: .todo, confidence: 0.9)
         let dependent = TaskItem(
-            title: "B", status: .active, confidence: 0.9,
+            title: "B", status: .todo, confidence: 0.9,
             blockedBy: [blocker.uuid].compactMap { $0 })
         let all = [blocker, dependent]
         #expect(blocker.isBlocking(among: all))
@@ -288,12 +280,12 @@ struct TaskMutationTests {
 
     @Test("activeBlockers counts only unresolved references; summary adds +N")
     func activeBlockersAndSummary() {
-        let a = TaskItem(title: "Renew passport", status: .active, confidence: 0.9)
-        let b = TaskItem(title: "Book flights", status: .active, confidence: 0.9)
-        let done = TaskItem(title: "Old thing", status: .active, confidence: 0.9)
+        let a = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
+        let b = TaskItem(title: "Book flights", status: .todo, confidence: 0.9)
+        let done = TaskItem(title: "Old thing", status: .todo, confidence: 0.9)
         done.complete()
         let visa = TaskItem(
-            title: "Apply for visa", status: .active, confidence: 0.9,
+            title: "Apply for visa", status: .todo, confidence: 0.9,
             blockedBy: [a.uuid, b.uuid, done.uuid].compactMap { $0 })
         let all = [a, b, done, visa]
 
@@ -304,10 +296,10 @@ struct TaskMutationTests {
 
         // With one active blocker, no "+N" — and the summary carries its preposition.
         let single = TaskItem(
-            title: "Solo", status: .active, confidence: 0.9, blockedBy: [a.uuid].compactMap { $0 })
+            title: "Solo", status: .todo, confidence: 0.9, blockedBy: [a.uuid].compactMap { $0 })
         #expect(single.blockerSummary(among: [a, single]) == "after Renew passport")
         // An untracked wait reads with its own preposition.
-        let external = TaskItem(title: "Quote", status: .active, confidence: 0.9)
+        let external = TaskItem(title: "Quote", status: .todo, confidence: 0.9)
         external.addExternalBlocker("the contractor", among: [external])
         #expect(external.blockerSummary(among: [external]) == "waiting on the contractor")
         // Nothing active → nil (a card shows no blocker line).
@@ -348,8 +340,8 @@ struct TaskMutationTests {
 
     @Test("addTaskBlocker no-ops on self, duplicate, and a cycle-closing reference")
     func addBlockerGuards() {
-        let a = TaskItem(title: "A", status: .active, confidence: 0.9)
-        let b = TaskItem(title: "B", status: .active, confidence: 0.9)
+        let a = TaskItem(title: "A", status: .todo, confidence: 0.9)
+        let b = TaskItem(title: "B", status: .todo, confidence: 0.9)
         let all = [a, b]
         a.addTaskBlocker(b.uuid!, among: all)  // A waits on B
         #expect(a.taskBlockerIDs == [b.uuid!])
@@ -363,7 +355,7 @@ struct TaskMutationTests {
 
     @Test("An external blocker never joins the graph — cycles and chains ignore it")
     func externalBlockerHasNoEdge() {
-        let a = TaskItem(title: "A", status: .active, confidence: 0.9)
+        let a = TaskItem(title: "A", status: .todo, confidence: 0.9)
         a.addExternalBlocker("something", among: [a])
         #expect(a.taskBlockerIDs.isEmpty)  // no edge
         #expect(TaskItem.blockersByUUID([a])[a.uuid!] == [])
@@ -378,9 +370,9 @@ struct TaskMutationTests {
     @Test("Completing a blocker frees dependents, keeps the ref, and logs the change log")
     @MainActor func resurfaceOnComplete() throws {
         let context = try makeContext()
-        let blocker = TaskItem(title: "Renew my passport", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "Renew my passport", status: .todo, confidence: 0.9)
         let dependent = TaskItem(
-            title: "Book flights", status: .active, confidence: 0.9,
+            title: "Book flights", status: .todo, confidence: 0.9,
             blockedBy: [blocker.uuid].compactMap { $0 })
         context.insert(blocker)
         context.insert(dependent)
@@ -395,13 +387,13 @@ struct TaskMutationTests {
         #expect(entries.contains { $0.taskUUID == dependent.uuid && !$0.undone && $0.initiatedBy == .ai })
     }
 
-    @Test("A freed dependent that's still unowned logs the 'needs someone assigned' copy")
+    @Test("A freed dependent that's still unowned says so in the unblock copy")
     @MainActor func resurfaceUnownedTrailCopy() throws {
         let context = try makeContext()
-        let blocker = TaskItem(title: "Renew my passport", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "Renew my passport", status: .todo, confidence: 0.9)
         let dependent = TaskItem(
-            title: "Book flights", status: .active, confidence: 0.9,
-            blockedBy: [blocker.uuid].compactMap { $0 }, ownerPending: true)
+            title: "Book flights", status: .todo, confidence: 0.9,
+            blockedBy: [blocker.uuid].compactMap { $0 })
         context.insert(blocker)
         context.insert(dependent)
 
@@ -411,16 +403,18 @@ struct TaskMutationTests {
         #expect(dependent.assessment(among: [blocker, dependent]).isUnowned)
         let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
         #expect(
-            entries.contains { $0.taskUUID == dependent.uuid && $0.detail?.contains("assigned") == true })
+            entries.contains {
+                $0.taskUUID == dependent.uuid && $0.detail?.contains("pick it up") == true
+            })
     }
 
     @Test("A task stays blocked until ALL its blockers are done")
     @MainActor func unblocksOnlyWhenAllClear() throws {
         let context = try makeContext()
-        let a = TaskItem(title: "Renew passport", status: .active, confidence: 0.9)
-        let b = TaskItem(title: "Book flights", status: .active, confidence: 0.9)
+        let a = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
+        let b = TaskItem(title: "Book flights", status: .todo, confidence: 0.9)
         let visa = TaskItem(
-            title: "Apply for visa", status: .active, confidence: 0.9,
+            title: "Apply for visa", status: .todo, confidence: 0.9,
             blockedBy: [a.uuid, b.uuid].compactMap { $0 })
         [a, b, visa].forEach(context.insert)
 
@@ -434,11 +428,11 @@ struct TaskMutationTests {
     @Test("Killing a blocker also frees dependents; an externally-blocked task stays put")
     @MainActor func resurfaceOnKillIsScoped() throws {
         let context = try makeContext()
-        let blocker = TaskItem(title: "Finish the Q3 deck", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "Finish the Q3 deck", status: .todo, confidence: 0.9)
         let dependent = TaskItem(
-            title: "Send deck to client", status: .active, confidence: 0.9,
+            title: "Send deck to client", status: .todo, confidence: 0.9,
             blockedBy: [blocker.uuid].compactMap { $0 })
-        let unrelated = TaskItem(title: "Book flights", status: .active, confidence: 0.9)
+        let unrelated = TaskItem(title: "Book flights", status: .todo, confidence: 0.9)
         unrelated.addExternalBlocker(nil, among: [unrelated])  // untracked wait, no ref
         [blocker, dependent, unrelated].forEach(context.insert)
 
@@ -451,9 +445,9 @@ struct TaskMutationTests {
     @Test("A freed judgment call keeps its Needs Decision flag, status unchanged")
     @MainActor func resurfaceKeepsJudgmentInvariant() throws {
         let context = try makeContext()
-        let blocker = TaskItem(title: "Hear back from the recruiter", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "Hear back from the recruiter", status: .todo, confidence: 0.9)
         let dependent = TaskItem(
-            title: "Decide whether to change jobs", status: .inbox, confidence: 0.95,
+            title: "Decide whether to change jobs", status: .todo, confidence: 0.95,
             isJudgmentCall: true, needsDecision: true, blockedBy: [blocker.uuid].compactMap { $0 })
         context.insert(blocker)
         context.insert(dependent)
@@ -461,16 +455,16 @@ struct TaskMutationTests {
         blocker.completeAndResurface(in: context)
 
         #expect(!dependent.hasActiveBlockers(among: [blocker, dependent]))
-        #expect(dependent.status == .inbox)
+        #expect(dependent.status == .todo)
         #expect(dependent.assessment(among: [blocker, dependent]).needsDecision == .humanJudgment)
     }
 
     @Test("Reopening a completed blocker re-blocks the dependents it had freed")
     @MainActor func reopenReblocksDependents() throws {
         let context = try makeContext()
-        let blocker = TaskItem(title: "Renew passport", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
         let dependent = TaskItem(
-            title: "Book flights", status: .active, confidence: 0.9,
+            title: "Book flights", status: .todo, confidence: 0.9,
             blockedBy: [blocker.uuid].compactMap { $0 })
         context.insert(blocker)
         context.insert(dependent)
@@ -479,16 +473,16 @@ struct TaskMutationTests {
         #expect(!dependent.hasActiveBlockers(among: [blocker, dependent]))
 
         blocker.reopenAndReblock(in: context)
-        #expect(blocker.status == .active)  // blocker itself is open again
+        #expect(blocker.status.isLive)  // blocker itself is open again
         #expect(dependent.hasActiveBlockers(among: [blocker, dependent]))  // dependent re-blocks
     }
 
     @Test("A done task with a still-open blocker reopens to its prior status, reading as blocked")
     @MainActor func reopenIntoBlocked() throws {
         let context = try makeContext()
-        let blocker = TaskItem(title: "Renew passport", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
         let dependent = TaskItem(
-            title: "Book flights", status: .active, confidence: 0.9,
+            title: "Book flights", status: .todo, confidence: 0.9,
             blockedBy: [blocker.uuid].compactMap { $0 })
         context.insert(blocker)
         context.insert(dependent)
@@ -497,7 +491,7 @@ struct TaskMutationTests {
         #expect(dependent.status == .done)
 
         dependent.reopenAndReblock(in: context)
-        #expect(dependent.status == .active)  // prior status restored
+        #expect(dependent.status.isLive)  // prior status restored
         #expect(dependent.hasActiveBlockers(among: [blocker, dependent]))  // blocker still open → reads blocked
     }
 }
@@ -514,7 +508,7 @@ struct CommitBlockerResolutionTests {
 
     private func draft(_ title: String, blockedBy: String? = nil) -> TaskDraft {
         TaskDraft(
-            title: title, category: "Travel", proposedStatus: .active, confidence: 0.9,
+            title: title, category: "Travel", confidence: 0.9,
             autonomy: .silent, isJudgmentCall: false, reasoning: "", dueDate: nil,
             blockedBy: blockedBy)
     }
@@ -552,7 +546,7 @@ struct CommitBlockerResolutionTests {
         let b = brain.commit(
             [draft("Call the plumber", blockedBy: nil)],
             rawCapture: "", into: context)[0]
-        #expect(b.blockers.isEmpty && b.status == .active)
+        #expect(b.blockers.isEmpty && b.status.isLive)
     }
 
     @Test("Commit stamps every created task's author (the current user's member id)")
@@ -636,8 +630,8 @@ struct CommitBlockerResolutionTests {
     @Test("Completing a task blocker does NOT free a task still holding an external blocker")
     func externalKeepsBlockedAfterTaskBlockerClears() throws {
         let context = try makeContext()
-        let blocker = TaskItem(title: "Renew passport", status: .active, confidence: 0.9)
-        let task = TaskItem(title: "Book flights", status: .active, confidence: 0.9)
+        let blocker = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
+        let task = TaskItem(title: "Book flights", status: .todo, confidence: 0.9)
         context.insert(blocker)
         context.insert(task)
         task.addTaskBlocker(blocker.uuid!, among: [blocker, task])

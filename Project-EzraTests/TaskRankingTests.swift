@@ -38,9 +38,9 @@ struct TaskRankingTests {
     @Test("1. Needs Decision beats everything — even an urgent, overdue, top-score task")
     func needsDecisionForcedTop() {
         let decision = score(
-            TaskItem(title: "decide", status: .inbox, confidence: 0.3, needsDecision: true), 10)
+            TaskItem(title: "decide", status: .todo, confidence: 0.3, needsDecision: true), 10)
         let urgentOverdue = score(
-            TaskItem(title: "urgent late", status: .active, dueDate: days(-2), isUrgent: true), 100)
+            TaskItem(title: "urgent late", status: .todo, dueDate: days(-2), isUrgent: true), 100)
         let all = [decision, urgentOverdue]
         #expect(precedes(decision, urgentOverdue, among: all))
         #expect(!precedes(urgentOverdue, decision, among: all))
@@ -48,20 +48,20 @@ struct TaskRankingTests {
 
     @Test("1a. A task both Blocked and Needs Decision still renders top — rule 1 wins")
     func needsDecisionOverridesBlocked() {
-        let blocker = TaskItem(title: "blocker", status: .active)
+        let blocker = TaskItem(title: "blocker", status: .todo)
         let blockedDecision = TaskItem(
-            title: "blocked decision", status: .inbox, needsDecision: true, blockedBy: [blocker.uuid!])
-        let plain = score(TaskItem(title: "plain", status: .active, isUrgent: true), 100)
+            title: "blocked decision", status: .todo, needsDecision: true, blockedBy: [blocker.uuid!])
+        let plain = score(TaskItem(title: "plain", status: .todo, isUrgent: true), 100)
         let all = [blocker, blockedDecision, plain]
         #expect(precedes(blockedDecision, plain, among: all))
     }
 
     @Test("2. Blocked sinks below everything unblocked, regardless of score")
     func blockedSinks() {
-        let blocker = TaskItem(title: "blocker", status: .active)
+        let blocker = TaskItem(title: "blocker", status: .todo)
         let blockedHot = score(
-            TaskItem(title: "blocked hot", status: .active, blockedBy: [blocker.uuid!]), 95)
-        let routine = score(TaskItem(title: "routine", status: .active), 10)
+            TaskItem(title: "blocked hot", status: .todo, blockedBy: [blocker.uuid!]), 95)
+        let routine = score(TaskItem(title: "routine", status: .todo), 10)
         let all = [blocker, blockedHot, routine]
         #expect(precedes(routine, blockedHot, among: all))
         #expect(!precedes(blockedHot, routine, among: all))
@@ -69,10 +69,10 @@ struct TaskRankingTests {
 
     @Test("3. Attention score is the primary sort among unblocked, undecided tasks")
     func attentionScorePrimary() {
-        let a = score(TaskItem(title: "a", status: .active), 90)
-        let b = score(TaskItem(title: "b", status: .active), 60)
-        let c = score(TaskItem(title: "c", status: .active), 40)
-        let d = score(TaskItem(title: "d", status: .active), 35)
+        let a = score(TaskItem(title: "a", status: .todo), 90)
+        let b = score(TaskItem(title: "b", status: .todo), 60)
+        let c = score(TaskItem(title: "c", status: .todo), 40)
+        let d = score(TaskItem(title: "d", status: .todo), 35)
         let all = [d, c, b, a]
         let sorted = TaskRanking.sorted(all, now: now)
         #expect(sorted.map(\.title) == ["a", "b", "c", "d"])
@@ -80,11 +80,11 @@ struct TaskRankingTests {
 
     @Test("4. Blocking boosts within equal score — but never overrides score")
     func blockingBoostsWithinScore() {
-        let dependent = TaskItem(title: "dependent", status: .active)
-        let blocking = TaskItem(title: "blocking", status: .active)
+        let dependent = TaskItem(title: "dependent", status: .todo)
+        let blocking = TaskItem(title: "blocking", status: .todo)
         dependent.addTaskBlocker(blocking.uuid!, among: [dependent, blocking])
-        let peer = TaskItem(title: "peer", status: .active)
-        let higher = TaskItem(title: "higher", status: .active)
+        let peer = TaskItem(title: "peer", status: .todo)
+        let higher = TaskItem(title: "higher", status: .todo)
         // Set scores AFTER wiring the blocker — addTaskBlocker recomputes the target's
         // attention (it gained a dependent), which would otherwise clobber these.
         _ = score(blocking, 50)
@@ -98,9 +98,9 @@ struct TaskRankingTests {
     @Test("5. Overdue boosts within equal score — but never overrides score")
     func overdueBoostsWithinScore() {
         let overdue = score(
-            TaskItem(title: "overdue", status: .active, dueDate: days(-1)), 50)
-        let peer = score(TaskItem(title: "peer", status: .active), 50)
-        let higher = score(TaskItem(title: "higher", status: .active), 70)
+            TaskItem(title: "overdue", status: .todo, dueDate: days(-1)), 50)
+        let peer = score(TaskItem(title: "peer", status: .todo), 50)
+        let higher = score(TaskItem(title: "higher", status: .todo), 70)
         let all = [overdue, peer, higher]
         #expect(precedes(overdue, peer, among: all))
         #expect(precedes(higher, overdue, among: all))
@@ -108,9 +108,9 @@ struct TaskRankingTests {
 
     @Test("Then the calendar: soonest due first, undated last (equal score, no flags)")
     func dueDateFallback() {
-        let soon = score(TaskItem(title: "soon", status: .active, dueDate: days(1)), 50)
-        let later = score(TaskItem(title: "later", status: .active, dueDate: days(3)), 50)
-        let undated = score(TaskItem(title: "undated", status: .active), 50)
+        let soon = score(TaskItem(title: "soon", status: .todo, dueDate: days(1)), 50)
+        let later = score(TaskItem(title: "later", status: .todo, dueDate: days(3)), 50)
+        let undated = score(TaskItem(title: "undated", status: .todo), 50)
         let all = [undated, later, soon]
         let sorted = TaskRanking.sorted(all, now: now)
         #expect(sorted.map(\.title) == ["soon", "later", "undated"])
@@ -120,9 +120,9 @@ struct TaskRankingTests {
 
     @Test("Deferral pulls a task down within its band")
     func deferralPullsDown() {
-        let deferred = score(TaskItem(title: "deferred", status: .active), 50)
+        let deferred = score(TaskItem(title: "deferred", status: .todo), 50)
         deferred.deferralCount = 5  // −7.5
-        let peer = score(TaskItem(title: "peer", status: .active), 50)
+        let peer = score(TaskItem(title: "peer", status: .todo), 50)
         let all = [deferred, peer]
         #expect(precedes(peer, deferred, among: all))
         #expect(!precedes(deferred, peer, among: all))
@@ -130,9 +130,9 @@ struct TaskRankingTests {
 
     @Test("Staleness reads the human clock — a system touch doesn't reset the decay")
     func stalenessHumanClock() {
-        let dormant = score(TaskItem(title: "dormant", status: .active, createdAt: days(-30)), 50)
+        let dormant = score(TaskItem(title: "dormant", status: .todo, createdAt: days(-30)), 50)
         dormant.touch(now: days(-1))  // a system path bumped updatedAt; no human ever touched it
-        let fresh = score(TaskItem(title: "fresh", status: .active, createdAt: days(-30)), 50)
+        let fresh = score(TaskItem(title: "fresh", status: .todo, createdAt: days(-30)), 50)
         fresh.touchHuman(now: now)
         let all = [dormant, fresh]
         #expect(precedes(fresh, dormant, among: all))  // dormant decayed ~30d despite the touch
@@ -140,11 +140,11 @@ struct TaskRankingTests {
 
     @Test("A recent unblock boosts within the window; an old one doesn't")
     func recentUnblock() {
-        let justFreed = score(TaskItem(title: "freed", status: .active, createdAt: now), 50)
+        let justFreed = score(TaskItem(title: "freed", status: .todo, createdAt: now), 50)
         justFreed.lastUnblockedAt = days(-1)  // inside the 48h window
-        let longAgo = score(TaskItem(title: "old", status: .active, createdAt: now), 50)
+        let longAgo = score(TaskItem(title: "old", status: .todo, createdAt: now), 50)
         longAgo.lastUnblockedAt = days(-5)  // outside — no boost
-        let peer = score(TaskItem(title: "peer", status: .active, createdAt: now), 50)
+        let peer = score(TaskItem(title: "peer", status: .todo, createdAt: now), 50)
         let all = [justFreed, longAgo, peer]
         #expect(precedes(justFreed, peer, among: all))
         #expect(precedes(justFreed, longAgo, among: all))
@@ -152,13 +152,13 @@ struct TaskRankingTests {
 
     @Test("currentRelevance clamps to ±25 in both directions")
     func relevanceClamp() {
-        let buried = TaskItem(title: "buried", status: .active, createdAt: days(-365))
+        let buried = TaskItem(title: "buried", status: .todo, createdAt: days(-365))
         buried.deferralCount = 20
         let down = TaskRanking.currentRelevance(
             for: buried, now: now, recentlyGainedDependent: false, neighborDueDates: [])
         #expect(down == -TaskRanking.relevanceClamp)
 
-        let hot = TaskItem(title: "hot", status: .active, createdAt: now)
+        let hot = TaskItem(title: "hot", status: .todo, createdAt: now)
         hot.lastUnblockedAt = now
         let up = TaskRanking.currentRelevance(
             for: hot, now: now, recentlyGainedDependent: true, neighborDueDates: [now])
@@ -169,15 +169,15 @@ struct TaskRankingTests {
     func passportScenario() {
         // Dormant 20 days: intrinsic importance stays high, relevance is deeply negative.
         let passport = score(
-            TaskItem(title: "Renew passport", status: .active, createdAt: days(-20)), 70)
-        let errand = score(TaskItem(title: "errand", status: .active, createdAt: now), 60)
+            TaskItem(title: "Renew passport", status: .todo, createdAt: days(-20)), 70)
+        let errand = score(TaskItem(title: "errand", status: .todo, createdAt: now), 60)
         // While dormant, the lower-importance errand outranks it (70 − 12 < 60).
         #expect(precedes(errand, passport, among: [passport, errand]))
 
         // Flights get booked: a near-due task now waits on the passport — a fresh
         // reverse edge (recently-gained dependent) plus a related deadline approaching.
         let flights = score(
-            TaskItem(title: "Book flights", status: .active, dueDate: days(2), createdAt: now), 40)
+            TaskItem(title: "Book flights", status: .todo, dueDate: days(2), createdAt: now), 40)
         flights.relationships = [
             Relationship(
                 kind: .blocks, targetID: passport.uuid!, note: nil, origin: .human, createdAt: days(-1))
@@ -191,7 +191,7 @@ struct TaskRankingTests {
 
     @Test("The comparator is a strict weak ordering over a shuffled adversarial set")
     func strictWeakOrdering() {
-        let blocker = score(TaskItem(title: "blocker", status: .active), 70)
+        let blocker = score(TaskItem(title: "blocker", status: .todo), 70)
         var tasks: [TaskItem] = [blocker]
         // Build a set exercising every component: decisions, blocked, DUPLICATE
         // scores (the tie path), blocking, overdue, dated/undated.
@@ -200,18 +200,18 @@ struct TaskRankingTests {
             tasks.append(
                 score(
                     TaskItem(
-                        title: "p\(i)", status: .active,
+                        title: "p\(i)", status: .todo,
                         dueDate: i.isMultiple(of: 2) ? days(Double(i - 2)) : nil,
                         isUrgent: i.isMultiple(of: 4),
                         createdAt: now), value))
             tasks.append(
                 score(
                     TaskItem(
-                        title: "d\(i)", status: .inbox, needsDecision: i.isMultiple(of: 2),
+                        title: "d\(i)", status: .todo, needsDecision: i.isMultiple(of: 2),
                         createdAt: now), value))
         }
         let blocked = score(
-            TaskItem(title: "blocked", status: .active, blockedBy: [blocker.uuid!], isUrgent: true), 90)
+            TaskItem(title: "blocked", status: .todo, blockedBy: [blocker.uuid!], isUrgent: true), 90)
         tasks.append(blocked)
 
         let keys = TaskRanking.rankKeys(for: tasks, now: now)
@@ -246,51 +246,57 @@ struct TaskRankingTests {
         "Band: needsDecision and overdue are critical; due today/tomorrow + urgent important; rest routine"
     )
     func bandAssignment() {
-        let decision = TaskItem(title: "d", status: .inbox, needsDecision: true)
+        let decision = TaskItem(title: "d", status: .todo, needsDecision: true)
         #expect(TaskRanking.band(for: decision, isBlocked: false, now: now) == .critical)
 
-        let overdue = TaskItem(title: "o", status: .active, dueDate: days(-1))
+        let overdue = TaskItem(title: "o", status: .todo, dueDate: days(-1))
         #expect(TaskRanking.band(for: overdue, isBlocked: false, now: now) == .critical)
 
-        let dueTomorrow = TaskItem(title: "t", status: .active, dueDate: days(1))
+        let dueTomorrow = TaskItem(title: "t", status: .todo, dueDate: days(1))
         #expect(TaskRanking.band(for: dueTomorrow, isBlocked: false, now: now) == .important)
 
-        let urgentUndated = TaskItem(title: "u", status: .active, isUrgent: true)
+        let urgentUndated = TaskItem(title: "u", status: .todo, isUrgent: true)
         #expect(TaskRanking.band(for: urgentUndated, isBlocked: false, now: now) == .important)
 
-        let routine = TaskItem(title: "r", status: .active)
+        let routine = TaskItem(title: "r", status: .todo)
         #expect(TaskRanking.band(for: routine, isBlocked: false, now: now) == .routine)
 
         // Blocked work can't demand today's attention (unless it needs a decision).
-        let blockedUrgent = TaskItem(title: "b", status: .active, isUrgent: true)
+        let blockedUrgent = TaskItem(title: "b", status: .todo, isUrgent: true)
         #expect(TaskRanking.band(for: blockedUrgent, isBlocked: true, now: now) == .routine)
 
         // Resolved tasks are always routine.
-        let resolved = TaskItem(title: "x", status: .active, dueDate: days(-3))
+        let resolved = TaskItem(title: "x", status: .todo, dueDate: days(-3))
         resolved.complete(now: now)
         #expect(TaskRanking.band(for: resolved, isBlocked: false, now: now) == .routine)
     }
 
     // MARK: - Quick wins
 
-    @Test("Quick win: small effort, active, unblocked, unowned-clear, no decision pending")
+    @Test("Quick win: small effort, live, unblocked, owned, no decision pending")
     func quickWinPredicate() {
-        let quick = TaskItem(title: "call mom", status: .active, effortMinutes: 15)
+        let me = UUID()
+        let quick = TaskItem(title: "call mom", status: .todo, ownerID: me, effortMinutes: 15)
         #expect(TaskRanking.isQuickWin(quick, isBlocked: false))
 
-        let big = TaskItem(title: "renovate", status: .active, effortMinutes: 120)
+        let big = TaskItem(title: "renovate", status: .todo, ownerID: me, effortMinutes: 120)
         #expect(!TaskRanking.isQuickWin(big, isBlocked: false))
 
-        let unestimated = TaskItem(title: "vague", status: .active)
+        let unestimated = TaskItem(title: "vague", status: .todo, ownerID: me)
         #expect(!TaskRanking.isQuickWin(unestimated, isBlocked: false))
 
         #expect(!TaskRanking.isQuickWin(quick, isBlocked: true))
 
-        let inbox = TaskItem(title: "new", status: .inbox, effortMinutes: 10)
-        #expect(!TaskRanking.isQuickWin(inbox, isBlocked: false))
+        // Resolved work is a record, never a quick win.
+        let done = TaskItem(title: "old", status: .done, ownerID: me, effortMinutes: 10)
+        #expect(!TaskRanking.isQuickWin(done, isBlocked: false))
+
+        // Handed back to the household: it is nobody's quick win until someone takes it.
+        let unowned = TaskItem(title: "up for grabs", status: .todo, effortMinutes: 10)
+        #expect(!TaskRanking.isQuickWin(unowned, isBlocked: false))
 
         let decision = TaskItem(
-            title: "decide", status: .active, needsDecision: true, effortMinutes: 10)
+            title: "decide", status: .todo, needsDecision: true, ownerID: me, effortMinutes: 10)
         #expect(!TaskRanking.isQuickWin(decision, isBlocked: false))
     }
 }

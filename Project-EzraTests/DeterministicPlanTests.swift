@@ -20,9 +20,9 @@ struct DeterministicPlanTests {
     private func days(_ n: Double) -> Date { now.addingTimeInterval(n * 24 * 3600) }
 
     private func request(typical: Int?) -> TodayPlanRequest {
-        let decision = TaskItem(title: "decide", status: .inbox, needsDecision: true)
-        let urgent = TaskItem(title: "urgent", status: .active, dueDate: days(-1), isUrgent: true)
-        let medium = TaskItem(title: "medium", status: .active, dueDate: now)
+        let decision = TaskItem(title: "decide", status: .todo, needsDecision: true)
+        let urgent = TaskItem(title: "urgent", status: .todo, dueDate: days(-1), isUrgent: true)
+        let medium = TaskItem(title: "medium", status: .todo, dueDate: now)
         let all = TaskRanking.sorted([medium, urgent, decision], now: now)
         return TodayPlanRequest.make(
             candidateItems: all, allTasks: all, recapCount: 0, typicalCompleted: typical, now: now)

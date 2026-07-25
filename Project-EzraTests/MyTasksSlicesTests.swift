@@ -21,14 +21,14 @@ struct MyTasksSlicesTests {
     @Test("assigned groups my tasks into display-status sections, in focus order")
     func assignedSections() {
         let me = UUID()
-        let ip = TaskItem(title: "ip", status: .active, stage: .inProgress, ownerID: me)
-        let todo = TaskItem(title: "todo", status: .active, stage: .todo, ownerID: me)
-        let backlog = TaskItem(title: "bl", status: .inbox, ownerID: me)  // inbox → Backlog
-        let notMine = TaskItem(title: "nm", status: .active, stage: .todo, ownerID: UUID())
+        let ip = TaskItem(title: "ip", status: .doing, ownerID: me)
+        let todo = TaskItem(title: "todo", status: .todo, ownerID: me)
+        let backlog = TaskItem(title: "bl", status: .todo, ownerID: me)  // inbox → Backlog
+        let notMine = TaskItem(title: "nm", status: .todo, ownerID: UUID())
         let tasks = [todo, backlog, ip, notMine]
 
         let sections = MyTasksSlices.assigned(tasks: tasks, currentUserID: me)
-        #expect(sections.map(\.status) == [.inProgress, .todo, .backlog])
+        #expect(sections.map(\.kind) == [.status(.doing), .status(.todo)])
         // The not-mine task never appears in any section.
         let allTitles = sections.flatMap { $0.entries }.compactMap { entry -> String? in
             if case .single(let t) = entry { return t.title }
@@ -40,14 +40,14 @@ struct MyTasksSlicesTests {
     @Test("a dependency chain sections once, by its anchor's display status")
     func chainSectionsByAnchor() {
         let me = UUID()
-        let root = TaskItem(title: "root", status: .active, stage: .inProgress, ownerID: me)
+        let root = TaskItem(title: "root", status: .doing, ownerID: me)
         let dep = TaskItem(
-            title: "dep", status: .active, stage: .todo, blockedBy: [root.uuid!], ownerID: me)
+            title: "dep", status: .todo, blockedBy: [root.uuid!], ownerID: me)
         let sections = MyTasksSlices.assigned(tasks: [root, dep], currentUserID: me)
 
         // A single chain entry, sectioned under the anchor (root) — In Progress.
         #expect(sections.count == 1)
-        #expect(sections[0].status == .inProgress)
+        #expect(sections[0].kind == .status(.doing))
         guard case .chain = sections[0].entries[0] else {
             Issue.record("expected a chain entry")
             return
@@ -57,11 +57,11 @@ struct MyTasksSlicesTests {
     @Test("Needs Decision floats to the top within its section")
     func needsDecisionFloatsInSection() {
         let me = UUID()
-        let plain = TaskItem(title: "plain", status: .active, stage: .todo, ownerID: me)
+        let plain = TaskItem(title: "plain", status: .todo, ownerID: me)
         let decide = TaskItem(
-            title: "decide", status: .active, stage: .todo, needsDecision: true, ownerID: me)
+            title: "decide", status: .todo, needsDecision: true, ownerID: me)
         let sections = MyTasksSlices.assigned(tasks: [plain, decide], currentUserID: me)
-        let todoSection = try? #require(sections.first { $0.status == .todo })
+        let todoSection = try? #require(sections.first { $0.kind == .status(.todo) })
         guard case .single(let first)? = todoSection?.entries.first else {
             Issue.record("expected a single row")
             return
@@ -75,10 +75,10 @@ struct MyTasksSlicesTests {
     func createdOrdering() {
         let me = UUID()
         let old = TaskItem(
-            title: "old", status: .active, creatorID: me,
+            title: "old", status: .todo, creatorID: me,
             createdAt: Date(timeIntervalSinceNow: -1000))
         let recent = TaskItem(title: "new", status: .done, creatorID: me, createdAt: Date())
-        let notMine = TaskItem(title: "nm", status: .active, creatorID: UUID(), createdAt: Date())
+        let notMine = TaskItem(title: "nm", status: .todo, creatorID: UUID(), createdAt: Date())
         let result = MyTasksSlices.created(tasks: [old, recent, notMine], currentUserID: me)
         #expect(result.map(\.title) == ["new", "old"])
     }
@@ -87,10 +87,10 @@ struct MyTasksSlicesTests {
     func createdEntriesOrdering() {
         let me = UUID()
         let old = TaskItem(
-            title: "old", status: .active, creatorID: me,
+            title: "old", status: .todo, creatorID: me,
             createdAt: Date(timeIntervalSinceNow: -1000))
         let recent = TaskItem(title: "new", status: .done, creatorID: me, createdAt: Date())
-        let notMine = TaskItem(title: "nm", status: .active, creatorID: UUID(), createdAt: Date())
+        let notMine = TaskItem(title: "nm", status: .todo, creatorID: UUID(), createdAt: Date())
         let entries = MyTasksSlices.createdEntries(tasks: [old, recent, notMine], currentUserID: me)
         #expect(entries.map { $0.anchor.title } == ["new", "old"])
     }
@@ -98,9 +98,9 @@ struct MyTasksSlicesTests {
     @Test("createdEntries stacks a dependency chain into a single entry")
     func createdEntriesChains() {
         let me = UUID()
-        let root = TaskItem(title: "root", status: .active, creatorID: me, createdAt: Date())
+        let root = TaskItem(title: "root", status: .todo, creatorID: me, createdAt: Date())
         let dep = TaskItem(
-            title: "dep", status: .active, creatorID: me, blockedBy: [root.uuid!], createdAt: Date())
+            title: "dep", status: .todo, creatorID: me, blockedBy: [root.uuid!], createdAt: Date())
         let entries = MyTasksSlices.createdEntries(tasks: [root, dep], currentUserID: me)
         #expect(entries.count == 1)
         guard case .chain = entries[0] else {
@@ -112,10 +112,10 @@ struct MyTasksSlicesTests {
     @Test("created ignores a task with no author (nil creatorID never matches)")
     func createdIgnoresUnauthored() {
         let me = UUID()
-        let orphan = TaskItem(title: "orphan", status: .active)  // creatorID nil
+        let orphan = TaskItem(title: "orphan", status: .todo)  // creatorID nil
         #expect(MyTasksSlices.created(tasks: [orphan], currentUserID: me).isEmpty)
         // …and a nil current user never matches an authored task either.
-        let mine = TaskItem(title: "mine", status: .active, creatorID: me)
+        let mine = TaskItem(title: "mine", status: .todo, creatorID: me)
         #expect(MyTasksSlices.created(tasks: [mine], currentUserID: nil).isEmpty)
     }
 
@@ -123,7 +123,7 @@ struct MyTasksSlicesTests {
 
     @Test("applyFilters narrows by display status and category")
     func filters() {
-        let work = TaskItem(title: "w", category: "Work", status: .active, stage: .todo)
+        let work = TaskItem(title: "w", category: "Work", status: .todo)
         #expect(MyTasksSlices.applyFilters(work, status: .todo, category: "Work"))
         #expect(!MyTasksSlices.applyFilters(work, status: .done, category: nil))
         #expect(!MyTasksSlices.applyFilters(work, status: nil, category: "Home"))
@@ -133,11 +133,11 @@ struct MyTasksSlicesTests {
     @Test("a Done filter surfaces the Done ledger (the retired Completed slice's job)")
     func assignedDoneFilter() {
         let me = UUID()
-        let active = TaskItem(title: "a", status: .active, stage: .todo, ownerID: me)
-        let done = TaskItem(title: "d", status: .active, ownerID: me)
+        let active = TaskItem(title: "a", status: .todo, ownerID: me)
+        let done = TaskItem(title: "d", status: .todo, ownerID: me)
         done.complete()
         let sections = MyTasksSlices.assigned(tasks: [active, done], currentUserID: me, status: .done)
-        #expect(sections.map(\.status) == [.done])
+        #expect(sections.map(\.kind) == [.status(.done)])
         #expect(sections[0].entries.count == 1)
     }
 
@@ -146,22 +146,42 @@ struct MyTasksSlicesTests {
     @Test("flatten walks sections top-to-bottom, entries in place")
     func peersFollowSectionOrder() {
         let me = UUID()
-        let ip = TaskItem(title: "ip", status: .active, stage: .inProgress, ownerID: me)
-        let todo = TaskItem(title: "todo", status: .active, stage: .todo, ownerID: me)
-        let backlog = TaskItem(title: "bl", status: .inbox, ownerID: me)
-        let sections = MyTasksSlices.assigned(tasks: [todo, backlog, ip], currentUserID: me)
+        let ip = TaskItem(title: "ip", status: .doing, ownerID: me)
+        let todo = TaskItem(title: "todo", status: .todo, ownerID: me)
+        let done = TaskItem(title: "done", status: .doing, ownerID: me)
+        done.complete()
+        let sections = MyTasksSlices.assigned(tasks: [done, todo, ip], currentUserID: me)
 
-        // Same order the eye reads: In Progress → Todo → Backlog.
-        #expect(TaskDetailPeers.flatten(sections).map(\.title) == ["ip", "todo", "bl"])
+        // Same order the eye reads: In Progress → Todo → Done.
+        #expect(TaskDetailPeers.flatten(sections).map(\.title) == ["ip", "todo", "done"])
+    }
+
+    @Test("A LIVE reference item gets its own section, never Todo")
+    func referenceSectionsSeparately() {
+        let me = UUID()
+        let todo = TaskItem(title: "todo", status: .todo, ownerID: me)
+        let note = TaskItem(title: "wifi password", status: .todo, ownerID: me)
+        note.workIntent = .reference
+
+        let sections = MyTasksSlices.assigned(tasks: [todo, note], currentUserID: me)
+        // Filing a saved password under "Todo" would claim it is queued work. It is
+        // not — and the separate section is the seam a future knowledge/execution
+        // split would cut along.
+        #expect(sections.map(\.kind) == [.status(.todo), .reference])
+
+        // Once RESOLVED it really is a resolution record, so it files normally.
+        note.complete()
+        let after = MyTasksSlices.assigned(tasks: [todo, note], currentUserID: me)
+        #expect(after.map(\.kind) == [.status(.todo), .status(.done)])
     }
 
     @Test("flatten unrolls a chain stack root-first, where the stack sits")
     func peersUnrollChains() {
         let me = UUID()
-        let root = TaskItem(title: "root", status: .active, stage: .todo, ownerID: me)
+        let root = TaskItem(title: "root", status: .todo, ownerID: me)
         let dep = TaskItem(
-            title: "dep", status: .active, stage: .todo, blockedBy: [root.uuid!], ownerID: me)
-        let loose = TaskItem(title: "loose", status: .active, stage: .todo, ownerID: me)
+            title: "dep", status: .todo, blockedBy: [root.uuid!], ownerID: me)
+        let loose = TaskItem(title: "loose", status: .todo, ownerID: me)
         let sections = MyTasksSlices.assigned(tasks: [root, dep, loose], currentUserID: me)
         let peers = TaskDetailPeers.flatten(sections)
 
@@ -177,8 +197,8 @@ struct MyTasksSlicesTests {
     func peersFollowCreatedOrder() {
         let me = UUID()
         let old = TaskItem(
-            title: "old", status: .active, creatorID: me, createdAt: Date(timeIntervalSinceNow: -1000))
-        let recent = TaskItem(title: "new", status: .active, creatorID: me, createdAt: Date())
+            title: "old", status: .todo, creatorID: me, createdAt: Date(timeIntervalSinceNow: -1000))
+        let recent = TaskItem(title: "new", status: .todo, creatorID: me, createdAt: Date())
         let entries = MyTasksSlices.createdEntries(tasks: [old, recent], currentUserID: me)
         #expect(TaskDetailPeers.flatten(entries).map(\.title) == ["new", "old"])
     }

@@ -88,8 +88,11 @@ struct DetailActivityTimeline: View {
                     isAI: entry.initiatedBy == .ai,
                     actorID: entry.actorID,
                     undone: entry.undone,
-                    canUndo: entry.action == ChangeLogEntry.editedAction && entry.isReversible
-                        && !entry.undone))
+                    // Anything the change log marked reversible can be undone from the
+                    // task’s own trail. This used to be gated to field edits only, which
+                    // left a reassignment undoable from the Inbox but not from the task
+                    // it happened to. `ChangeLogUndo.revert` already handles every verb.
+                    canUndo: entry.isReversible && !entry.undone))
         }
         return models
     }

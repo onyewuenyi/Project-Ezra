@@ -107,7 +107,6 @@ struct IntentResolverTests {
             effortMinutes: 30
         )
         let draft = IntentResolver.resolve(intent, now: wednesday)
-        #expect(draft.proposedStatus == .inbox)
         #expect(draft.title == "Book flights")
         #expect(draft.dueDate == day(17))
         #expect(draft.ownerName == "Sarah")

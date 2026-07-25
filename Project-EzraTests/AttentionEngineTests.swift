@@ -20,14 +20,14 @@ struct AttentionEngineTests {
 
     @Test("An unscored task reads the neutral default (35, no contributors)")
     func neutralDefault() {
-        let task = TaskItem(title: "plain", status: .active)
+        let task = TaskItem(title: "plain", status: .todo)
         #expect(task.attention == .neutral)
         #expect(task.attention.score == 35)
     }
 
     @Test("Composition sums base + urgent + importance + effort shape")
     func composition() {
-        let task = TaskItem(title: "x", status: .active, isUrgent: true, effortMinutes: 10)
+        let task = TaskItem(title: "x", status: .todo, isUrgent: true, effortMinutes: 10)
         let meta = AttentionEngine.metadata(for: task, among: [task], aiImportance: 0.5, now: now)
         // 35 base + 30 urgent + round(0.5×20)=10 + 5 quick-win effort = 80.
         #expect(meta.score == 80)
@@ -39,7 +39,7 @@ struct AttentionEngineTests {
     @Test("Effort shape: ≤15m earns +5, ≤60m earns +2, larger earns nothing")
     func effortBands() {
         func score(_ minutes: Int) -> Double {
-            let t = TaskItem(title: "e", status: .active, effortMinutes: minutes)
+            let t = TaskItem(title: "e", status: .todo, effortMinutes: minutes)
             return AttentionEngine.metadata(for: t, among: [t], aiImportance: nil, now: now).score
         }
         #expect(score(15) == 40)  // 35 + 5
@@ -49,10 +49,10 @@ struct AttentionEngineTests {
 
     @Test("The score clamps to 0…100 even when every contributor fires")
     func clampsToHundred() {
-        let target = TaskItem(title: "hub", status: .active, isUrgent: true, effortMinutes: 5)
+        let target = TaskItem(title: "hub", status: .todo, isUrgent: true, effortMinutes: 5)
         // Four open dependents → centrality caps at +18 (three), not +24.
         let deps = (0..<4).map {
-            TaskItem(title: "d\($0)", status: .active, blockedBy: [target.uuid!])
+            TaskItem(title: "d\($0)", status: .todo, blockedBy: [target.uuid!])
         }
         let all = [target] + deps
         let meta = AttentionEngine.metadata(for: target, among: all, aiImportance: 1.0, now: now)
@@ -63,9 +63,9 @@ struct AttentionEngineTests {
 
     @Test("Graph centrality is +6 per open direct dependent")
     func centralityPerDependent() {
-        let target = TaskItem(title: "hub", status: .active)
-        let d1 = TaskItem(title: "d1", status: .active, blockedBy: [target.uuid!])
-        let d2 = TaskItem(title: "d2", status: .active, blockedBy: [target.uuid!])
+        let target = TaskItem(title: "hub", status: .todo)
+        let d1 = TaskItem(title: "d1", status: .todo, blockedBy: [target.uuid!])
+        let d2 = TaskItem(title: "d2", status: .todo, blockedBy: [target.uuid!])
         let all = [target, d1, d2]
         let meta = AttentionEngine.metadata(for: target, among: all, aiImportance: nil, now: now)
         #expect(meta.score == 35 + 12)
@@ -77,7 +77,7 @@ struct AttentionEngineTests {
 
     @Test("AI importance is carried forward when a fresh estimate isn't supplied")
     func importanceCarryForward() {
-        let task = TaskItem(title: "x", status: .active)
+        let task = TaskItem(title: "x", status: .todo)
         task.attention = AttentionEngine.metadata(for: task, among: [task], aiImportance: 0.6, now: now)
         #expect(task.attention.carriedImportance == 0.6)
         // A later recompute with no importance keeps the earlier contribution.
@@ -88,7 +88,7 @@ struct AttentionEngineTests {
 
     @Test("The score never reads a fast-moving fact — flipping overdue/blocked leaves it identical")
     func fastFactsAbsent() {
-        let task = TaskItem(title: "x", status: .active, isUrgent: true, effortMinutes: 30)
+        let task = TaskItem(title: "x", status: .todo, isUrgent: true, effortMinutes: 30)
         let before = AttentionEngine.metadata(for: task, among: [task], aiImportance: 0.4, now: now)
 
         // Make it overdue and blocked — neither is an attention input.

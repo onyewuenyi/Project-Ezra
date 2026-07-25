@@ -52,6 +52,9 @@ final class TodaySequenceModel {
     private var allTasks: [TaskItem] = []
     private var capacityLogs: [CapacityLog] = []
     private var context: NSManagedObjectContext?
+    /// The device’s linked member id. Only consulted once `HouseholdSync.isLive` — see
+    /// `candidateTasks` for why the ownership filter must not run before sync exists.
+    private var currentUserID: UUID?
 
     /// The stale-generation guard (checked before and after each await).
     private var generation = 0
@@ -67,9 +70,13 @@ final class TodaySequenceModel {
     /// Enter the surface: reconcile yesterday's plan into a CapacityLog, compute the
     /// Recap, then either rest on today's cached briefing or begin a fresh sequence
     /// (Recap cover + background generation).
-    func start(tasks: [TaskItem], logs: [CapacityLog], context: NSManagedObjectContext) {
+    func start(
+        tasks: [TaskItem], logs: [CapacityLog], currentUserID: UUID? = nil,
+        context: NSManagedObjectContext
+    ) {
         self.allTasks = tasks
         self.capacityLogs = logs
+        self.currentUserID = currentUserID
         self.context = context
 
         store.reconcileIfNeeded(context: context, tasks: tasks, now: now)
@@ -178,12 +185,20 @@ final class TodaySequenceModel {
 
     /// Persist the final briefing and advance the recap high-water mark. Also stamps
     /// `lastSurfacedAt` on every planned task — the fact the next rollover's deferral
-    /// discriminator compares the human clock against (re-stamping on a same-day
-    /// replan/upgrade is harmless: same day, same comparison).
+    /// discriminator compares the human clock against.
+    ///
+    /// FIRST surfacing of the day wins: a same-day replan/upgrade must NOT re-stamp, or a
+    /// task the user actively worked at 10am would look surfaced-at-2pm and, since the
+    /// human touch now predates the stamp, be miscounted as *deferred* at the next rollover
+    /// (the inverted signal). (TODO: a task the replan DROPS from the plan escapes deferral
+    /// counting entirely — a known gap that awaits the deferred replan-mechanism design.)
     private func finalize() {
         guard let plan else { return }
         let planned = Set(plan.actions.map(\.taskID))
         for task in allTasks where task.uuid.map(planned.contains) ?? false {
+            if let surfaced = task.lastSurfacedAt, Calendar.current.isDate(surfaced, inSameDayAs: now) {
+                continue
+            }
             task.lastSurfacedAt = now
         }
         try? context?.save()
@@ -203,11 +218,24 @@ final class TodaySequenceModel {
             recapCount: recap.count, typicalCompleted: typical, now: now)
     }
 
-    /// The advisor's candidate set: open, actionable work plus open decisions, in
-    /// `TaskRanking` order (so the most important land in the capped candidate list).
+    /// The advisor's candidate set: my live work plus open decisions, in `TaskRanking`
+    /// order (so the most important land in the capped candidate list).
+    ///
+    /// Two exclusions, both deliberate:
+    ///
+    /// - **`countsAsWorkload`** drops reference items. A saved wifi password is owned
+    ///   and live but never resolves, so it would sit in the briefing forever.
+    /// - **Ownership, but only once sync is live.** Today is *my* execution and
+    ///   Household is *our* coordination, so work owned by someone else does not
+    ///   belong here. That filter is gated on `HouseholdSync.isLive` because without
+    ///   sync the other person has no device in the graph: applying it now would let a
+    ///   task leave your briefing and land nowhere anyone can act on it. Single-device
+    ///   installs therefore keep everything, exactly as before.
     private func candidateTasks(from tasks: [TaskItem]) -> [TaskItem] {
         let open = tasks.filter {
-            !$0.status.isResolved && ($0.status == .active || $0.needsDecision)
+            ($0.status.isLive || ($0.needsDecision && !$0.status.isResolved))
+                && $0.countsAsWorkload
+                && (!HouseholdSync.isLive || $0.isMine(currentUserID: currentUserID))
         }
         return TaskRanking.sorted(open, among: tasks, now: now)
     }

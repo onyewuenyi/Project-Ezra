@@ -47,6 +47,7 @@ struct ConfirmCreationCard: View {
     /// "who does this belong to" needs real people to pick from.
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
     private var familyMembers: [FamilyMember] { Array(familyMembersResults) }
+    @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
 
     /// Low confidence is a VISUAL state, never a queue: the candidate appears
     /// immediately, dimmed with a quiet question mark, and resolves (undims) if
@@ -84,7 +85,7 @@ struct ConfirmCreationCard: View {
                 .accessibilityLabel("Remove \(draft.title)")
             }
 
-            chipRow
+            chipRowWithRationale
 
             // The one visible flag, present from birth: a judgment call announces
             // itself on the card, not after some later triage pass.
@@ -134,6 +135,16 @@ struct ConfirmCreationCard: View {
                 }
                 .opacity(mergeAccepted ? 0.4 : 1)
             }
+        }
+    }
+
+    /// The chip row plus the owner rationale beneath it, so "why Maya?" is answerable
+    /// without tapping anything — the guardrails' "every AI decision is explainable" clause
+    /// at the one moment the decision is still cheap to change.
+    private var chipRowWithRationale: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            chipRow
+            ownerReasonLine
         }
     }
 
@@ -257,23 +268,33 @@ struct ConfirmCreationCard: View {
         .accessibilityLabel(draft.dueDate == nil ? "Add due date" : "Due date")
     }
 
-    // Ownership is always visible — "You" is a value, not an empty state. Inferred
-    // delegation wears the ✦ "assumed" marker; the menu offers the real roster.
+    // Ownership is always visible — "You" is a value, not an empty state.
+    //
+    // Two rules the AI's involvement imposes here:
+    //
+    // 1. The ✦ "assumed" mark keys off `ownerReason`, NOT off "the owner isn't you".
+    //    The proposer leaves the reason nil for its default-to-capturer rung, which
+    //    catches most captures — marking that as an inference would claim the AI
+    //    worked something out when it didn't, which is worse for trust than the
+    //    abstention this replaced.
+    // 2. This is the last moment to catch a wrong owner, and it is the only field on
+    //    the card with a social consequence, so it renders at the STANDARD chip's 44pt
+    //    tap target rather than the dense compact one the neighbours use.
+    //
+    // No directional arrow yet. `→ Aisha` reads as transmission, and nothing is
+    // transmitted until sync — it ships with delivery, not before.
     private var ownerChip: some View {
         Menu {
             Button("You") { draft.ownerName = nil }
-            if !familyMembers.isEmpty {
+            if !otherMembers.isEmpty {
                 Divider()
-                ForEach(
-                    familyMembers.filter { !$0.isRemoved }
-                        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                ) { member in
+                ForEach(otherMembers) { member in
                     Button(member.name) { draft.ownerName = member.name }
                 }
             }
         } label: {
-            pill {
-                if draft.ownerName != nil { assumedMark }
+            MetadataChip(density: draft.ownerName == nil ? .compact : .standard) {
+                if draft.ownerReason != nil { assumedMark }
                 OwnerAvatarBadge(
                     name: draft.ownerName ?? "Me", isMe: draft.ownerName == nil, size: 16)
                 Text(draft.ownerName ?? "You")
@@ -281,7 +302,30 @@ struct ConfirmCreationCard: View {
             }
             .foregroundStyle(draft.ownerName == nil ? Palette.mutedText : Palette.secondaryText)
         }
-        .accessibilityLabel("Owner, \(draft.ownerName ?? "you")")
+        .accessibilityLabel(
+            "Owner, \(draft.ownerName ?? "you")\(draft.ownerReason != nil ? ", assumed" : "")")
+    }
+
+    /// The delegatable roster — everyone but the current user, who is already the
+    /// explicit "You" entry above. (This used to list the whole roster, so on an
+    /// install where the user is a named member they appeared twice.)
+    private var otherMembers: [FamilyMember] {
+        let me = profiles.first?.linkedMemberID
+        return
+            familyMembers
+            .filter { !$0.isRemoved && $0.uuid != me }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Why the AI chose this owner, in one line. Only ever present for a real
+    /// inference — never for the default-to-you rung.
+    @ViewBuilder private var ownerReasonLine: some View {
+        if let reason = draft.ownerReason {
+            Text(reason)
+                .font(.chipLabel)
+                .foregroundStyle(Palette.mutedText)
+                .lineLimit(2)
+        }
     }
 
     // The reverse dependency: an existing task the AI thinks should wait on this
@@ -407,12 +451,11 @@ struct ConfirmCreationCard: View {
 #Preview {
     @Previewable @State var drafts = [
         TaskDraft(
-            title: "Renew passport", category: "Travel", proposedStatus: .inbox, confidence: 0.85,
+            title: "Renew passport", category: "Travel", confidence: 0.85,
             autonomy: .silent, isJudgmentCall: false, reasoning: "Filed under Travel.", dueDate: nil,
             effortMinutes: 30),
         TaskDraft(
-            title: "Should I quit the gym", category: "Health", proposedStatus: .inbox,
-            confidence: 0.4,
+            title: "Should I quit the gym", category: "Health", confidence: 0.4,
             autonomy: .ask, isJudgmentCall: true, reasoning: "Your call to make.", dueDate: nil),
     ]
 

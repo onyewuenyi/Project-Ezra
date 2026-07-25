@@ -29,15 +29,15 @@ enum SampleFlowFixtures {
         // "heldCount". Four silent-filed Ready tasks here means at least one is always
         // held back, so the footnote has something to report.
         let dryCleaning = TaskItem(
-            title: "Pick up dry cleaning", category: "Errands", status: .active, confidence: 0.9,
+            title: "Pick up dry cleaning", category: "Errands", status: .todo, confidence: 0.9,
             reasoning: "Filed under Errands from the wording.",
             dueDate: now.addingTimeInterval(1 * day), createdAt: now, in: context)
         let expenseReport = TaskItem(
-            title: "Submit expense report", category: "Work", status: .active, confidence: 0.85,
+            title: "Submit expense report", category: "Work", status: .todo, confidence: 0.85,
             reasoning: "Filed under Work from the wording.",
             dueDate: now.addingTimeInterval(2 * day), createdAt: now, in: context)
         let registration = TaskItem(
-            title: "Renew car registration", category: "Car", status: .active, confidence: 0.82,
+            title: "Renew car registration", category: "Car", status: .todo, confidence: 0.82,
             reasoning: "Filed under Car from the wording.",
             dueDate: now.addingTimeInterval(5 * day), createdAt: now, in: context)
         // Confidence 0.7 is the suggest band (0.5..<0.8), so the AI didn't file it
@@ -45,12 +45,12 @@ enum SampleFlowFixtures {
         // card shows an "AI suggestion — Accept" affordance. High priority also
         // demonstrates focusOrder once it's accepted: rank beats a sooner due date.
         let birthdayGift = TaskItem(
-            title: "Buy birthday gift for Sam", category: "Personal", status: .inbox,
+            title: "Buy birthday gift for Sam", category: "Personal", status: .todo,
             confidence: 0.7,
             reasoning: "Medium confidence — worth a quick confirm before filing.",
             dueDate: now.addingTimeInterval(3 * day), createdAt: now, in: context)
         let waterPlants = TaskItem(
-            title: "Water the plants", category: "Home", status: .active, confidence: 0.9,
+            title: "Water the plants", category: "Home", status: .todo, confidence: 0.9,
             reasoning: "Filed under Home from the wording.", createdAt: now, in: context)
 
         for task in [dryCleaning, expenseReport, registration, waterPlants] {
@@ -65,7 +65,7 @@ enum SampleFlowFixtures {
         // shows its owner chip in Runs. Neither logs a trail entry, so the doc's
         // "AI handled 7" footnote stays exact.
         let waterBill = TaskItem(
-            title: "Pay the water bill", category: "Finance", status: .active, confidence: 0.9,
+            title: "Pay the water bill", category: "Finance", status: .todo, confidence: 0.9,
             reasoning: "Filed under Finance; the wording said urgent.",
             dueDate: now.addingTimeInterval(-1 * day), isUrgent: true, effortMinutes: 15,
             createdAt: now, in: context)
@@ -108,7 +108,7 @@ enum SampleFlowFixtures {
         profile.linkedMemberID = you.uuid
 
         let offsiteVenue = TaskItem(
-            title: "Book venue for the offsite", category: "Work", status: .active, confidence: 0.85,
+            title: "Book venue for the offsite", category: "Work", status: .todo, confidence: 0.85,
             reasoning: "Sounds like Maya's to handle — kept off your Today.",
             ownerID: maya.uuid, effortMinutes: 30, createdAt: now, in: context)
         context.insert(waterBill)
@@ -120,11 +120,11 @@ enum SampleFlowFixtures {
         // and plain low confidence (< 0.5, not a judgment call).
         let judgmentCall = TaskItem(
             title: "Figure out if the side project is still worth it", category: "Personal",
-            status: .inbox, confidence: 0.85, isJudgmentCall: true, needsDecision: true,
+            status: .todo, confidence: 0.85, isJudgmentCall: true, needsDecision: true,
             reasoning: "This is a personal judgment call, so it's yours to make.", createdAt: now, in: context
         )
         let lowConfidence = TaskItem(
-            title: "Deal with the thing from last week", category: "Admin", status: .inbox,
+            title: "Deal with the thing from last week", category: "Admin", status: .todo,
             confidence: 0.3, needsDecision: true,
             reasoning: "Not enough detail to categorize confidently.",
             createdAt: now, in: context)
@@ -143,26 +143,26 @@ enum SampleFlowFixtures {
         // stale data exists.
         let staleSubscription = TaskItem(
             title: "Cancel unused streaming subscription", category: "Finance",
-            status: .inbox, confidence: 0.9, isJudgmentCall: true, needsDecision: true,
+            status: .todo, confidence: 0.9, isJudgmentCall: true, needsDecision: true,
             reasoning: "This is a personal judgment call, so it's yours to make.",
             createdAt: now.addingTimeInterval(-21 * day), in: context)
         let staleFaucet = TaskItem(
-            title: "Fix the leaky faucet", category: "Home", status: .active, confidence: 0.8,
+            title: "Fix the leaky faucet", category: "Home", status: .todo, confidence: 0.8,
             reasoning: "Filed under Home from the wording.",
             createdAt: now.addingTimeInterval(-15 * day), in: context)
         let staleClient = TaskItem(
-            title: "Follow up with old client", category: "Work", status: .inbox,
+            title: "Follow up with old client", category: "Work", status: .todo,
             confidence: 0.35, needsDecision: true,
             reasoning: "Not enough detail to categorize confidently.",
             createdAt: now.addingTimeInterval(-10 * day), in: context)
         let staleDonate = TaskItem(
-            title: "Donate old clothes", category: "Home", status: .active, confidence: 0.75,
+            title: "Donate old clothes", category: "Home", status: .todo, confidence: 0.75,
             reasoning: "Medium confidence — worth a quick confirm before filing.",
             createdAt: now.addingTimeInterval(-30 * day), in: context)
         // Ancient: still just a normal Active item, but old enough to show
         // genuinely long-buried rot, not just fresh-past-threshold cases.
         let staleGarage = TaskItem(
-            title: "Reorganize the garage", category: "Home", status: .active, confidence: 0.65,
+            title: "Reorganize the garage", category: "Home", status: .todo, confidence: 0.65,
             reasoning: "Medium confidence — worth a quick confirm before filing.",
             createdAt: now.addingTimeInterval(-60 * day), in: context)
         // Permanently stuck on an *external* blocker — it waits on the contractor
@@ -171,7 +171,7 @@ enum SampleFlowFixtures {
         // blocker just makes it *read* as Blocked (blocked is an assessment, not a
         // lane, and can never be set directly).
         let staleContractorQuote = TaskItem(
-            title: "Get a quote from the contractor", category: "Home", status: .active,
+            title: "Get a quote from the contractor", category: "Home", status: .todo,
             confidence: 0.6,
             reasoning: "Waiting on the contractor to call back.",
             createdAt: now.addingTimeInterval(-18 * day), in: context)
@@ -181,7 +181,7 @@ enum SampleFlowFixtures {
         // check the cutoff renders correctly rather than only testing comfortably-
         // stale items.
         let staleDentist = TaskItem(
-            title: "Schedule the dentist", category: "Health", status: .active, confidence: 0.8,
+            title: "Schedule the dentist", category: "Health", status: .todo, confidence: 0.8,
             reasoning: "Filed under Health from the wording.",
             createdAt: now.addingTimeInterval(-8 * day), in: context)
         for task in [
@@ -197,14 +197,14 @@ enum SampleFlowFixtures {
         // Plus a two-blocker task ("Apply for visa") waiting on BOTH passport and
         // flights, to prove a task stays blocked until *all* its blockers clear.
         let passport = TaskItem(
-            title: "Renew passport", category: "Travel", status: .active, confidence: 0.9,
+            title: "Renew passport", category: "Travel", status: .todo, confidence: 0.9,
             reasoning: "Filed under Travel from the wording.", createdAt: now, in: context)
         let flights = TaskItem(
-            title: "Book flights for the trip", category: "Travel", status: .active, confidence: 0.8,
+            title: "Book flights for the trip", category: "Travel", status: .todo, confidence: 0.8,
             reasoning: "Looks like it depends on something else finishing first.",
             blockedBy: [passport.uuid].compactMap { $0 }, createdAt: now, in: context)
         let timeOff = TaskItem(
-            title: "Request time off work", category: "Work", status: .active, confidence: 0.8,
+            title: "Request time off work", category: "Work", status: .todo, confidence: 0.8,
             reasoning: "Looks like it depends on something else finishing first.",
             blockedBy: [flights.uuid].compactMap { $0 }, createdAt: now, in: context)
         for task in [passport, flights, timeOff] {
@@ -213,7 +213,7 @@ enum SampleFlowFixtures {
         }
         // Waits on two things at once; no trail entry so the "AI handled 7" count holds.
         let visa = TaskItem(
-            title: "Apply for travel visa", category: "Travel", status: .active, confidence: 0.8,
+            title: "Apply for travel visa", category: "Travel", status: .todo, confidence: 0.8,
             reasoning: "Needs both the passport and booked flights first.",
             blockedBy: [passport.uuid, flights.uuid].compactMap { $0 }, createdAt: now, in: context)
         context.insert(visa)
@@ -224,10 +224,10 @@ enum SampleFlowFixtures {
         // vocabulary keeps the fixture readable too. Proves the Tasks screen renders
         // two separate stacks, not one. No trail entries, so "AI handled 7" holds.
         let movers = TaskItem(
-            title: "Schedule the movers", category: "Home", status: .active, confidence: 0.85,
+            title: "Schedule the movers", category: "Home", status: .todo, confidence: 0.85,
             reasoning: "Filed under Home from the wording.", createdAt: now, in: context)
         let mailingAddress = TaskItem(
-            title: "Change our mailing address", category: "Admin", status: .active, confidence: 0.8,
+            title: "Change our mailing address", category: "Admin", status: .todo, confidence: 0.8,
             reasoning: "Looks like it depends on something else finishing first.",
             blockedBy: [movers.uuid].compactMap { $0 }, createdAt: now, in: context)
         context.insert(movers)
@@ -238,12 +238,12 @@ enum SampleFlowFixtures {
         // to switch between and each delegated card shows a distinct photo. No trail
         // entries, same reason as Maya's task above.
         let reunionCaterer = TaskItem(
-            title: "Confirm caterer for the reunion", category: "Family", status: .active, confidence: 0.85,
+            title: "Confirm caterer for the reunion", category: "Family", status: .todo, confidence: 0.85,
             reasoning: "Sounds like Ezra's to handle — kept off your Today.",
             ownerID: ezra.uuid, effortMinutes: 30, createdAt: now, in: context)
         context.insert(reunionCaterer)
         let soccerKit = TaskItem(
-            title: "Pack the soccer kit", category: "Family", status: .active, confidence: 0.85,
+            title: "Pack the soccer kit", category: "Family", status: .todo, confidence: 0.85,
             reasoning: "Sounds like Nehemiah's to handle — kept off your Today.",
             ownerID: nehemiah.uuid, effortMinutes: 10, createdAt: now, in: context)
         context.insert(soccerKit)
@@ -252,12 +252,12 @@ enum SampleFlowFixtures {
         // trail entries — delegated work, like the member tasks above — so the
         // "AI handled 7" count on Now is untouched.
         let mayaOverdue = TaskItem(
-            title: "Renew the car insurance", category: "Finance", status: .active, confidence: 0.85,
+            title: "Renew the car insurance", category: "Finance", status: .todo, confidence: 0.85,
             reasoning: "Sounds like Maya's to handle — kept off your Today.",
             dueDate: now.addingTimeInterval(-2 * day), ownerID: maya.uuid,
             effortMinutes: 20, createdAt: now, in: context)
         let mayaBlocked = TaskItem(
-            title: "Schedule the kitchen remodel", category: "Home", status: .active, confidence: 0.8,
+            title: "Schedule the kitchen remodel", category: "Home", status: .todo, confidence: 0.8,
             reasoning: "Sounds like Maya's to handle — kept off your Today.",
             ownerID: maya.uuid, effortMinutes: 30, createdAt: now, in: context)
         mayaBlocked.addExternalBlocker("the plumber to confirm", among: [mayaBlocked])
@@ -265,38 +265,35 @@ enum SampleFlowFixtures {
         context.insert(mayaBlocked)
 
         // MARK: Flow 9 — Status/flag signals (Up for Grabs / blocked-while-active)
-        // "Up for Grabs" is a flag, not a status: this task is Active, and
-        // `ownerPending` makes it read as unowned (a "That's mine" action on its
-        // card). The household already has Maya, Ezra, and Nehemiah (above), so
-        // "who does this belong to?" is genuinely open — exactly what
-        // `AppBrain.applyOwnershipGate` flags. No trail entry: an unowned landing is
-        // never logged as fully, silently handled.
+        // "Up for Grabs" is a flag, not a status: this task is live, and a nil owner
+        // makes it read as unowned (a "That.s mine" action on its card). Every task is
+        // now born owned, so this state is only reachable by a deliberate human
+        // hand-back — which is exactly what this fixture stands in for.
         let upForGrabsTask = TaskItem(
-            title: "Plan the weekend trip", category: "Travel", status: .active,
+            title: "Plan the weekend trip", category: "Travel", status: .todo,
             confidence: 0.8,
-            reasoning: "Filed under Travel from the wording.", ownerPending: true, createdAt: now, in: context
+            reasoning: "Filed under Travel from the wording.", createdAt: now, in: context
         )
         context.insert(upForGrabsTask)
         // Regression guard for the status/flag split: an Active task that gains a
         // blocker STAYS Active (it just reads as blocked) and returns to normal when
         // the blocker clears — blocked is an observation, never a status.
         let startedButBlocked = TaskItem(
-            title: "Wire up the analytics events", category: "Work", status: .active,
+            title: "Wire up the analytics events", category: "Work", status: .todo,
             confidence: 0.85, reasoning: "Started, then hit a dependency.", createdAt: now, in: context)
         startedButBlocked.addExternalBlocker("the API keys from IT", among: [startedButBlocked])
         context.insert(startedButBlocked)
 
         // Explicit ownership: every task not delegated to a member and not deliberately
-        // left up-for-grabs is the current user's own — stamp it with the you-member id,
+        // handed back to the household is the current user’s own — stamp it with the you-member id,
         // exactly as `AppBrain.commit` does for a real capture. Without this, the retired
         // `nil == you` sentinel is gone and "your" tasks would read as shared/unassigned.
         let allTasks = (try? context.fetch(NSFetchRequest<TaskItem>(entityName: "TaskItem"))) ?? []
-        for task in allTasks where task.ownerID == nil && !task.ownerPending {
+        for task in allTasks where task.ownerID == nil && task !== upForGrabsTask {
             task.ownerID = you.uuid
         }
 
-        // Authorship (My Tasks "Created" tab): you created almost everything. Set the
-        // stage setter directly (not `setStage`) so staleness clocks stay untouched.
+        // Authorship (My Tasks "Created" tab): you created almost everything.
         for task in allTasks { task.creatorID = you.uuid }
         // Demo Created ≠ Assigned: a task you own but Maya created (shows in your
         // Assigned, not your Created).
@@ -304,17 +301,15 @@ enum SampleFlowFixtures {
         // The offsite is yours-created but Maya-owned (shows in Created, not Assigned) —
         // creatorID already `you` from the loop; ownerID is Maya. Nothing more to do.
 
-        // Stage spread so the Assigned sections aren't all Todo: one In Progress, one
-        // In Review, a couple Backlog.
-        waterBill.stage = .inProgress
-        expenseReport.stage = .inReview
-        staleGarage.stage = .backlog
-        staleDonate.stage = .backlog
+        // A lifecycle spread so the Assigned sections aren.t all Todo. Written through
+        // the raw status setter (not `setStatus`) so no fixture writes a change-log entry.
+        waterBill.status = .doing
+        expenseReport.status = .doing
 
         // Human activity for the Inbox feed: a completion by Maya, an assignment, and a
         // decision — each a reversible `.human` change-log entry carrying an `actorID`.
         let mayaChore = TaskItem(
-            title: "Drop the kids at practice", category: "Family", status: .active,
+            title: "Drop the kids at practice", category: "Family", status: .todo,
             creatorID: maya.uuid, confidence: 0.9, ownerID: maya.uuid,
             createdAt: now.addingTimeInterval(-2 * day), in: context)
         context.insert(mayaChore)
@@ -340,14 +335,14 @@ enum SampleFlowFixtures {
         // MARK: New primitives — Decision intent, capture-graph edges
         // A plain quick follow-up: position comes from the computed attention score.
         let pediatricianFollowUp = TaskItem(
-            title: "Call the pediatrician back", category: "Health", status: .active, confidence: 0.9,
+            title: "Call the pediatrician back", category: "Health", status: .todo, confidence: 0.9,
             reasoning: "Filed under Health.", ownerID: you.uuid, effortMinutes: 10,
             createdAt: now, in: context)
         context.insert(pediatricianFollowUp)
         // A decision intent-only task → the lighter Thinking Partner card in the detail
         // (`workIntent == .decision`, but NOT a needsDecision judgment call).
         let vendorDecision = TaskItem(
-            title: "Choose the wedding caterer", category: "Family", status: .active, confidence: 0.9,
+            title: "Choose the wedding caterer", category: "Family", status: .todo, confidence: 0.9,
             reasoning: "Weighing menu against budget.", ownerID: you.uuid, effortMinutes: 30,
             createdAt: now, in: context)
         vendorDecision.workIntent = .decision
@@ -359,7 +354,7 @@ enum SampleFlowFixtures {
         // leaves pair-owned suppression records — never an edge — so the pairing is
         // not re-proposed on a later similar capture.
         let donateBooks = TaskItem(
-            title: "Donate the old books", category: "Home", status: .active, confidence: 0.85,
+            title: "Donate the old books", category: "Home", status: .todo, confidence: 0.85,
             reasoning: "A separate donation from the clothes.", ownerID: you.uuid, effortMinutes: 20,
             createdAt: now, in: context)
         context.insert(donateBooks)
@@ -370,7 +365,7 @@ enum SampleFlowFixtures {
         // and a reversible `.human` "merged" Inbox entry (Undo resurrects the folded draft).
         expenseReport.notes = "Also captured: File the Q2 expenses"
         let mergedDraft = TaskDraft(
-            title: "File the Q2 expenses", category: "Work", proposedStatus: .inbox, confidence: 0.9,
+            title: "File the Q2 expenses", category: "Work", confidence: 0.9,
             autonomy: .silent, isJudgmentCall: false, reasoning: "Same as the expense report.")
         context.insert(
             ChangeLogEntry(
@@ -390,8 +385,6 @@ enum SampleFlowFixtures {
                 let title = task.title.lowercased()
                 if ["decide", "choose", "figure out", "worth it"].contains(where: { title.contains($0) }) {
                     task.workIntent = .decision
-                } else if task.hasActiveBlockers(among: scored) {
-                    task.workIntent = .waiting
                 } else if ["plan", "schedule", "follow up", "reorganize", "prepare"].contains(where: {
                     title.contains($0)
                 }) {

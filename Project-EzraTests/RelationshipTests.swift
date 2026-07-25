@@ -24,8 +24,8 @@ struct RelationshipTests {
 
     @Test("A tracked blocker is durable: it survives the target completing and re-blocks on reopen")
     func durableListReopen() {
-        let target = TaskItem(title: "passport", status: .active)
-        let task = TaskItem(title: "flights", status: .active)
+        let target = TaskItem(title: "passport", status: .todo)
+        let task = TaskItem(title: "flights", status: .todo)
         let all = [target, task]
         task.addTaskBlocker(target.uuid!, among: all)
         #expect(task.hasActiveBlockers(among: all))
@@ -40,7 +40,7 @@ struct RelationshipTests {
 
     @Test("An external wait derives as an external Blocker with its note preserved")
     func externalWait() {
-        let task = TaskItem(title: "kitchen", status: .active)
+        let task = TaskItem(title: "kitchen", status: .todo)
         task.addExternalBlocker("the plumber to confirm", among: [task])
         let blockers = task.blockers
         #expect(blockers.count == 1)
@@ -52,8 +52,8 @@ struct RelationshipTests {
 
     @Test("The cycle guard still holds through the relationship bridge")
     func cycleGuard() {
-        let a = TaskItem(title: "a", status: .active)
-        let b = TaskItem(title: "b", status: .active)
+        let a = TaskItem(title: "a", status: .todo)
+        let b = TaskItem(title: "b", status: .todo)
         let all = [a, b]
         a.addTaskBlocker(b.uuid!, among: all)  // a waits on b
         b.addTaskBlocker(a.uuid!, among: all)  // would close a cycle → no-op
@@ -62,9 +62,9 @@ struct RelationshipTests {
 
     @Test("unblock() drops the .blocks edges but leaves a .parent edge intact")
     func unblockLeavesParent() {
-        let parent = TaskItem(title: "trip", status: .active)
-        let blocker = TaskItem(title: "passport", status: .active)
-        let task = TaskItem(title: "book hotel", status: .active)
+        let parent = TaskItem(title: "trip", status: .todo)
+        let blocker = TaskItem(title: "passport", status: .todo)
+        let task = TaskItem(title: "book hotel", status: .todo)
         task.addTaskBlocker(blocker.uuid!, among: [task, blocker])
         // Seed a parent edge directly (Phase 2 adds the mutation helper).
         task.relationships =
@@ -78,9 +78,9 @@ struct RelationshipTests {
 
     @Test("removeBlocker drops one edge by id, leaving the rest")
     func removeOneBlocker() {
-        let b1 = TaskItem(title: "b1", status: .active)
-        let b2 = TaskItem(title: "b2", status: .active)
-        let task = TaskItem(title: "x", status: .active)
+        let b1 = TaskItem(title: "b1", status: .todo)
+        let b2 = TaskItem(title: "b2", status: .todo)
+        let task = TaskItem(title: "x", status: .todo)
         let all = [task, b1, b2]
         task.addTaskBlocker(b1.uuid!, among: all)
         task.addTaskBlocker(b2.uuid!, among: all)
@@ -171,8 +171,8 @@ struct RelationshipTests {
         var rng = SeededRNG(seed: 0x5EED_1234)
 
         for _ in 0..<40 {
-            let target = TaskItem(title: "target", status: .active)
-            let pool = (0..<4).map { TaskItem(title: "b\($0)", status: .active) }
+            let target = TaskItem(title: "target", status: .todo)
+            let pool = (0..<4).map { TaskItem(title: "b\($0)", status: .todo) }
             let all = [target] + pool
 
             // Oracle: the durable set of blocker edges + which blocker tasks are open.

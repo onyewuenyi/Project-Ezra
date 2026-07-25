@@ -57,7 +57,7 @@ struct TaskSearchView: View {
                                     blockerSummary: task.blockerSummary(among: tasks),
                                     ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                                     ownerPhotoData: task.ownerPhotoData(among: othersRoster),
-                                    interactive: !task.displayStatus.isResolved,
+                                    interactive: !task.status.isResolved,
                                     onOpen: { selectedTask = task }
                                 )
                             }

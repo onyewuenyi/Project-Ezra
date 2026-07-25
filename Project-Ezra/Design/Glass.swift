@@ -96,7 +96,10 @@ extension View {
         modifier(GlassChromeModifier(shape: shape, tint: tint, interactive: interactive, morph: morph))
     }
 
-    /// Liquid Glass chrome in a capsule — the pill/segmented-control shape.
+    /// Liquid Glass chrome in a capsule — the pill/segmented-control shape. NOTE: glass
+    /// carries a vibrancy that dims foreground text — do NOT put high-contrast labels on
+    /// it; a text-bearing selection chip uses a solid surface instead (see the My Tasks
+    /// segmented pill). Glass chrome is for icon/press affordances, not primary text.
     func glassCapsule(
         tint: Color? = nil, interactive: Bool = false,
         morph: (id: AnyHashable, ns: Namespace.ID)? = nil

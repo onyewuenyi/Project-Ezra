@@ -114,6 +114,7 @@ final class AppBrain {
         learned: [LearnedRule] = [],
         openTasks: [OpenTaskSnapshot] = [],
         suppressions: [RelationshipSuppression] = [],
+        ownership: OwnershipContext = .none,
         onPartial: (@MainActor ([TaskDraft]) -> Void)? = nil
     ) async -> [TaskDraft] {
         isProcessing = true
@@ -128,13 +129,13 @@ final class AppBrain {
             candidates: candidates,
             suppressions: suppressions
         )
-        // Resolve intents → drafts and apply the ownership gate — the one path both the
-        // streaming partials and the final result run through.
+        // Resolve intents → drafts and propose an owner for each — the one path both
+        // the streaming partials and the final result run through.
         func resolveAndGate(_ intents: [TaskIntent]) -> [TaskDraft] {
             var drafts = IntentResolver.resolve(
                 intents, rules: learned, openTasks: openTasks, candidates: candidates,
                 suppressions: suppressions)
-            Self.applyOwnershipGate(to: &drafts, hasHousehold: !roster.isEmpty)
+            Self.proposeOwners(to: &drafts, ownership: ownership)
             return drafts
         }
         let partialHandler: (@MainActor ([TaskIntent]) -> Void)? = onPartial.map { handler in
@@ -152,17 +153,86 @@ final class AppBrain {
         return resolveAndGate(intents)
     }
 
-    /// A confident (silent-tier) draft with no delegation detected, in a household
-    /// that has other people, is flagged as unowned — "who does this belong to?"
-    /// is a genuine open question the confirm card should surface. This sets only
-    /// the `ownerPending` flag; "unowned" derives from it (see
-    /// `TaskAssessment.isUnowned`). Judgment calls and low-confidence items
-    /// already demand the user's eyes, so only confident filings gate. Solo
-    /// installs (`hasHousehold == false`) are a complete no-op.
-    static func applyOwnershipGate(to drafts: inout [TaskDraft], hasHousehold: Bool) {
-        guard hasHousehold else { return }
-        for i in drafts.indices where drafts[i].ownerName == nil && drafts[i].autonomy == .silent {
-            drafts[i].ownerPending = true
+    // MARK: - Parking (the durable half of capture)
+
+    /// Park an in-flight capture so dismissing the composer cannot destroy it.
+    ///
+    /// Writes/updates ONE `Capture` row per composer session, carrying the verbatim raw
+    /// text plus the current drafts. Returns the row so the session can keep updating
+    /// it as the user types and hand it to `commit` on confirm.
+    ///
+    /// A parked capture is not a task and must never behave like one — see `Capture`.
+    @discardableResult
+    func park(
+        _ drafts: [TaskDraft], rawCapture: String, source: CaptureSource,
+        into existing: Capture?, in context: NSManagedObjectContext
+    ) -> Capture? {
+        let trimmed = rawCapture.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return existing }
+        let capture = existing ?? Capture(rawText: trimmed, source: source, in: context)
+        if existing == nil { context.insert(capture) }
+        capture.rawText = trimmed
+        capture.source = source
+        capture.parkedDrafts = drafts
+        try? context.save()
+        return capture
+    }
+
+    /// Every capture still waiting to be confirmed, newest first.
+    ///
+    /// The `draftsData != nil` half of "parked" is filtered IN MEMORY, deliberately:
+    /// Core Data cannot evaluate a fetch predicate against a Binary Data attribute, and
+    /// attempting it throws at the store layer rather than returning empty. The
+    /// uncommitted set is tiny by construction, so the predicate narrows on the cheap
+    /// date attribute and `isParked` does the rest.
+    static func parkedCaptures(in context: NSManagedObjectContext) -> [Capture] {
+        let request = NSFetchRequest<Capture>(entityName: "Capture")
+        request.predicate = NSPredicate(format: "committedAt == nil")
+        request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
+        return ((try? context.fetch(request)) ?? []).filter(\.isParked)
+    }
+
+    /// The user explicitly throwing a capture away. The ONLY destructive path —
+    /// swipe-to-dismiss parks, so nothing is lost by accident.
+    static func discard(_ capture: Capture, in context: NSManagedObjectContext) {
+        context.delete(capture)
+        try? context.save()
+    }
+
+    /// Give every draft an owner. Replaces the retired `applyOwnershipGate`, which did
+    /// the opposite — it flagged a confident household draft `ownerPending` and made
+    /// the card ask. Every other field already reaches the confirm card populated and
+    /// editable; owner is no longer the exception. See `OwnerProposer` for the ladder
+    /// and for why load can only ever adjust a choice, never make one.
+    ///
+    /// The proposal writes `ownerName`, `ownerReason`, and `ownerBasis` — nothing is
+    /// published and nobody is notified here. **Assignment side effects bind to the
+    /// Confirm event, not to this field being populated** (see `commit`).
+    static func proposeOwners(to drafts: inout [TaskDraft], ownership: OwnershipContext) {
+        for i in drafts.indices {
+            let proposal = OwnerProposer.propose(
+                draft: drafts[i], roster: ownership.candidates,
+                adjacentOwners: adjacentOwnerNames(for: drafts[i], in: ownership),
+                history: ownership.history)
+            drafts[i].ownerName = proposal.memberName
+            drafts[i].ownerReason = proposal.reason
+            drafts[i].ownerBasis = proposal.basis
+        }
+    }
+
+    /// Owner names reachable through a draft's capture-graph proposals, in preference
+    /// order: a duplicate target is literally the same work, a parent is the umbrella
+    /// it belongs under. **Blockers are absent by design** — a blocker is frequently
+    /// owned by someone else precisely *because* they are the bottleneck, so it points
+    /// the wrong way as often as not.
+    private static func adjacentOwnerNames(
+        for draft: TaskDraft, in ownership: OwnershipContext
+    ) -> [String] {
+        let ordered =
+            draft.edgeProposals.filter { $0.kind == .duplicateOf }
+            + draft.edgeProposals.filter { $0.kind == .childOf }
+        return ordered.compactMap { proposal in
+            proposal.decision == .rejected ? nil : ownership.ownersByTaskID[proposal.targetID]
         }
     }
 
@@ -182,19 +252,42 @@ final class AppBrain {
 
     // MARK: - Commit
 
-    /// Persist drafts, record the Capture they came from (raw text kept verbatim
-    /// forever — one capture, many tasks), and log silent-tier filings to the change log.
-    /// Capture Graph Awareness: a draft with an ACCEPTED duplicate proposal does NOT
-    /// create a task — it MERGES into the target (the capture rides along); all other
-    /// drafts create real tasks and may gain a parent link (accepted child) or write
-    /// suppression records (rejected duplicate/child — see `SuppressionStore`).
+    /// **This IS Confirm.** A `TaskItem` comes into existence here and nowhere else —
+    /// there is no pre-confirm task state to transition out of. Before this runs, the
+    /// capture is single-player: parked on the capturer's device as raw text plus
+    /// drafts, invisible to everyone else even when the inferred owner is somebody
+    /// else.
+    ///
+    /// **Assignment side effects bind to this event, never to the owner field being
+    /// populated** — see `publishAssignments`. That distinction is the seam a future
+    /// "Confirm all" fast-path would otherwise leak a notification through.
+    ///
+    /// Persists drafts, records the Capture they came from (raw text kept verbatim
+    /// forever — one capture, many tasks), and logs silent-tier filings to the change
+    /// log. Capture Graph Awareness: a draft with an ACCEPTED duplicate proposal does
+    /// NOT create a task — it MERGES into the target (the capture rides along); all
+    /// other drafts create real tasks and may gain a parent link (accepted child) or
+    /// write suppression records (rejected duplicate/child — see `SuppressionStore`).
     @discardableResult
     func commit(
         _ drafts: [TaskDraft], rawCapture: String, source: CaptureSource = .text,
+        parked: Capture? = nil,
         into context: NSManagedObjectContext
     ) -> [TaskItem] {
-        let capture = Capture(rawText: rawCapture, source: source, in: context)
-        context.insert(capture)
+        // The Capture row is written at PARSE time now (`park`), so a commit usually
+        // ADOPTS the existing row rather than creating one — otherwise a parked capture
+        // that is then confirmed would leave two rows for one event. Creating one here
+        // is the path for callers with no composer session (onboarding, seeds).
+        let capture: Capture
+        if let parked {
+            capture = parked
+        } else {
+            capture = Capture(rawText: rawCapture, source: source, in: context)
+            context.insert(capture)
+        }
+        // Committed: no longer parked, and its derived drafts are spent.
+        capture.committedAt = Date()
+        capture.parkedDrafts = nil
 
         // Partition: accepted-duplicate drafts fold into an existing task; the rest create.
         let creating = drafts.filter { $0.acceptedDuplicate == nil }
@@ -212,10 +305,11 @@ final class AppBrain {
             context.insert(task)
             created.append(task)
 
-            // Silent, reversible actions get a "recently tidied" change-log entry —
-            // but not when a human step (who owns this?) is still pending, since
-            // that isn't fully, silently handled yet.
-            if draft.autonomy == .silent && !draft.ownerPending {
+            // A "recently tidied" change-log entry for confident filings. This records
+            // that the CATEGORIZATION was the AI's, not that any card was skipped —
+            // every task here is human-confirmed by construction, because commit is
+            // the confirm.
+            if draft.autonomy == .silent {
                 let entry = ChangeLogEntry(
                     summary: "Filed “\(draft.title)” under \(draft.category)",
                     detail: draft.reasoning,
@@ -251,6 +345,7 @@ final class AppBrain {
         resolveBlockers(creating, created: created, all: all, in: context)
         resolveDependents(creating, created: created, all: all, in: context)
         resolveOwners(creating, created: created, in: context)
+        publishAssignments(created, in: context)  // the ONE place assignment side effects fire
         resolveProposedEdges(creating, created: created, all: all, in: context)
         let mergeTargets = foldMerges(merging, capture: capture, all: all, in: context)
         capture.parsedTaskIDs = created.compactMap(\.uuid) + mergeTargets.compactMap(\.uuid)
@@ -275,6 +370,13 @@ final class AppBrain {
                 guard let dependent = all.first(where: { $0.uuid == ref.id }),
                     !dependent.status.isResolved
                 else { continue }
+                // This upgrade churns the blocker set (drop the external note, add the new
+                // task edge). If the external was the dependent's LAST active blocker,
+                // `removeBlocker` stamps `lastUnblockedAt` — but the very next line re-blocks
+                // it, so that "just unblocked" fact is spurious (it would hand a still-blocked
+                // task the +12 recently-unblocked boost). Snapshot the fact and restore it
+                // whenever the dependent ends this upgrade still blocked.
+                let priorUnblockedAt = dependent.lastUnblockedAt
                 // Upgrade: the external note this new task satisfies comes off first.
                 for blocker in dependent.blockers
                 where blocker.kind == .external
@@ -284,6 +386,7 @@ final class AppBrain {
                 }
                 let before = dependent.taskBlockerIDs.count
                 dependent.addTaskBlocker(newID, among: all, origin: .inferred(confidence: 0.9))  // no-ops if it'd cycle
+                if dependent.hasActiveBlockers(among: all) { dependent.lastUnblockedAt = priorUnblockedAt }
                 guard dependent.taskBlockerIDs.count > before else { continue }
                 context.insert(
                     ChangeLogEntry(
@@ -352,17 +455,25 @@ final class AppBrain {
                             taskTitle: task.title, taskUUID: task.uuid, in: context))
                 case (.duplicateOf, .rejected):
                     SuppressionStore.recordRejectedDuplicate(
-                        draftTitle: draft.title, createdID: task.uuid,
+                        draftTitle: suppressionKeyTitle(for: draft), createdID: task.uuid,
                         targetID: proposal.targetID, in: context)
                 case (.childOf, .rejected):
                     SuppressionStore.recordRejectedParent(
-                        draftTitle: draft.title, createdID: task.uuid,
+                        draftTitle: suppressionKeyTitle(for: draft), createdID: task.uuid,
                         parentID: proposal.targetID, in: context)
                 default:
                     continue  // undecided / non-open → nothing
                 }
             }
         }
+    }
+
+    /// The stable title a rejection is keyed on: the resolver builds its capture-form
+    /// suppression key against the AI's ORIGINAL title (`normalizeTitle(intent.title)`), so
+    /// the record must too — keying on the user-edited `draft.title` would let a
+    /// renamed-then-rejected duplicate re-surface pre-accepted on the next capture.
+    private func suppressionKeyTitle(for draft: TaskDraft) -> String {
+        draft.aiOriginal?.title ?? draft.title
     }
 
     /// Fold each accepted-duplicate draft into its target: no new task, the target absorbs
@@ -403,39 +514,65 @@ final class AppBrain {
         return targets
     }
 
-    /// Turn each draft's free-text owner guess ("ask sarah to…") into a real
-    /// `FamilyMember` reference. A case-insensitive name match reuses the existing
-    /// person; no match silently creates one — the same silent-tier mechanical
-    /// filing philosophy already applied to categorization, not something that
-    /// needs asking. Two captures naming "sarah" and "Sarah" resolve to one person.
+    /// Turn each draft's owner name into a real `FamilyMember` reference, by
+    /// case-insensitive match. Two captures naming "sarah" and "Sarah" resolve to one
+    /// person.
+    ///
+    /// **An unmatched name creates nothing.** This used to silently mint a
+    /// `FamilyMember`, which looked like the same mechanical-filing philosophy applied
+    /// to categorization — but a category is a label and a person is not. A phantom
+    /// minted from a misheard name becomes an *existing* member: it can accrue
+    /// category ownership, feed the affinity denominator, and be proposed as an owner
+    /// for future work. So an unresolved name leaves the task shared (`ownerID == nil`)
+    /// and the confirm card's existing "Add person…" is the explicit human step that
+    /// grows the roster.
     private func resolveOwners(_ drafts: [TaskDraft], created: [TaskItem], in context: NSManagedObjectContext)
     {
-        var members = (try? context.fetch(NSFetchRequest<FamilyMember>(entityName: "FamilyMember"))) ?? []
+        let members = (try? context.fetch(NSFetchRequest<FamilyMember>(entityName: "FamilyMember"))) ?? []
         for (draft, task) in zip(drafts, created) {
             guard let name = draft.ownerName?.trimmingCharacters(in: .whitespacesAndNewlines),
                 !name.isEmpty
             else { continue }
             if let match = members.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
                 task.ownerID = match.uuid
-            } else {
-                let member = FamilyMember(name: name, in: context)
-                context.insert(member)
-                members.append(member)
-                task.ownerID = member.uuid
             }
         }
 
-        // Everything still unowned and not deliberately left up-for-grabs is the current
-        // user's own work — stamp it with your linked member id explicitly. The retired
-        // `nil == you` sentinel is gone, so "mine" must be a real owner id (correct on
-        // every synced device); a `nil` owner now means genuinely shared/unassigned.
-        // Bootstrap the you-identity only when something actually needs it, so a commit
-        // of purely delegated work never creates a spurious member.
-        let unowned = created.filter { $0.ownerID == nil && !$0.ownerPending }
-        if !unowned.isEmpty {
-            let me = UserProfile.currentMemberID(in: context)
-            for task in unowned { task.ownerID = me }
+        // Everything the proposer left as the capturer's own work gets the linked
+        // member id explicitly. The retired `nil == you` sentinel is gone, so "mine"
+        // must be a real owner id (correct on every synced device); a `nil` owner means
+        // genuinely shared. Bootstrap the you-identity only when something actually
+        // needs it, so a commit of purely delegated work never creates a spurious member.
+        let mine = zip(drafts, created).filter {
+            $0.1.ownerID == nil && $0.0.ownerName == nil
         }
+        if !mine.isEmpty {
+            let me = UserProfile.currentMemberID(in: context)
+            for (_, task) in mine { task.ownerID = me }
+        }
+    }
+
+    /// The publish boundary. Called once per commit, AFTER ownership is resolved, and
+    /// it is the ONLY place an assignment may have an outward effect.
+    ///
+    /// Nothing fires today: there is no sync (`PersistenceStack.cloudKitContainerID`
+    /// is nil, the entitlement's container list is empty) and no notification
+    /// machinery, so the interim behavior is a silent publish. The seam exists now
+    /// because the *rule* is the load-bearing part — assignment side effects bind to
+    /// Confirm, never to the owner field being populated — and a future "Confirm all"
+    /// fast-path must have one obvious place to respect it.
+    ///
+    /// When delivery lands, the target behavior is three-part (see `docs/task-model.md`):
+    /// one notification per assignment bound to this event, re-notify only on a genuine
+    /// reassignment, and copy that names the source ("Charles assigned you: …").
+    private func publishAssignments(_ created: [TaskItem], in context: NSManagedObjectContext) {
+        guard HouseholdSync.isLive else { return }
+        let me = UserProfile.currentMemberID(in: context)
+        let handedOff = created.filter { $0.ownerID != nil && $0.ownerID != me }
+        guard !handedOff.isEmpty else { return }
+        // Delivery lands here. Deliberately unimplemented rather than stubbed with a
+        // local notification: notifying yourself about a task you just created is
+        // theater, and the guardrails refuse notification-driven re-engagement.
     }
 
     /// Turn each draft's free-text blocker phrase into a real tracked-task blocker, now

@@ -44,7 +44,7 @@ These replace the five-level priority picker everywhere in UI. They are inputs t
 
 ### 2.5 Computed layers (never persisted, unchanged mechanics)
 
-`displayStatus`, Blocked/Blocking/Overdue/Stale, assessment — all stay derived on read. New: capability selection (from intent), decision framing content (§6), proposal chips (§5).
+Blocked/Blocking/Overdue/Stale and the assessment stay derived on read. (`displayStatus` is retired: the lifecycle collapsed to one four-case `TaskStatus`, so display is 1:1 and there is no mapping table — see `docs/task-model.md`.) New: capability selection (from intent), decision framing content (§6), proposal chips (§5).
 
 ---
 

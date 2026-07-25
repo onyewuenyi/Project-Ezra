@@ -3,15 +3,18 @@
 //  Project-Ezra
 //
 //  Maps the PRD's silent/suggest/ask autonomy tiers to a single quiet line under
-//  a task. This is the one place the user interacts with an AI decision directly,
-//  so it stays one tap: Accept for suggest-tier, nothing to do for silent.
+//  a task — a read-out of how sure the AI was when it filed this, nothing more.
+//
+//  The old "Accept" button is gone with the `.inbox` state. It existed to confirm an
+//  unconfirmed suggest-tier proposal out of the Inbox, and there is no such thing any
+//  more: a `TaskItem` comes into existence at Confirm, so every task on screen has
+//  already been accepted by a human. The tier survives as provenance.
 //
 
 import SwiftUI
 
 struct ConfidenceRow: View {
     let task: TaskItem
-    var onAccept: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: Spacing.inline) {
@@ -23,20 +26,7 @@ struct ConfidenceRow: View {
                 .font(.metadata)
                 .foregroundStyle(color)
                 .lineLimit(1)
-
-            // Accept is offered only while the task is still an unconfirmed proposal at
-            // the suggest tier; accepting confirms it out of the Inbox, so the
-            // button retires itself.
-            if task.status == .inbox, task.autonomy == .suggest, let onAccept {
-                Spacer(minLength: Spacing.xs)
-                Button("Accept", action: onAccept)
-                    .font(.metadata.weight(.semibold))
-                    .foregroundStyle(Palette.accentFlat)
-                    .buttonStyle(.pressableLink)
-                    .transition(.opacity)
-            }
         }
-        // Accepting (Inbox → Active) crossfades the row's icon/label/button.
         .animation(Motion.fade, value: task.status)
     }
 

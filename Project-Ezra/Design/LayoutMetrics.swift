@@ -8,7 +8,7 @@
 //  Source of truth: docs/design-system-managing-chaos.md
 //
 
-import CoreGraphics
+import SwiftUI
 
 enum LayoutMetrics {
     /// The leading status/completion-glyph column width on the dense record and Today
@@ -18,4 +18,20 @@ enum LayoutMetrics {
     /// The minimum interactive tap target (HIG). Every tappable glyph/control reserves
     /// at least this, even when its visual glyph is smaller than the column.
     static let hitTarget: CGFloat = 44
+}
+
+extension View {
+    /// Grow a compact control's tap target to the HIG minimum (`LayoutMetrics.hitTarget`)
+    /// WITHOUT changing its visual footprint: the interactive region expands symmetrically
+    /// into surrounding whitespace, then negative padding restores the original layout size.
+    /// The glyph never moves — the extra hit area reaches into the gap around it. Apply to a
+    /// completion/status glyph whose visual box (`visualSize`) is smaller than 44pt; a near
+    /// miss on the app's core completion control should still complete, not open the detail.
+    func minimumHitTarget(around visualSize: CGFloat = LayoutMetrics.recordGlyphColumn) -> some View {
+        let inset = max(0, (LayoutMetrics.hitTarget - visualSize) / 2)
+        return
+            padding(inset)
+            .contentShape(Rectangle())
+            .padding(-inset)
+    }
 }

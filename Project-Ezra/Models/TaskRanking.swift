@@ -252,7 +252,7 @@ enum TaskRanking {
     /// The quick-win signal: small, bounded, and actionable right now. Feeds the
     /// occasional Momentum attention item — never a permanent section.
     static func isQuickWin(_ task: TaskItem, isBlocked: Bool) -> Bool {
-        guard task.status == .active, !isBlocked, !task.ownerPending, !task.needsDecision,
+        guard task.status.isLive, !isBlocked, task.ownerID != nil, !task.needsDecision,
             let effort = task.effortMinutes
         else { return false }
         return effort <= 15

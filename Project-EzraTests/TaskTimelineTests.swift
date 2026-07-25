@@ -26,18 +26,18 @@ struct TaskTimelineTests {
 
     @Test("init opens a visit for the initial status at createdAt")
     func initSeedsOpenVisit() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
         #expect(task.stateTimeline.count == 1)
-        #expect(task.stateTimeline[0].state == TaskStatus.active.rawValue)
+        #expect(task.stateTimeline[0].state == TaskStatus.todo.rawValue)
         #expect(task.stateTimeline[0].enteredAt == t0)
         #expect(task.stateTimeline[0].exitedAt == nil)
     }
 
     @Test("A transition closes the open visit and opens the next")
     func transitionClosesAndOpens() {
-        let task = TaskItem(title: "x", status: .inbox, createdAt: t0)
-        task.transition(to: .active, now: at(10))
-        #expect(task.status == .active)
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
+        task.transition(to: .doing, now: at(10))
+        #expect(task.status == .doing)
         #expect(task.stateTimeline.count == 2)
         #expect(task.stateTimeline[0].exitedAt == at(10))
         #expect(task.stateTimeline[0].duration == 600)
@@ -47,18 +47,18 @@ struct TaskTimelineTests {
 
     @Test("Writing status directly (the activity-trail undo path) still records a visit")
     func directStateWriteIsInstrumented() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
-        task.status = .inbox  // ChangeLogUndo's default revert does exactly this
+        let task = TaskItem(title: "x", status: .doing, createdAt: t0)
+        task.status = .todo  // ChangeLogUndo's default revert does exactly this
         #expect(task.stateTimeline.count == 2)
         #expect(task.stateTimeline[0].exitedAt != nil)
-        #expect(task.stateTimeline[1].state == TaskStatus.inbox.rawValue)
+        #expect(task.stateTimeline[1].state == TaskStatus.todo.rawValue)
     }
 
     @Test("Mutation helpers funnel through the timeline")
     func mutationHelpersRecord() {
-        let task = TaskItem(title: "x", status: .inbox, confidence: 0.9, createdAt: t0)
-        task.confirm(now: at(5))
-        #expect(task.status == .active)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9, createdAt: t0)
+        task.transition(to: .doing, now: at(5))
+        #expect(task.status == .doing)
         task.complete(now: at(10))
         #expect(task.status == .done)
         #expect(task.stateTimeline.count == 3)
@@ -66,8 +66,8 @@ struct TaskTimelineTests {
 
     @Test("transition() bumps updatedAt with the authoritative timestamp")
     func transitionBumpsUpdatedAt() {
-        let task = TaskItem(title: "x", status: .inbox, createdAt: t0)
-        task.transition(to: .active, now: at(10))
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
+        task.transition(to: .doing, now: at(10))
         #expect(task.updatedAt == at(10))
     }
 
@@ -75,75 +75,75 @@ struct TaskTimelineTests {
 
     @Test("secondsIn sums closed visits exactly")
     func secondsInClosed() {
-        let task = TaskItem(title: "x", status: .inbox, createdAt: t0)
-        task.transition(to: .active, now: at(10))
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
+        task.transition(to: .doing, now: at(10))
         task.transition(to: .done, now: at(35))
-        #expect(task.secondsIn(.inbox) == 600)  // 10m
-        #expect(task.secondsIn(.active) == 1500)  // 25m
+        #expect(task.secondsIn(.todo) == 600)  // 10m
+        #expect(task.secondsIn(.doing) == 1500)  // 25m
     }
 
     @Test("The open visit counts up to now")
     func openVisitIsLive() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
-        #expect(task.secondsIn(.active, now: at(5)) == 300)
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
+        #expect(task.secondsIn(.todo, now: at(5)) == 300)
     }
 
     @Test("A resolved task's dwell does not tick upward forever")
     func doneDoesNotGrow() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
         task.complete(now: at(10))
         #expect(task.secondsIn(.done, now: at(10)) == 0)
         #expect(task.secondsIn(.done, now: at(9999)) == 0)
 
-        let killed = TaskItem(title: "y", status: .active, createdAt: t0)
+        let killed = TaskItem(title: "y", status: .todo, createdAt: t0)
         killed.kill(now: at(10))
-        #expect(killed.secondsIn(.killed, now: at(9999)) == 0)
+        #expect(killed.secondsIn(.canceled, now: at(9999)) == 0)
     }
 
     @Test("A same-status transition records nothing and keeps the clock running")
     func noOpTransitionIsIgnored() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
-        task.transition(to: .active, now: at(10))  // a re-derive landing on the same status
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
+        task.transition(to: .todo, now: at(10))  // a re-derive landing on the same status
         #expect(task.stateTimeline.count == 1)
         #expect(task.stateTimeline[0].enteredAt == t0)  // clock was NOT reset
-        #expect(task.secondsIn(.active, now: at(20)) == 1200)  // one continuous 20m
+        #expect(task.secondsIn(.todo, now: at(20)) == 1200)  // one continuous 20m
     }
 
     @Test("Adding a blocker never touches the timeline — blocked is not a status")
     func blockingDoesNotRecordAVisit() {
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9, createdAt: t0)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9, createdAt: t0)
         task.addExternalBlocker(nil, among: [])
         // The task reads as blocked, but its status — and thus its timeline — is
         // untouched: it's still one continuous Active visit.
         #expect(task.stateTimeline.count == 1)
-        #expect(task.status == .active)
-        #expect(task.secondsIn(.active, now: at(20)) == 1200)
+        #expect(task.status.isLive)
+        #expect(task.secondsIn(.todo, now: at(20)) == 1200)
     }
 
     // MARK: - Backward / repeated transitions (the edge cases)
 
     @Test("Reopen preserves the closed Done visit and re-sums Active dwell")
     func reopenPreservesHistory() {
-        let task = TaskItem(title: "x", status: .active, confidence: 0.9, createdAt: t0)
+        let task = TaskItem(title: "x", status: .todo, confidence: 0.9, createdAt: t0)
         task.complete(now: at(20))
         task.reopen(among: [])
         #expect(task.completedAt == nil)
         // Reopen restored the prior status; its earlier stint still counts.
-        #expect(task.status == .active)
-        #expect(task.secondsIn(.active, now: at(20)) >= 1200)
+        #expect(task.status.isLive)
+        #expect(task.secondsIn(.todo, now: at(20)) >= 1200)
         #expect(task.stateTimeline.contains { $0.state == TaskStatus.done.rawValue && $0.exitedAt != nil })
     }
 
     @Test("Legacy raw values in history fold forward on reopen")
     func legacyHistoryFoldsForward() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
         // Simulate a pre-redirect history that somehow survived the store reset.
         task.stateTimeline = [
             StateVisit(state: "ready", enteredAt: t0, exitedAt: at(10)),
             StateVisit(state: "done", enteredAt: at(10), exitedAt: nil),
         ]
         task.reopen(among: [])
-        #expect(task.status == .active)  // "ready" folds to .active
+        #expect(task.status.isLive)  // "ready" folds to .todo
     }
 
     // MARK: - Migration honesty
@@ -152,15 +152,15 @@ struct TaskTimelineTests {
     func legacyRowFabricatesNoHistory() {
         // A task persisted before the timeline shipped: no visits at all.
         let task = TaskItem(
-            title: "x", status: .inbox, createdAt: t0.addingTimeInterval(-30 * 24 * 3600))
+            title: "x", status: .todo, createdAt: t0.addingTimeInterval(-30 * 24 * 3600))
         task.stateTimeline = []
 
-        task.transition(to: .active, now: t0)
+        task.transition(to: .doing, now: t0)
 
         // The 30 days it sat before we were watching are NOT invented.
-        #expect(task.secondsIn(.inbox) == 0)
+        #expect(task.secondsIn(.todo) == 0)
         #expect(task.stateTimeline.count == 1)
-        #expect(task.stateTimeline[0].state == TaskStatus.active.rawValue)
+        #expect(task.stateTimeline[0].state == TaskStatus.doing.rawValue)
         #expect(task.stateTimeline[0].enteredAt == t0)
     }
 }
@@ -190,37 +190,41 @@ struct TaskTimelineFormatTests {
 
     @Test("A task with no recorded history says nothing")
     func noHistoryNoSummary() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
         task.stateTimeline = []
         #expect(TaskTimeline.summary(for: task, now: at(500)) == nil)
     }
 
     @Test("A brand-new task says nothing until there's something to report")
     func subMinuteTaskSaysNothing() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
         #expect(TaskTimeline.summary(for: task, now: t0.addingTimeInterval(5)) == nil)
     }
 
     @Test("An unresolved task reports its current dwell, phrased per status")
     func unresolvedReportsDwell() {
-        let active = TaskItem(title: "x", status: .active, createdAt: t0)
-        #expect(TaskTimeline.summary(for: active, now: at(180)) == "Active for 3h")
+        // The todo/doing split is what makes this line real cycle-time data rather than
+        // an undifferentiated "Active for …" — that was the whole argument for keeping
+        // two live states instead of one.
+        let queued = TaskItem(title: "x", status: .todo, createdAt: t0)
+        #expect(TaskTimeline.summary(for: queued, now: at(180)) == "Queued for 3h")
 
-        let inbox = TaskItem(title: "z", status: .inbox, createdAt: t0)
-        #expect(TaskTimeline.summary(for: inbox, now: at(120)) == "Awaiting your confirm for 2h")
+        let inFlight = TaskItem(title: "z", status: .todo, createdAt: t0)
+        inFlight.transition(to: .doing, now: t0)
+        #expect(TaskTimeline.summary(for: inFlight, now: at(120)) == "In progress for 2h")
     }
 
     @Test("A resolved task reports total time end-to-end")
     func resolvedReportsTotals() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
         task.complete(now: at(120))
         #expect(TaskTimeline.summary(for: task, now: at(200)) == "Done · took 2h")
     }
 
-    @Test("A killed task is named honestly")
-    func killedIsNamedHonestly() {
-        let task = TaskItem(title: "x", status: .active, createdAt: t0)
+    @Test("A canceled task is named honestly")
+    func canceledIsNamedHonestly() {
+        let task = TaskItem(title: "x", status: .todo, createdAt: t0)
         task.kill(now: at(120))
-        #expect(TaskTimeline.summary(for: task, now: at(200)) == "Killed · took 2h")
+        #expect(TaskTimeline.summary(for: task, now: at(200)) == "Canceled · took 2h")
     }
 }

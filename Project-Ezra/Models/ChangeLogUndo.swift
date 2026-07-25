@@ -9,8 +9,15 @@
 //  lives in one testable place.
 //
 //  The critical rule: a HUMAN "completed"/"killed" undoes by *reopening* (restoring
-//  the exact prior status via the timeline) — NEVER the AI's inbox fallback, which
-//  would wrongly strand a finished task awaiting re-confirm.
+//  the exact prior live status via the timeline) — never a blunt reset to the state
+//  every task is born into, which would wrongly strand a finished task at the start
+//  of the pipeline.
+//
+//  **Undo-completeness.** An arm must restore EVERY field its action wrote, not just
+//  the headline one. `"assigned"` is the worked example: `claim` stamps
+//  `ownerOrigin = .human`, and the affinity denominator counts `.human` only, so an
+//  arm that restored the owner id alone would leave an AI-inferred ownership marked
+//  human and quietly pollute the denominator. New arms inherit this rule.
 //
 
 import CoreData
@@ -19,7 +26,13 @@ import CoreData
 enum ChangeLogUndo {
     /// Reverse the effect of `entry` on its linked task, keyed on the action verb.
     /// Callers still mark the entry `undone` and `save()`.
-    static func revert(_ entry: ChangeLogEntry, in context: NSManagedObjectContext) {
+    static func revert(_ entry: ChangeLogEntry, in context: NSManagedObjectContext, now: Date = Date()) {
+        // A pruned capture is the one entry that points at a Capture rather than a
+        // task, so it is resolved before the task guard below.
+        if entry.action == "prunedCapture" {
+            revertCapturePrune(entry, in: context)
+            return
+        }
         guard let task = linkedTask(for: entry, in: context) else { return }
         switch entry.action {
         case "linked":
@@ -30,32 +43,48 @@ enum ChangeLogUndo {
             if entry.fieldChanged == "parent" {
                 task.unlinkParent(targetID)
             } else {
+                // Removing the mis-added edge can be the task's last active blocker, which
+                // makes `removeBlocker` stamp `lastUnblockedAt` — but undoing a wrong edge
+                // must not reward the task with the recently-unblocked boost (it was never
+                // legitimately blocked-then-freed). Snapshot and restore the fact.
+                let priorUnblockedAt = task.lastUnblockedAt
                 task.removeTaskBlockerEdges(to: targetID, among: fetchAll(in: context))
+                task.lastUnblockedAt = priorUnblockedAt
             }
         case "merged":
             // A capture folded into `task` (the merge target) — undo resurrects the folded
-            // draft as a fresh inbox item from the JSON snapshot. The merge destroyed no
-            // data; the target keeps its (harmless) capture note.
+            // draft as a real task from the JSON snapshot. It was a confirmed task before
+            // the merge, so it comes back `.todo`, not to some pre-confirm limbo (there
+            // isn't one). The merge destroyed no data; the target keeps its capture note.
             guard let snapshot = MergedTaskSnapshot.decode(entry.oldValue) else { return }
             let resurrected = TaskItem(
-                title: snapshot.title, category: snapshot.category, status: .inbox,
+                title: snapshot.title, category: snapshot.category, status: .todo,
                 reasoning: snapshot.reasoning, isUrgent: snapshot.isUrgent, in: context)
             context.insert(resurrected)
             AttentionEngine.recompute([resurrected], among: fetchAll(in: context))
         case "completed", "killed":
-            // Human resolution → reopen to the prior status. NEVER the inbox fallback.
-            task.reopenAndReblock(in: context)
+            // Human resolution → reopen to the prior live status.
+            task.reopenAndReblock(in: context, now: now)
         case "assigned":
-            // Restore the previous owner (nil oldValue = it was shared/unowned).
-            let previous = entry.oldValue.flatMap { UUID(uuidString: $0) }
-            task.claim(ownerID: previous, among: fetchAll(in: context))
+            // Restore the previous owner AND the previous origin — see the
+            // undo-completeness note in the file header. An empty owner means it was
+            // handed back to the household.
+            let previous = TaskItem.decodeOwnership(entry.oldValue)
+            task.claim(ownerID: previous.ownerID, among: fetchAll(in: context), origin: previous.origin)
         case "decided":
             // The human's "Mark decided" re-escalates to the open decision.
             task.escalateToDecision()
+        case "reclassified":
+            // The classifier moved a task across the workload boundary (see
+            // `WorkIntent.isWorkload`), which silently changes what five systems count.
+            // Undo restores the prior intent — written raw, so it never re-triggers the
+            // logged reclassification seam.
+            task.workIntent = entry.oldValue.flatMap(WorkIntent.init(rawValue:))
+            task.touch(now: now)
         case ChangeLogEntry.editedAction:
             // A manual field edit → restore the named field from `oldValue`. Writes go
-            // through the raw property / `setStage` (NOT the logged seams), so the revert
-            // never spawns a fresh "edited" entry. Undone entries stay in the timeline
+            // through the raw property (NOT the logged seams), so the revert never
+            // spawns a fresh "edited" entry. Undone entries stay in the timeline
             // struck through; the caller marks `undone` + saves.
             switch entry.fieldChanged {
             case "urgent":
@@ -71,12 +100,15 @@ enum ChangeLogUndo {
                 if let value = entry.oldValue { task.title = value }
             case "notes":
                 task.notes = entry.oldValue
-            case "stage":
-                if let display = entry.oldValue.flatMap(TaskDisplayStatus.init(rawValue:)),
-                    let stage = display.asStage
-                {
-                    task.setStage(stage)
+            case "status":
+                // A todo ↔ doing move. Written through `transition` so the state
+                // timeline stays honest (the dwell record must show the round trip),
+                // but never through `setStatus`, which would log a fresh entry.
+                if let previous = entry.oldValue.flatMap(TaskStatus.init(rawValue:)), previous.isLive {
+                    task.transition(to: previous, now: now)
                 }
+            case "workIntent":
+                task.workIntent = entry.oldValue.flatMap(WorkIntent.init(rawValue:))
             case "blockers":
                 // Add-undo removes the edge it created (matched by target task id, as the
                 // "linked" case does). A blocker *removal* is logged non-reversible.
@@ -88,11 +120,34 @@ enum ChangeLogUndo {
             }
             task.touch()
         default:
-            // filed / archived / unblocked / anything else → reopen if resolved, then
-            // return control to the human in the Inbox.
-            if task.status.isResolved { task.reopenAndReblock(in: context) }
-            task.status = .inbox
+            // filed / archived / unblocked / anything else → reopen if resolved, so the
+            // task is back in the working set and the human has it again. There is no
+            // pre-confirm state to demote it to; `.todo` is where a task lives.
+            if task.status.isResolved {
+                task.reopenAndReblock(in: context, now: now)
+            } else {
+                task.status = .todo
+            }
         }
+    }
+
+    /// Undo of the stale-capture prune. The row was never deleted — only its derived
+    /// drafts were dropped — so re-parking is a re-parse from the verbatim `rawText`,
+    /// which is exactly the fallback a decode failure takes.
+    private static func revertCapturePrune(
+        _ entry: ChangeLogEntry, in context: NSManagedObjectContext
+    ) {
+        guard let idString = entry.oldValue, let captureID = UUID(uuidString: idString) else {
+            return
+        }
+        let request = NSFetchRequest<Capture>(entityName: "Capture")
+        request.predicate = NSPredicate(format: "uuid == %@", captureID as CVarArg)
+        request.fetchLimit = 1
+        guard let capture = try? context.fetch(request).first else { return }
+        // Re-parking with no drafts is deliberate: the composer re-parses on open, so
+        // the user gets the same candidates back without this arm needing an engine.
+        capture.parkedDrafts = []
+        capture.committedAt = nil
     }
 
     /// The task an entry points at: by stable uuid first, then a title fallback for

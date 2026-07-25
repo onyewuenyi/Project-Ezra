@@ -4,8 +4,7 @@
         <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="title" optional="NO" attributeType="String" defaultValueString=""/>
         <attribute name="category" optional="NO" attributeType="String" defaultValueString="Admin"/>
-        <attribute name="statusRaw" optional="NO" attributeType="String" defaultValueString="inbox"/>
-        <attribute name="stageRaw" optional="YES" attributeType="String"/>
+        <attribute name="statusRaw" optional="NO" attributeType="String" defaultValueString="todo"/>
         <attribute name="creatorID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="confidence" optional="NO" attributeType="Double" defaultValueString="0.5" usesScalarValueType="YES"/>
         <attribute name="isJudgmentCall" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
@@ -23,7 +22,7 @@
         <attribute name="isUrgent" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="workIntentRaw" optional="YES" attributeType="String"/>
         <attribute name="ownerID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
-        <attribute name="ownerPending" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="ownerOriginRaw" optional="YES" attributeType="String"/>
         <attribute name="effortMinutesValue" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
         <attribute name="stateTimelineData" optional="YES" attributeType="Binary"/>
         <attribute name="attentionData" optional="YES" attributeType="Binary"/>
@@ -58,6 +57,8 @@
         <attribute name="processingPathRaw" optional="NO" attributeType="String" defaultValueString="localOnly"/>
         <attribute name="escalatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="draftsData" optional="YES" attributeType="Binary"/>
+        <attribute name="committedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
     </entity>
     <entity name="Correction" representedClassName="Correction" syncable="YES">
         <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>

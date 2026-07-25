@@ -20,7 +20,7 @@ struct WorkIntentTests {
 
     @Test("workIntent round-trips through the raw store")
     func roundTrip() {
-        let task = TaskItem(title: "x", status: .active)
+        let task = TaskItem(title: "x", status: .todo)
         #expect(task.workIntent == nil)
         task.workIntent = .decision
         #expect(task.workIntent == .decision)
@@ -33,7 +33,7 @@ struct WorkIntentTests {
         let context = TestStore.makeContext()
         let brain = AppBrain()
         var draft = TaskDraft(
-            title: "Decide on the vendor", category: "Work", proposedStatus: .inbox, confidence: 0.9,
+            title: "Decide on the vendor", category: "Work", confidence: 0.9,
             autonomy: .silent, isJudgmentCall: false, reasoning: "")
         draft.workIntent = .decision
         let created = brain.commit([draft], rawCapture: "", into: context)
@@ -42,7 +42,7 @@ struct WorkIntentTests {
 
     @Test("A .decision intent unlocks the Thinking Partner without fabricating the flag")
     func intentUnlocksCapabilityGuardsFlag() {
-        let task = TaskItem(title: "Choose a plan", status: .active)
+        let task = TaskItem(title: "Choose a plan", status: .todo)
         task.workIntent = .decision
         #expect(TaskCapabilities.available(for: task).contains(.thinkingPartner))
         #expect(!task.needsDecision)  // the intent path never sets the flag
@@ -50,7 +50,7 @@ struct WorkIntentTests {
 
     @Test("The needsDecision flag also unlocks the capability; re-stamping intent never clears it")
     func flagUnlocksAndSurvives() {
-        let task = TaskItem(title: "Figure it out", status: .inbox, needsDecision: true)
+        let task = TaskItem(title: "Figure it out", status: .todo, needsDecision: true)
         #expect(TaskCapabilities.available(for: task).contains(.thinkingPartner))
         task.workIntent = .action  // "re-classify" to a non-decision kind
         #expect(task.needsDecision)  // untouched — only resolveDecision clears the flag
@@ -58,14 +58,14 @@ struct WorkIntentTests {
 
     @Test("A plain action task offers no capability")
     func actionOffersNothing() {
-        let task = TaskItem(title: "Buy milk", status: .active)
+        let task = TaskItem(title: "Buy milk", status: .todo)
         task.workIntent = .action
         #expect(TaskCapabilities.available(for: task).isEmpty)
     }
 
     @Test("The classifier returns nil off-device and never touches the flag")
     func classifyNilInSim() async {
-        let task = TaskItem(title: "x", status: .inbox, needsDecision: true)
+        let task = TaskItem(title: "x", status: .todo, needsDecision: true)
         let result = await WorkIntentClassifier().classify(
             WorkIntentContext(task: task, among: [task]))
         #expect(result == nil)  // simulator / test host → nil

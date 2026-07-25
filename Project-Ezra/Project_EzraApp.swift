@@ -38,9 +38,28 @@ struct Project_EzraApp: App {
         // (`Origin` replaces provenance+confidence; dismissed tombstones leave the
         // type for the pair-owned suppression store), and two entities land —
         // `SuppressionRecord` and `EmbeddingCache`.
+        // Generation 10 = the four-axis model (`docs/task-model.md`). The lifecycle
+        // collapses from two stored fields into one: TaskItem drops `stageRaw`, and
+        // `statusRaw`'s vocabulary changes meaning — `.inbox` is GONE (a ghost state
+        // nothing ever rested in, now replaced by a parked `Capture`), `active` splits
+        // into `todo`/`doing`, and `killed` is renamed `canceled`. `ownerPending` is
+        // retired ("unowned" now has exactly one spelling, `ownerID == nil`) in favour
+        // of `ownerOriginRaw`, which records whether a HUMAN established the ownership
+        // — the affinity denominator depends on that distinction. `workIntentRaw` loses
+        // `waiting` (it duplicated the derived blocked flag). `Capture` gains
+        // `draftsData` + `committedAt` so an abandoned capture parks instead of
+        // evaporating.
+        //
+        // **This spends most of the remaining clean-break budget.** The wipe-on-mismatch
+        // escape hatch closes the day `HouseholdSync.isLive` flips: a deployed CloudKit
+        // schema is additive-only, with no server-side reset. Treat everything after
+        // this as additive-in-practice, and run a schema-freeze review gated to that
+        // flip rather than declaring a final generation now — real usage of this model
+        // is exactly what is most likely to reveal a shape mistake.
+        //
         // Wipes existing stores, TestFlight users included — accepted under the
         // clean-break policy.
-        let schemaGeneration = 9
+        let schemaGeneration = 10
         let generationKey = "appSchemaGeneration"
         if UserDefaults.standard.integer(forKey: generationKey) != schemaGeneration {
             PersistenceStack.destroyStore()

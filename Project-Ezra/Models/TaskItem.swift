@@ -2,12 +2,12 @@
 //  TaskItem.swift
 //  Project-Ezra
 //
-//  The core domain model. A task carries three separate dimensions, never fused:
-//  Status (single-value lifecycle, user-owned), Attention (the user Signal
-//  `isUrgent` feeding a computed system score, `AttentionEngine`;
-//  replaces the retired user-facing Priority), and Flags (stackable conditions —
-//  Needs Decision, Blocked, Blocking, Overdue, Stale). Only Needs Decision and
-//  Overdue are ever visible; everything else manifests as position.
+//  The core domain model. A task carries FOUR separate axes, never fused (see
+//  `docs/task-model.md`): Lifecycle (`TaskStatus`, single-value, user-owned), Type
+//  (`WorkIntent`, AI-classified and human-correctable), Attention flags (stackable —
+//  Needs Decision, Blocked, Overdue, Stale), and Signals (`isUrgent`, human-declared,
+//  feeding the computed `AttentionEngine` score). Only Needs Decision, Overdue, and
+//  Urgent are ever visible; everything else manifests as position.
 //
 
 import CoreData
@@ -15,42 +15,44 @@ import Foundation
 
 // MARK: - Status (the user-owned lifecycle axis)
 
-/// The one axis a task moves along: `Inbox → Active → Done | Killed`. It is
+/// The one axis a task moves along: `Todo → Doing → Done | Canceled`. It is
 /// *lifecycle only* — deliberately free of AI judgment. "Does this need a
-/// decision?", "is it blocked?" are flags/assessments a card wears, never states
-/// here. Creation always lands in `.inbox`; the user's Confirm moves it to
-/// `.active`; only explicit human action (or the reversible stale auto-archive)
-/// ever resolves it.
+/// decision?", "is it blocked?" are flags a task wears, never states here.
+///
+/// **A `TaskItem` is born `.todo` at Confirm and never exists before it.** The
+/// retired `.inbox` case was a ghost: every creation path confirmed in the same
+/// breath, so nothing ever rested there. Pre-Confirm state lives on a parked
+/// `Capture` (raw text + encoded drafts), which is explicitly *not* a task — that is
+/// the single representation of "not yet committed".
+///
+/// `todo`/`doing` stays split rather than collapsing into one "active": it is what
+/// makes `stateTimeline` real cycle-time data ("In progress for 4h") instead of an
+/// undifferentiated dwell. `done`/`canceled` stay split so the resolution-honesty
+/// signal survives — Recap counts completions, `Metrics.rotRate` counts kills.
 enum TaskStatus: String, Codable, CaseIterable, Identifiable {
-    case inbox  // captured, awaiting the one-tap creation confirm
-    case active  // confirmed, in the working set
+    case todo  // confirmed, in the working set, not started
+    case doing  // in flight
     case done  // resolved by completion
-    case killed  // resolved by explicit kill (manual, retro, or stale auto-archive)
+    case canceled  // resolved as not-doing (manual kill or the reversible auto-archive)
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .inbox: return "Inbox"
-        case .active: return "Active"
+        case .todo: return "Todo"
+        case .doing: return "In Progress"
         case .done: return "Done"
-        case .killed: return "Killed"
+        case .canceled: return "Canceled"
         }
     }
 
-    /// A resolved task has left the working set — done and killed alike.
-    var isResolved: Bool { self == .done || self == .killed }
+    /// A resolved task has left the working set — done and canceled alike.
+    var isResolved: Bool { self == .done || self == .canceled }
 
-    /// Belt-and-braces decode for any pre-redirect raw value that survived the
-    /// clean-break store reset (e.g. inside a copied `StateVisit` history).
-    static func fold(legacyRaw: String) -> TaskStatus? {
-        switch legacyRaw {
-        case "suggested": return .inbox
-        case "ready", "inProgress": return .active
-        case "done": return .done
-        default: return TaskStatus(rawValue: legacyRaw)
-        }
-    }
+    /// Live work: confirmed and not yet resolved. Replaces the ~40 "is this active"
+    /// checks the two-field model needed. Nothing stores this and nothing writes
+    /// through it, so it is a read-through of the one lifecycle axis, not a second one.
+    var isLive: Bool { self == .todo || self == .doing }
 }
 
 // MARK: - Autonomy tiers (gated on confidence AND reversibility)
@@ -81,7 +83,6 @@ enum WorkIntent: String, Codable, CaseIterable, Identifiable {
     case action  // a concrete thing to do
     case decision  // a choice between options
     case planning  // figuring out an approach / breaking something down
-    case waiting  // parked on someone/something else
     case reference  // a note to keep, not really a to-do
 
     var id: String { rawValue }
@@ -91,10 +92,40 @@ enum WorkIntent: String, Codable, CaseIterable, Identifiable {
         case .action: return "Action"
         case .decision: return "Decision"
         case .planning: return "Planning"
-        case .waiting: return "Waiting"
         case .reference: return "Reference"
         }
     }
+
+    /// Whether a task of this kind is *work* — the thing the load, ranking, briefing,
+    /// and sweep systems are counting. Only `.reference` is not: it is owned and live
+    /// but never needs to complete, so leaving it in those systems would inflate
+    /// `MemberLoad.activeCount` (and through it the overload modifier AND the affinity
+    /// denominator), sit in Today as permanently unresolvable, and be auto-archived as
+    /// stale — backwards for something whose whole job is to persist.
+    ///
+    /// See `TaskItem.countsAsWorkload` for the task-level read, which is what the five
+    /// gated sites actually call.
+    var isWorkload: Bool { self != .reference }
+}
+
+// MARK: - Owner origin (who established this ownership)
+
+/// How a task's current `ownerID` came to be. Stored, because it cannot be
+/// reconstructed later — and because one consumer depends on it structurally.
+///
+/// **The affinity denominator counts `.human` only.** `OwnerProposer`'s rung 4
+/// (`.defaultSelf`) makes the capturer the owner of everything the earlier rungs
+/// miss, which is most things. If category-ownership share were computed over all
+/// tasks, those defaults would flood every denominator and a genuinely-preferred
+/// owner could never cross the threshold — the rung would be unreachable by
+/// construction. Counting human intent instead of the proposer's own output is what
+/// lets it learn.
+///
+/// `.human` = the user spoke the name at capture, or a human reassigned it later
+/// (`claim`). `.inferred` = the proposer chose it (adjacency, affinity, or default).
+enum OwnerOrigin: String, Codable {
+    case human
+    case inferred
 }
 
 // MARK: - Confidence tier (derived, for display)
@@ -137,7 +168,7 @@ enum NeedsDecisionReason: Equatable {
 struct TaskAssessment: Equatable {
     var needsDecision: NeedsDecisionReason?
     var isBlocked: Bool  // has ≥1 active blocker
-    var isUnowned: Bool  // a household gap: filed but nobody assigned (ownerPending)
+    var isUnowned: Bool  // a household gap: handed back to the household (ownerID == nil)
     var isStale: Bool  // undated and untouched past the retro threshold
     var tier: AutonomyTier  // the confidence/judgment → silent/suggest/ask mapping
 
@@ -177,9 +208,6 @@ final class TaskItem: NSManagedObject {
     /// The "area" this belongs to (Personal, Car, Travel, …).
     @NSManaged var category: String
     @NSManaged private var statusRaw: String
-    /// The working-pipeline sub-state (`TaskStage`), meaningful only while `.active`.
-    /// Optional/`nil` until stamped — user-owned, never AI-written. See `stage`.
-    @NSManaged private var stageRaw: String?
     /// Who authored this task — a `FamilyMember.uuid` (stamped at commit for a real
     /// capture; the current user's linked member). Distinct from `ownerID` (who it's
     /// *for*): the My Tasks "Created" tab keys off this. Optional for CloudKit.
@@ -237,11 +265,14 @@ final class TaskItem: NSManagedObject {
     /// `nil == you` sentinel is retired; `isMine(currentUserID:)` compares against the
     /// device's own member id so "mine" is correct on every synced device.
     @NSManaged var ownerID: UUID?
-    /// True when this task landed unowned in a household — "who does this belong
-    /// to?" is a genuinely open question. Computed once at triage (see
-    /// `AppBrain.applyOwnershipGate`), cleared only by an explicit `claim(...)`
-    /// or Confirm.
-    @NSManaged var ownerPending: Bool
+    /// How the current `ownerID` was established (`OwnerOrigin`), stored raw. Nil is
+    /// read as `.inferred` — an unstamped owner is never evidence of human intent.
+    /// Bridged by the `ownerOrigin` accessor.
+    ///
+    /// (`ownerPending` is retired. Every task is born owned, so the AI never abstains;
+    /// "unowned" now has exactly one spelling, `ownerID == nil`, set only by a human
+    /// handing a task back to the household.)
+    @NSManaged private var ownerOriginRaw: String?
     /// Backing store for `effortMinutes` — Core Data has no optional scalar Int, so it's
     /// held as an optional NSNumber and bridged by the `effortMinutes` accessor.
     @NSManaged private var effortMinutesValue: NSNumber?
@@ -301,8 +332,7 @@ final class TaskItem: NSManagedObject {
     convenience init(
         title: String,
         category: String = "Admin",
-        status: TaskStatus = .inbox,
-        stage: TaskStage? = nil,
+        status: TaskStatus = .todo,
         creatorID: UUID? = nil,
         confidence: Double = 0.5,
         isJudgmentCall: Bool = false,
@@ -312,7 +342,7 @@ final class TaskItem: NSManagedObject {
         blockedBy: [UUID] = [],
         isUrgent: Bool = false,
         ownerID: UUID? = nil,
-        ownerPending: Bool = false,
+        ownerOrigin: OwnerOrigin = .inferred,
         effortMinutes: Int? = nil,
         captureID: UUID? = nil,
         notes: String? = nil,
@@ -326,7 +356,6 @@ final class TaskItem: NSManagedObject {
         self.title = title
         self.category = category
         self.statusRaw = status.rawValue
-        self.stageRaw = stage?.rawValue
         self.creatorID = creatorID
         self.confidence = confidence
         self.isJudgmentCall = isJudgmentCall
@@ -342,7 +371,7 @@ final class TaskItem: NSManagedObject {
         self.attentionData = nil
         self.workIntentRaw = nil
         self.ownerID = ownerID
-        self.ownerPending = ownerPending
+        self.ownerOriginRaw = ownerOrigin.rawValue
         self.effortMinutes = effortMinutes
         self.captureID = captureID
         self.notes = notes
@@ -368,16 +397,33 @@ final class TaskItem: NSManagedObject {
     /// authoritative timestamp (`complete(now:)`, `kill(now:)`) call
     /// `transition(to:now:)` directly instead.
     var status: TaskStatus {
-        get { TaskStatus.fold(legacyRaw: statusRaw) ?? .inbox }
+        get { TaskStatus(rawValue: statusRaw) ?? .todo }
         set { transition(to: newValue) }
     }
+
+    /// How the current owner was established. Nil reads as `.inferred` — an unstamped
+    /// owner is never evidence of human intent, which is the safe direction for the
+    /// affinity denominator (see `OwnerOrigin`).
+    var ownerOrigin: OwnerOrigin {
+        get { ownerOriginRaw.flatMap(OwnerOrigin.init(rawValue:)) ?? .inferred }
+        set { ownerOriginRaw = newValue.rawValue }
+    }
+
+    /// Whether this task is *work* — the read the five gated sites call (member loads,
+    /// the affinity denominator, Today candidacy, ranked-stack membership, and the
+    /// stale auto-archive). See `WorkIntent.isWorkload` for why `.reference` is out.
+    ///
+    /// **Unknown counts as work.** `workIntent` is nil on the heuristic path and for
+    /// every user whose Apple Intelligence is off or unavailable by region, so nil
+    /// must not silently remove tasks from the systems that measure them.
+    var countsAsWorkload: Bool { workIntent?.isWorkload ?? true }
 
     /// Record a status change and close out the previous state's visit.
     ///
     /// Writes `statusRaw` directly rather than `status`, which is what keeps the
     /// computed-setter funnel from recursing into itself.
     func transition(to newState: TaskStatus, now: Date = Date()) {
-        let current = TaskStatus.fold(legacyRaw: statusRaw) ?? .inbox
+        let current = TaskStatus(rawValue: statusRaw) ?? .todo
         // Landing on the same state isn't a transition: the task never left, so the
         // clock keeps running and no visit is recorded.
         guard newState != current else { return }
@@ -390,27 +436,6 @@ final class TaskItem: NSManagedObject {
         stateTimeline = timeline
         statusRaw = newState.rawValue
         updatedAt = now
-    }
-
-    /// The working-pipeline sub-state. Getter defaults an unstamped task to `.todo`
-    /// (a confirmed task with no explicit stage is ready to work); the display layer
-    /// ignores it entirely unless the status is `.active`. Written only through
-    /// `setStage(_:now:)` so the touch clock stays honest.
-    var stage: TaskStage {
-        get { stageRaw.flatMap(TaskStage.init(rawValue:)) ?? .todo }
-        set { stageRaw = newValue.rawValue }
-    }
-
-    /// True when no stage has been stamped yet — the signal `confirm()` uses to plant
-    /// the default stage exactly once (a later confirm/re-confirm won't clobber a stage
-    /// the user has since moved).
-    var isStageUnset: Bool { stageRaw == nil }
-
-    /// The one visible status vocabulary — the six Linear states, derived from
-    /// `(status, stage)`. The row glyph, the detail picker, and the My Tasks
-    /// sectioning all read this; nothing stores it, so it can never drift.
-    var displayStatus: TaskDisplayStatus {
-        TaskDisplayStatus.derive(status: status, stage: stage)
     }
 
     /// The autonomy tier is a *derived assessment*, not stored: it is purely the
@@ -528,16 +553,16 @@ final class TaskItem: NSManagedObject {
         return TaskAssessment(
             needsDecision: reason,
             isBlocked: isBlocked,
-            isUnowned: ownerPending,
+            isUnowned: ownerID == nil,
             isStale: isStale(now: now),
             tier: autonomy
         )
     }
 
-    /// The single definition of "can I act on this right now?" — confirmed into the
-    /// working set, and nothing the AI observes is holding it back.
+    /// The single definition of "can I act on this right now?" — live work with
+    /// nothing holding it back.
     func isActionable(among tasks: [TaskItem]) -> Bool {
-        status == .active && !hasActiveBlockers(among: tasks) && !ownerPending
+        status.isLive && !hasActiveBlockers(among: tasks)
     }
 
     // MARK: - Temporal read-outs

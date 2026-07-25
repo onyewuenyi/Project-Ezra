@@ -135,19 +135,19 @@ struct TaskRow: View {
         }
 
         Menu {
-            ForEach(TaskDisplayStatus.allCases) { state in
+            ForEach(TaskStatus.pickable) { state in
                 Button {
-                    if state != task.displayStatus { handlePick(state) }
+                    if state != task.status { handlePick(state) }
                 } label: {
                     Label {
                         Text(state.label)
                     } icon: {
-                        Image(systemName: state == task.displayStatus ? "checkmark" : state.symbol)
+                        Image(systemName: state == task.status ? "checkmark" : state.symbol)
                     }
                 }
             }
         } label: {
-            Label("Status", systemImage: task.displayStatus.symbol)
+            Label("Status", systemImage: task.status.symbol)
         }
 
         Button {
@@ -188,7 +188,7 @@ struct TaskRow: View {
     /// The leading-menu pick: Done / Canceled route through the parent's undo-aware
     /// callbacks when present (so completing from the row shows the same undo as a
     /// swipe); every other state applies in place.
-    private func handlePick(_ state: TaskDisplayStatus) {
+    private func handlePick(_ state: TaskStatus) {
         switch state {
         case .done:
             if onComplete != nil { complete() } else { applyDirect(state) }
@@ -199,8 +199,8 @@ struct TaskRow: View {
         }
     }
 
-    private func applyDirect(_ state: TaskDisplayStatus) {
-        Motion.withMotion(Motion.decide) { task.applyDisplayStatus(state, in: context) }
+    private func applyDirect(_ state: TaskStatus) {
+        Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
         try? context.save()
     }
 
@@ -226,7 +226,7 @@ struct TaskRow: View {
     }
 
     private var accessibilityText: String {
-        var parts = [task.title, task.displayStatus.label]
+        var parts = [task.title, task.status.label]
         if task.isUrgent { parts.append("urgent") }
         if task.needsDecision && !task.status.isResolved { parts.append("needs a decision") }
         if isBlocked { parts.append("blocked") }
@@ -253,8 +253,8 @@ struct TaskRowDivider: View {
 }
 
 #Preview {
-    let a = TaskItem(title: "Buy groceries", status: .active, stage: .inProgress)
-    let b = TaskItem(title: "Renew passport", status: .active, stage: .todo, needsDecision: true)
+    let a = TaskItem(title: "Buy groceries", status: .doing)
+    let b = TaskItem(title: "Renew passport", status: .todo, needsDecision: true)
     return VStack(spacing: 0) {
         TaskRow(task: a)
         TaskRowDivider()

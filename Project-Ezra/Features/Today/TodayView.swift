@@ -25,10 +25,12 @@ struct TodayView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openCapture) private var openCapture
     @Environment(\.openInbox) private var openInbox
+    @Environment(\.resumeCapture) private var resumeCapture
 
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var changesResults: FetchedResults<ChangeLogEntry>
     @FetchRequest(sortDescriptors: []) private var logsResults: FetchedResults<CapacityLog>
+    @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
 
     @State private var sequence: TodaySequenceModel
     @State private var selectedTask: TaskItem?
@@ -104,7 +106,9 @@ struct TodayView: View {
 
     private func startIfNeeded() {
         guard !sequence.started else { return }
-        sequence.start(tasks: tasks, logs: Array(logsResults), context: context)
+        sequence.start(
+            tasks: tasks, logs: Array(logsResults),
+            currentUserID: profiles.first?.linkedMemberID, context: context)
         guard sequence.beat == .recap else { return }
         withAnimation(reduceMotion ? Motion.fade : Motion.heroSettle) {
             recapAppeared = true
@@ -251,9 +255,44 @@ struct TodayView: View {
                     }
                     .buttonStyle(.pressable)
                 }
+
+                if resting { parkedCapturesLine }
             }
             .padding(Spacing.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Unfinished captures, on the RESTING surface only — never inside the played
+    /// sequence. One line, present only when the count is non-zero, and dismissible by
+    /// acting rather than by a gesture.
+    ///
+    /// This is the surfacing half of capture durability: parking a thought is only
+    /// useful if there is somewhere it can be found again. It also closes the recorded
+    /// inbox-confirm gap from the draft side — unconfirmed captures used to rot
+    /// invisibly, which is a trust leak in a product whose thesis is honesty.
+    ///
+    /// It does not grow forever: `BrainSweeps` prunes a long-parked capture (logged and
+    /// reversible), so this surface decays like everything else in the product.
+    @ViewBuilder private var parkedCapturesLine: some View {
+        let parked = AppBrain.parkedCaptures(in: context)
+        if !parked.isEmpty {
+            Button {
+                // Resume the most recent; the rest stay parked and reachable.
+                if let newest = parked.first { resumeCapture(newest) }
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "tray")
+                        .font(.system(size: IconSize.caption))
+                    Text(
+                        parked.count == 1
+                            ? "1 capture waiting" : "\(parked.count) captures waiting"
+                    )
+                    .font(.metadata)
+                }
+                .foregroundStyle(Palette.secondaryText)
+            }
+            .buttonStyle(.pressableLink)
         }
     }
 

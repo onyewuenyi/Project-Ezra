@@ -209,7 +209,7 @@ struct FoundationModelsEngine: AIEngine {
           this task is the SAME as one of them (set duplicateOfID + duplicateConfidence) \
           or a STEP OF one of them (set childOfID + childConfidence). Copy the id EXACTLY \
           from CANDIDATES; use null when unsure. Never set both for one task.
-        - workIntent: what KIND of work this is — action, decision, planning, waiting, or \
+        - workIntent: what KIND of work this is — action, decision, planning, or \
           reference. Use "decision" ONLY when the task is genuinely choosing between options.
 
         If a line is a header, a note to self with no action, or empty, skip it.
@@ -319,7 +319,7 @@ struct ExtractedTask {
 
     @Guide(
         description:
-            "What KIND of work this is — exactly one of: action, decision, planning, waiting, reference. Use decision ONLY when the task is choosing between options."
+            "What KIND of work this is — exactly one of: action, decision, planning, reference. Use decision ONLY when the task is choosing between options."
     )
     let workIntent: String?
 

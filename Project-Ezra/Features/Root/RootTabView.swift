@@ -16,6 +16,9 @@ import SwiftUI
 /// shell so deep views (empty states, cards) never need their own sheet plumbing.
 extension EnvironmentValues {
     @Entry var openCapture: () -> Void = {}
+    /// Reopen a specific parked capture (the Today "captures waiting" line). Distinct
+    /// from `openCapture`, which always begins a fresh one.
+    @Entry var resumeCapture: (Capture) -> Void = { _ in }
     /// Jump to the Inbox tab — used by the Today surface's held-depth tile (which
     /// used to open the AI-trail sheet; the trail is now the Inbox tab).
     @Entry var openInbox: () -> Void = {}
@@ -35,6 +38,10 @@ struct RootTabView: View {
     @AppStorage("lastInboxSeenAt") private var lastInboxSeenAt: Double = 0
     @State private var showOnboarding: Bool
     @State private var showComposer = false
+    /// A parked capture the user chose to resume, from the Today "captures waiting"
+    /// line. Nil for a fresh capture — opening the composer always starts a NEW one, so
+    /// being interrupted twice never overwrites the first thought.
+    @State private var resumingCapture: Capture?
     @State private var selection: Int
 
     init() {
@@ -80,9 +87,16 @@ struct RootTabView: View {
         }
         .tint(Palette.accentFlat)
         .overlay(alignment: .bottomTrailing) { captureButton }
-        .environment(\.openCapture, { showComposer = true })
+        .environment(\.openCapture, {
+            resumingCapture = nil
+            showComposer = true
+        })
+        .environment(\.resumeCapture, { capture in
+            resumingCapture = capture
+            showComposer = true
+        })
         .environment(\.openInbox, { selection = 1 })
-        .sheet(isPresented: $showComposer) { ComposerView() }
+        .sheet(isPresented: $showComposer) { ComposerView(resuming: resumingCapture) }
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView {
                 hasOnboarded = true
@@ -170,12 +184,10 @@ struct RootTabView: View {
         let roster = familyMembers.filter { !$0.isRemoved }
             .map { RosterPerson(name: $0.name, relationship: $0.relationship.label) }
         let drafts = await brain.triage(sample, roster: roster)
-        let created = brain.commit(drafts, rawCapture: sample, into: context)
-        // Simulate the user's confirm for the confident filings, so the seeded
-        // screens show a working set; low-confidence and judgment items stay in
-        // the Inbox wearing their Needs Decision flag, exactly as a real capture
-        // the user hasn't reviewed yet would.
-        for task in created where task.autonomy == .silent { task.confirm() }
+        // `commit` is the confirm, so the seeded screens show a real working set.
+        // Judgment and low-confidence items still arrive wearing their Needs Decision
+        // flag — creation never clears that.
+        brain.commit(drafts, rawCapture: sample, into: context)
         try? context.save()
         hasOnboarded = true
         showOnboarding = false

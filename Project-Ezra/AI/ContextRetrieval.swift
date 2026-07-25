@@ -58,42 +58,74 @@ enum ContextRetrieval {
         now: Date = Date()
     ) -> [RetrievalCandidate] {
         let queryWords = CorrectionProfile.significantWords(text)
-
-        // Vectors come from the `EmbeddingStore` read-through (memo → model), with a
-        // bounded fresh-embed budget per call. The query vector is computed outside
-        // the budget (it's one embed, and nothing works without it).
-        var freshBudget = maxFreshEmbeds
-        func vector(for candidateTitle: String) -> [Double]? {
-            if let cached = EmbeddingStore.cachedVector(for: candidateTitle) { return cached }
-            guard freshBudget > 0, let fresh = EmbeddingStore.computeVector(for: candidateTitle)
-            else { return nil }
-            freshBudget -= 1
-            return fresh
-        }
         let queryVector =
             EmbeddingStore.cachedVector(for: text) ?? EmbeddingStore.computeVector(for: text)
 
-        let scored: [RetrievalCandidate] = tasks.compactMap { snap in
+        // Score the CHEAP components for every candidate first — lexical overlap, category,
+        // recency — plus the embedding-free "provisional" score. This decides WHERE the
+        // bounded fresh-embed budget is spent: on the most-provisionally-relevant cache
+        // misses, not whatever happens to be first in array order. A paraphrased duplicate
+        // (low lexical, high semantic) must not be starved of its one embed by a run of
+        // unrelated tasks ahead of it — otherwise it scores ≤ the floor and never reaches
+        // the model, and a silent duplicate gets created.
+        struct Prescored {
+            let snap: OpenTaskSnapshot
+            let lexical: Double
+            let categoryScore: Double
+            let recency: Double
+            let provisional: Double
+            let cachedVector: [Double]?
+        }
+        let prescored: [Prescored] = tasks.map { snap in
             let lexical = jaccard(queryWords, CorrectionProfile.significantWords(snap.title))
             let categoryScore = (category != nil && category == snap.category) ? 1.0 : 0.0
             let recency = recencyScore(snap.updatedAt, now: now)
+            let provisional =
+                (embeddingWeight + lexicalWeight) * lexical
+                + categoryWeight * categoryScore + recencyWeight * recency
+            return Prescored(
+                snap: snap, lexical: lexical, categoryScore: categoryScore, recency: recency,
+                provisional: provisional,
+                cachedVector: EmbeddingStore.cachedVector(for: snap.title))
+        }
 
+        // Grant the fresh-embed budget to the highest-provisional cache misses first
+        // (uuid tiebreak keeps the grant deterministic). Cached vectors are free and always
+        // used. The query vector gates everything — no query embed, no fresh embeds at all.
+        var freshVectors: [UUID: [Double]] = [:]
+        if queryVector != nil {
+            var budget = maxFreshEmbeds
+            let misses = prescored.filter { $0.cachedVector == nil }
+                .sorted {
+                    if $0.provisional != $1.provisional { return $0.provisional > $1.provisional }
+                    return $0.snap.id.uuidString < $1.snap.id.uuidString
+                }
+            for item in misses {
+                guard budget > 0 else { break }
+                if let fresh = EmbeddingStore.computeVector(for: item.snap.title) {
+                    freshVectors[item.snap.id] = fresh
+                    budget -= 1
+                }
+            }
+        }
+
+        let scored: [RetrievalCandidate] = prescored.compactMap { item in
+            let vector = item.cachedVector ?? freshVectors[item.snap.id]
             let score: Double
-            if let queryVector, let candidateVector = vector(for: snap.title) {
-                let similarity = EmbeddingStore.similarity(queryVector, candidateVector)
+            if let queryVector, let vector {
+                let similarity = EmbeddingStore.similarity(queryVector, vector)
                 score =
-                    embeddingWeight * similarity + lexicalWeight * lexical
-                    + categoryWeight * categoryScore + recencyWeight * recency
+                    embeddingWeight * similarity + lexicalWeight * item.lexical
+                    + categoryWeight * item.categoryScore + recencyWeight * item.recency
             } else {
-                // Embedding unavailable (no model, or over the fresh-embed budget) →
-                // its weight shifts onto lexical overlap.
-                score =
-                    (embeddingWeight + lexicalWeight) * lexical
-                    + categoryWeight * categoryScore + recencyWeight * recency
+                // Embedding unavailable (no model, or a miss the budget didn't reach) →
+                // the embedding weight shifts onto lexical overlap (the provisional score).
+                score = item.provisional
             }
             guard score >= relevanceFloor else { return nil }
             return RetrievalCandidate(
-                id: snap.id, title: snap.title, facts: factLine(snap, now: now), score: score)
+                id: item.snap.id, title: item.snap.title, facts: factLine(item.snap, now: now),
+                score: score)
         }
 
         return
