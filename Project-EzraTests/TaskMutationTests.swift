@@ -168,12 +168,25 @@ struct TaskMutationTests {
         let task = draft.makeTaskItem(rawCapture: "x", in: PersistenceStack.scratch)
         #expect(task.status == .todo)
         #expect(task.confirmedAt != nil)
-        // Creation does NOT settle a low-confidence flag — the draft's own
-        // `needsDecision` rides onto the task, and only the human clears it.
-        #expect(task.assessment(isBlocked: false).needsDecision == .lowConfidence)
+        // Creation DOES settle the low-confidence half of Needs Decision (reversed): the
+        // confirm glance is a human reading every field, which is precisely the review the
+        // flag was asking for. Carrying it through would band the task "decide this" for
+        // work the user already reviewed. A judgment call is the carve-out (below).
+        #expect(!task.needsDecision)
+        #expect(task.assessment(isBlocked: false).needsDecision == nil)
         // Autonomy is derived, not forced — a low-confidence item is still `.ask` tier;
-        // that's honest provenance, not a status concern.
+        // that's honest provenance, not a status concern, and it survives the confirm.
         #expect(task.autonomy == .ask)
+    }
+
+    @Test("A judgment call's flag survives creation — confirming it exists isn't deciding it")
+    func creationKeepsJudgmentFlag() {
+        let draft = TaskDraft(
+            title: "Should we move", category: "Family", confidence: 0.95, autonomy: .ask,
+            isJudgmentCall: true, reasoning: "")
+        let task = draft.makeTaskItem(rawCapture: "x", in: PersistenceStack.scratch)
+        #expect(task.needsDecision)
+        #expect(task.assessment(isBlocked: false).needsDecision == .humanJudgment)
     }
 
     @Test("Creation KEEPS blockers — a dependency named at capture survives it")

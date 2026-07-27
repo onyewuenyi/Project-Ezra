@@ -131,8 +131,10 @@ struct TaskDraft: Identifiable, Hashable, Codable {
 
     func userEdited(_ field: DraftField) -> Bool { editedFields?.contains(field) ?? false }
 
-    /// The Needs Decision flag this draft will carry at birth: the judgment-category
-    /// rule (a values-laden call is always the user's) or plain low confidence.
+    /// The Needs Decision reading of this draft **while it is still a draft**: the
+    /// judgment-category rule (a values-laden call is always the user's) or plain low
+    /// confidence. It is NOT what the materialized task carries — see
+    /// `makeTaskItem`, where the low-confidence half is cleared by the confirm itself.
     var needsDecision: Bool {
         isJudgmentCall || confidence < 0.5
     }
@@ -216,6 +218,15 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     /// may be elsewhere in the same batch, and the owner name needs resolving against
     /// the `FamilyMember` roster, so `commit` resolves both phrases into real
     /// references after every task in the batch is inserted.
+    ///
+    /// **Confirm clears the low-confidence half of Needs Decision.** The draft's own
+    /// reading is `isJudgmentCall || confidence < 0.5`, but the second clause describes
+    /// the AI's uncertainty *before* a human looked — and always-confirm means a human
+    /// just looked at every field on this card and let it through. Carrying it onto the
+    /// task would force an unreviewable "decide this" band on work the user already
+    /// reviewed. The judgment half survives untouched (the permanent carve-out:
+    /// confirming that "figure out if X" exists is not making the call — only
+    /// `resolveDecision()` clears that).
     func makeTaskItem(
         rawCapture: String, captureID: UUID? = nil, now: Date = Date(),
         in context: NSManagedObjectContext
@@ -228,7 +239,7 @@ struct TaskDraft: Identifiable, Hashable, Codable {
             status: .todo,
             confidence: confidence,
             isJudgmentCall: isJudgmentCall,
-            needsDecision: needsDecision,
+            needsDecision: isJudgmentCall,  // NOT `needsDecision` — see the note above
             reasoning: reasoning,
             dueDate: dueDate,
             isUrgent: isUrgent,

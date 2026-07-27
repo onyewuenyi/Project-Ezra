@@ -219,6 +219,34 @@ struct CaptureCommitTests {
         #expect(rows.count == 1)
     }
 
+    @Test("Confirm clears the low-confidence Needs Decision; a judgment call keeps its flag")
+    func confirmClearsLowConfidenceDecisionFlag() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+
+        var unsure = TaskDraft(
+            title: "Something vague", category: "Admin", confidence: 0.4,
+            autonomy: .ask, isJudgmentCall: false, reasoning: "")
+        // Pre-confirm the draft DOES read as needing a decision — that's the honest
+        // reading of the AI's uncertainty while nobody has looked at it yet.
+        #expect(unsure.needsDecision)
+        unsure.title = "Something vague"
+
+        var judgment = TaskDraft(
+            title: "Should I quit the gym", category: "Health", confidence: 0.9,
+            autonomy: .ask, isJudgmentCall: true, reasoning: "")
+        judgment.workIntent = .decision
+
+        let created = brain.commit([unsure, judgment], rawCapture: "", into: context)
+        #expect(created.count == 2)
+        // The human reviewed every field at the confirm glance — the low-confidence half
+        // of the flag is what that review answers.
+        #expect(!created[0].needsDecision)
+        #expect(created[0].confidence == 0.4)  // the uncertainty itself is still recorded
+        // The judgment carve-out is untouched: confirming it exists isn't making the call.
+        #expect(created[1].needsDecision)
+    }
+
     @Test("Removing a proposed reverse-dependency is now diffed as a Correction")
     func blocksNowDiffed() {
         var d = draft("New task")

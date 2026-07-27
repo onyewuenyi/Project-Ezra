@@ -218,8 +218,8 @@ struct RootTabView: View {
             .map { RosterPerson(name: $0.name, relationship: $0.relationship.label) }
         let drafts = await brain.triage(sample, roster: roster)
         // `commit` is the confirm, so the seeded screens show a real working set.
-        // Judgment and low-confidence items still arrive wearing their Needs Decision
-        // flag — creation never clears that.
+        // Judgment calls arrive wearing their Needs Decision flag; low-confidence items
+        // do NOT — the confirm is the review that flag was asking for.
         brain.commit(drafts, rawCapture: sample, into: context)
         context.saveChanges()
         hasOnboarded = true
