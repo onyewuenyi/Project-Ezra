@@ -32,12 +32,24 @@ struct TodayView: View {
     @FetchRequest(sortDescriptors: []) private var changesResults: FetchedResults<ChangeLogEntry>
     @FetchRequest(sortDescriptors: []) private var logsResults: FetchedResults<CapacityLog>
     @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
+    /// Uncommitted captures, REACTIVE — the old body-time `AppBrain.parkedCaptures`
+    /// fetch didn't invalidate on Core Data saves, so the line's count was only right
+    /// after some unrelated re-render. Predicate narrows on the cheap date attribute;
+    /// `isParked` (which needs `draftsData`, un-queryable in a predicate) filters in
+    /// memory — same split `AppBrain.parkedCaptures` documents.
+    @FetchRequest(
+        sortDescriptors: [SortDescriptor(\Capture.createdAt, order: .reverse)],
+        predicate: NSPredicate(format: "committedAt == nil"))
+    private var uncommittedCaptures: FetchedResults<Capture>
+    private var parkedCaptures: [Capture] { uncommittedCaptures.filter(\.isParked) }
 
     @State private var sequence: TodaySequenceModel
     @State private var selectedTask: TaskItem?
     @State private var notice: UndoNotice?
     @State private var recapAppeared = false
     @State private var recapEntrancePlayed = false
+    /// The "which parked capture?" chooser, shown only when more than one waits.
+    @State private var showParkedPicker = false
 
     init(brain: AppBrain, store: TodayPlanStore) {
         _sequence = State(initialValue: TodaySequenceModel(brain: brain, store: store))
@@ -318,11 +330,18 @@ struct TodayView: View {
     /// It does not grow forever: `BrainSweeps` prunes a long-parked capture (logged and
     /// reversible), so this surface decays like everything else in the product.
     @ViewBuilder private var parkedCapturesLine: some View {
-        let parked = AppBrain.parkedCaptures(in: context)
+        let parked = parkedCaptures
         if !parked.isEmpty {
             Button {
-                // Resume the most recent; the rest stay parked and reachable.
-                if let newest = parked.first { resumeCapture(newest) }
+                // One waiting → straight into it. Several → let the user CHOOSE:
+                // the line advertises a count, so the tap must honor all of it —
+                // resuming only the newest left the older thoughts technically
+                // preserved but practically unreachable.
+                if parked.count == 1, let only = parked.first {
+                    resumeCapture(only)
+                } else {
+                    showParkedPicker = true
+                }
             } label: {
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "tray")
@@ -336,7 +355,24 @@ struct TodayView: View {
                 .foregroundStyle(Palette.secondaryText)
             }
             .buttonStyle(.pressableLink)
+            .confirmationDialog(
+                "Captures waiting", isPresented: $showParkedPicker, titleVisibility: .visible
+            ) {
+                // Resume-only rows, deliberately: Discard stays the composer's
+                // explicit, confirmed path — the ONLY destructive one.
+                ForEach(parked, id: \.objectID) { capture in
+                    Button(parkedRowLabel(capture)) { resumeCapture(capture) }
+                }
+            }
         }
+    }
+
+    /// A snippet of the parked thought plus its age — enough to pick the right one.
+    private func parkedRowLabel(_ capture: Capture) -> String {
+        let snippet = capture.rawText.prefix(40)
+        let ellipsis = capture.rawText.count > 40 ? "…" : ""
+        let age = capture.createdAt.formatted(.relative(presentation: .named))
+        return "\(snippet)\(ellipsis) · \(age)"
     }
 
     /// One action on the plan: a tappable step (→ the task) with the advisor's line.
