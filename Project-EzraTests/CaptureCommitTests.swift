@@ -29,6 +29,24 @@ struct CaptureCommitTests {
         return d
     }
 
+    @Test("Proposal rationales survive commit inside the persisted reasoning")
+    func rationalesSurviveCommit() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        var d = draft("Pay the water bill")
+        d.reasoning = "Filed under Admin."
+        d.dueDate = Date()
+        d.dueReason = "Bills usually land at month end."
+
+        let created = brain.commit([d], rawCapture: "pay the water bill", into: context)
+
+        let task = try #require(created.first)
+        // The confirm card could answer "why this date?"; now the detail can too —
+        // the rationale rides the same reasoning field the categorization uses.
+        #expect(task.reasoning.contains("Filed under Admin."))
+        #expect(task.reasoning.contains("Proposed due date: Bills usually land at month end."))
+    }
+
     @Test("Accepted duplicate folds into the target — no new task, undo resurrects it")
     func mergeFoldAndUndo() throws {
         let context = TestStore.makeContext()

@@ -233,6 +233,21 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     )
         -> TaskItem
     {
+        // The proposal rationales used to die here: `dueReason`/`ownerReason` explained
+        // an inferred date or owner for exactly as long as the confirm card was on
+        // screen, and the detail could never again answer "why does this have a
+        // deadline?". Fold them into the persisted reasoning — the same field the
+        // categorization explanation already rides — so provenance survives commit.
+        // Both are nil unless a genuine inference happened (a spoken date and the
+        // default-to-you owner rung deliberately carry no reason), so nothing is
+        // appended for the common case.
+        var provenance = reasoning
+        if let dueReason {
+            provenance += (provenance.isEmpty ? "" : " ") + "Proposed due date: \(dueReason)"
+        }
+        if let ownerReason {
+            provenance += (provenance.isEmpty ? "" : " ") + "Proposed owner: \(ownerReason)"
+        }
         let task = TaskItem(
             title: title,
             category: category,
@@ -240,7 +255,7 @@ struct TaskDraft: Identifiable, Hashable, Codable {
             confidence: confidence,
             isJudgmentCall: isJudgmentCall,
             needsDecision: isJudgmentCall,  // NOT `needsDecision` — see the note above
-            reasoning: reasoning,
+            reasoning: provenance,
             dueDate: dueDate,
             isUrgent: isUrgent,
             ownerOrigin: ownerBasis == .spoken ? .human : .inferred,

@@ -91,13 +91,11 @@ struct ComposerView: View {
     @State private var usedDictation = false
     /// The text already present when dictation started; live transcript appends to it.
     @State private var dictationBase = ""
-    /// The single silence-timeout in flight; cancelled and replaced on every
-    /// transcript delta, cancelled outright on stop/disappear.
-    @State private var silenceTask: Task<Void, Never>?
-    /// Bumped on every text change; an in-flight triage that comes back stale drops
-    /// its result instead of clobbering fresher candidates.
-    @State private var triageGeneration = 0
-    @State private var triageTask: Task<Void, Never>?
+    /// Live-parse bookkeeping in a reference box, NOT observable on purpose: these
+    /// values mutate on every keystroke and transcript delta, and as plain `@State`
+    /// each mutation bought a redundant view invalidation — nothing in `body` reads
+    /// them. `@State` here only pins the box's lifetime to the view's.
+    @State private var parse = LiveParseState()
     /// The user's past "no"s, loaded once per composer session — they only change at commit
     /// (which writes new `SuppressionRecord`s and dismisses). Loading also lazily prunes
     /// expired/orphaned rows, so caching keeps that off the per-keystroke path.
@@ -131,6 +129,7 @@ struct ComposerView: View {
                     .frame(minHeight: 120, maxHeight: drafts.isEmpty ? 240 : 160)
 
                 dictationHint
+                engineDisclosure
 
                 if drafts.isEmpty {
                     Text(foundNothing ? Self.nothingFoundHint : Self.openingHint)
@@ -198,8 +197,8 @@ struct ComposerView: View {
             }
             .onDisappear {
                 speech.stop()
-                silenceTask?.cancel()
-                triageTask?.cancel()
+                parse.silenceTask?.cancel()
+                parse.triageTask?.cancel()
                 // The backstop that makes this whole phase worth having: a swipe-down,
                 // a phone call, anything that tears the sheet down mid-thought leaves
                 // the raw text and every edited draft on disk.
@@ -238,9 +237,9 @@ struct ComposerView: View {
     /// resolves near-instantly; the on-device model takes a beat — either way the
     /// newest text always wins.
     private func scheduleTriage() {
-        triageGeneration += 1
-        let generation = triageGeneration
-        triageTask?.cancel()
+        parse.triageGeneration += 1
+        let generation = parse.triageGeneration
+        parse.triageTask?.cancel()
 
         let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !captured.isEmpty else {
@@ -255,9 +254,9 @@ struct ComposerView: View {
             return
         }
 
-        triageTask = Task {
+        parse.triageTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled, generation == triageGeneration else { return }
+            guard !Task.isCancelled, generation == parse.triageGeneration else { return }
             // Everything below is real work (correction-profile build, open-set snapshot,
             // suppression load + prune, embedding warm-up). It runs only AFTER the debounce
             // survives cancellation — never once per keystroke — so a fast typist doesn't
@@ -281,13 +280,13 @@ struct ComposerView: View {
                 onPartial: { partial in
                     // Streaming (device): candidates fill in while the model is
                     // still generating. Stale snapshots drop; edits survive merge.
-                    guard generation == self.triageGeneration else { return }
+                    guard generation == self.parse.triageGeneration else { return }
                     Motion.withMotion(Motion.settle) {
                         self.drafts = self.merge(fresh: partial, into: self.drafts)
                     }
                 }
             )
-            guard !Task.isCancelled, generation == triageGeneration else { return }
+            guard !Task.isCancelled, generation == parse.triageGeneration else { return }
             // Persist any title vectors retrieval computed fresh this pass — tiny rows
             // on the app's write context, post-debounce (never per keystroke). The
             // save rides the next commit; an abandoned capture just re-memoizes later.
@@ -408,14 +407,23 @@ struct ComposerView: View {
                 commitAll()
             } label: {
                 HStack {
-                    if brain.isProcessing {
+                    // The "count may still grow" signal, ENABLED state only — the
+                    // disabled button no longer moonlights as the progress indicator
+                    // (the field's border glow already says "thinking"; the one thing
+                    // that looks tappable shouldn't be the one saying "wait").
+                    if brain.isProcessing && !drafts.isEmpty {
                         Image(systemName: "sparkles")
-                            .symbolEffect(.pulse, options: .repeating)
+                            .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
                     }
                     Text(ctaTitle)
                         .font(.ctaLabel)
                 }
-                .foregroundStyle(Palette.onAccent)
+                // `onAccent` is tuned for the gradient; on the muted disabled surface
+                // it fails contrast — the disabled state gets the muted pair instead.
+                .foregroundStyle(
+                    drafts.isEmpty
+                        ? AnyShapeStyle(Palette.mutedText) : AnyShapeStyle(Palette.onAccent)
+                )
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
                 .background(
@@ -433,9 +441,7 @@ struct ComposerView: View {
     }
 
     private var ctaTitle: String {
-        if drafts.isEmpty {
-            return brain.isProcessing ? "Sorting…" : "Add tasks"
-        }
+        guard !drafts.isEmpty else { return "Add tasks" }
         return "Add \(drafts.count) task\(drafts.count == 1 ? "" : "s")"
     }
 
@@ -472,7 +478,7 @@ struct ComposerView: View {
 
     private func discard() {
         speech.stop()
-        triageTask?.cancel()
+        parse.triageTask?.cancel()
         if let parked { AppBrain.discard(parked, in: context) }
         parked = nil
         drafts = []
@@ -484,7 +490,7 @@ struct ComposerView: View {
     private func commitAll() {
         guard !drafts.isEmpty else { return }
         speech.stop()
-        triageTask?.cancel()
+        parse.triageTask?.cancel()
         committed += 1
         // Adopt the parked row rather than creating a second one for the same event.
         brain.commit(
@@ -581,6 +587,11 @@ struct ComposerView: View {
                 .background(active ? Palette.accentSoft : Palette.secondarySurface, in: Capsule())
                 .shadow(color: active ? Palette.accentGlow : .clear, radius: active ? 12 : 0)
                 .symbolEffect(.variableColor, options: .repeating, isActive: listening && !reduceMotion)
+                // Visual capsule stays 40pt; the TOUCHABLE region meets the HIG
+                // minimum — this is the flagship input mode's primary control,
+                // tapped at arm's length while multitasking.
+                .frame(minHeight: LayoutMetrics.hitTarget)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
         .animation(Motion.glowPulse.repeatWhileTrue(active), value: speech.state)
@@ -633,7 +644,7 @@ struct ComposerView: View {
 
     private func toggleDictation() {
         if speech.isActive {
-            silenceTask?.cancel()
+            parse.silenceTask?.cancel()
             speech.stop()
         } else {
             // Append live transcript after existing text, with a separating space.
@@ -653,8 +664,8 @@ struct ComposerView: View {
     /// ONE cancellable handle, cancel-and-replace per delta — the old shape spawned an
     /// uncancelled sleeping Task per transcript tick, unbounded by design.
     private func scheduleSilenceStop() {
-        silenceTask?.cancel()
-        silenceTask = Task {
+        parse.silenceTask?.cancel()
+        parse.silenceTask = Task {
             try? await Task.sleep(for: .seconds(Self.silenceStopSeconds))
             guard !Task.isCancelled, speech.state == .listening else { return }
             speech.stop()
@@ -665,6 +676,32 @@ struct ComposerView: View {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         UIApplication.shared.open(url)
     }
+
+    /// One quiet line on the fallback path, honesty-first: on-device and rules-engine
+    /// captures produce visibly different cards (proposals, streaming, the "?" state
+    /// exist only on-device), and without this the user's only signal was a DEBUG
+    /// footer — degradation read as inconsistency. Suppressed under XCTest so view
+    /// tests don't all sprout an extra line.
+    @ViewBuilder private var engineDisclosure: some View {
+        if case .fallback(let reason) = brain.status, reason != "test" {
+            Text("On-device intelligence unavailable — using quick rules.")
+                .metadataStyle()
+        }
+    }
+}
+
+/// The composer's per-keystroke bookkeeping: the debounce generation and the two
+/// in-flight tasks. A plain reference type, deliberately NOT `@Observable` — these
+/// mutate on every keystroke and transcript delta, and nothing in the view's `body`
+/// reads them, so observing them only bought a redundant render pass per event.
+final class LiveParseState {
+    /// Bumped on every text change; an in-flight triage that comes back stale drops
+    /// its result instead of clobbering fresher candidates.
+    var triageGeneration = 0
+    var triageTask: Task<Void, Never>?
+    /// The single silence-timeout in flight; cancelled and replaced on every
+    /// transcript delta, cancelled outright on stop/disappear.
+    var silenceTask: Task<Void, Never>?
 }
 
 #Preview {

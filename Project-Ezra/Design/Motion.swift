@@ -139,9 +139,17 @@ private struct BlurTransitionModifier: ViewModifier {
 
 extension Animation {
     /// Repeats forever while `active` is true; otherwise runs once. Used for the
-    /// composer's processing glow.
+    /// composer's processing glow and the mic capsule.
+    ///
+    /// The Reduce Motion gate lives HERE, not at call sites, on the design system's
+    /// "the modifier enforces the rule" principle: two of the three original call
+    /// sites forgot the gate (an infinite pulse is precisely what Reduce Motion users
+    /// opt out of), and a gate a call site can forget isn't a rule. Same UIKit-global
+    /// read as `Motion.respecting` — these fire from value changes, not body builds,
+    /// so the event-time read is the clean one.
     func repeatWhileTrue(_ active: Bool) -> Animation {
-        active ? self.repeatForever(autoreverses: true) : self
+        guard active, !UIAccessibility.isReduceMotionEnabled else { return self }
+        return self.repeatForever(autoreverses: true)
     }
 }
 

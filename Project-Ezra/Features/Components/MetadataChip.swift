@@ -44,10 +44,17 @@ struct MetadataChip<Content: View>: View {
                 .frame(minHeight: LayoutMetrics.hitTarget)
                 .contentShape(Rectangle())
         case .compact:
+            // Same trick as `.standard`: the visual capsule stays dense (~22pt), the
+            // TOUCHABLE region grows to the HIG minimum. These aren't display chips —
+            // every one on the confirm card is a Menu or Button at the exact moment
+            // the product asks for correction input, and a missed tap that scrolls
+            // instead of opening the menu is a tax on the learning signal.
             row
                 .padding(.horizontal, Spacing.xs)
                 .padding(.vertical, Spacing.xxs)
                 .background(Palette.secondarySurface, in: Capsule())
+                .frame(minHeight: LayoutMetrics.hitTarget)
+                .contentShape(Rectangle())
         }
     }
 

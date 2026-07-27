@@ -179,6 +179,20 @@ struct ConfirmCreationCard: View {
                 .disabled(mergeAccepted)
             }
         }
+        // The overflow affordance the glance was missing: chips past the fold used
+        // to be invisible with zero cue (no indicator, no fade), which is how a
+        // wrong owner survived the one moment it was cheap to catch. The trailing
+        // fade is the cheapest honest "there is more" (mask alpha only — the colors
+        // here are opacity, not paint).
+        .mask(
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(
+                    colors: [.black, .clear], startPoint: .leading, endPoint: .trailing
+                )
+                .frame(width: Spacing.lg)
+            }
+        )
     }
 
     /// The chip row plus the owner rationale beneath it, so "why Maya?" is answerable
@@ -210,8 +224,12 @@ struct ConfirmCreationCard: View {
         )
     }
 
-    /// Non-optional for the picker's sake; only ever bound while a date exists (the
-    /// "Pick a date…" arm seeds today first), so the fallback is never read.
+    /// Non-optional for the picker's sake. The fallback (today) is DISPLAY-ONLY:
+    /// opening the picker no longer writes anything to the draft — the old "seed
+    /// today first" arm meant browsing the calendar and backing out silently
+    /// committed "due today", which becomes a real date at commit and a false
+    /// Overdue tomorrow. The draft changes only when the user actually picks a day
+    /// (the graphical picker's `set` fires on selection, never on display).
     private var dueBinding: Binding<Date> {
         Binding(
             get: { draft.dueDate ?? Calendar.current.startOfDay(for: Date()) },
@@ -281,14 +299,29 @@ struct ConfirmCreationCard: View {
                     Button("Keep separate") { setDecision(.childOf, .rejected) }
                 }
             } label: {
-                pill {
-                    assumedMark
-                    Image(systemName: "arrow.turn.down.right").font(.system(size: IconSize.caption))
-                    Text("Step of “\(child.targetTitle)”").font(.metadata.weight(.medium)).lineLimit(1)
+                // Rejected gets its OWN reading, mirroring the duplicate chip: tapping
+                // "Keep separate" used to produce no visible change (rejected differed
+                // from accepted only by a muted tint on 12pt type), so a decision with
+                // a 180-day suppression consequence looked like it never registered.
+                if child.decision == .rejected {
+                    pill {
+                        Image(systemName: "rectangle.on.rectangle").font(.system(size: IconSize.caption))
+                        Text("Keeping separate").font(.metadata.weight(.medium))
+                    }
+                    .foregroundStyle(Palette.mutedText)
+                } else {
+                    pill {
+                        assumedMark
+                        Image(systemName: "arrow.turn.down.right").font(.system(size: IconSize.caption))
+                        Text("Step of “\(child.targetTitle)”").font(.metadata.weight(.medium)).lineLimit(1)
+                    }
+                    .foregroundStyle(Palette.secondaryText)
                 }
-                .foregroundStyle(child.decision == .accepted ? Palette.secondaryText : Palette.mutedText)
             }
-            .accessibilityLabel("Step of \(child.targetTitle), \(child.decision.rawValue)")
+            .accessibilityLabel(
+                child.decision == .rejected
+                    ? "Keeping separate from \(child.targetTitle)"
+                    : "Step of \(child.targetTitle), \(child.decision.rawValue)")
         }
     }
 
@@ -365,10 +398,7 @@ struct ConfirmCreationCard: View {
             Button("Today") { setDue(0) }
             Button("Tomorrow") { setDue(1) }
             Button("Next week") { setDue(7) }
-            Button("Pick a date…") {
-                if draft.dueDate == nil { setDue(0) }
-                showDatePicker = true
-            }
+            Button("Pick a date…") { showDatePicker = true }
             if draft.dueDate != nil {
                 Divider()
                 Button("Clear", role: .destructive) {
@@ -406,9 +436,12 @@ struct ConfirmCreationCard: View {
     //    catches most captures — marking that as an inference would claim the AI
     //    worked something out when it didn't, which is worse for trust than the
     //    abstention this replaced.
-    // 2. This is the last moment to catch a wrong owner, and it is the only field on
-    //    the card with a social consequence, so it renders at the STANDARD chip's 44pt
-    //    tap target rather than the dense compact one the neighbours use.
+    // 2. This is the last moment to catch a wrong owner — and delegating a task the
+    //    AI left with you is exactly as consequential as un-delegating one it sent
+    //    away, so BOTH states need the full tap target. That no longer takes a
+    //    density fork: `.compact` now carries the same invisible 44pt touch region
+    //    as `.standard` (the old fork was inverted anyway — the common "You" state
+    //    got the small target its own comment argued against).
     //
     // No directional arrow yet. `→ Aisha` reads as transmission, and nothing is
     // transmitted until sync — it ships with delivery, not before.
@@ -451,7 +484,7 @@ struct ConfirmCreationCard: View {
                 }
             }
         } label: {
-            MetadataChip(density: draft.ownerName == nil ? .compact : .standard) {
+            MetadataChip(density: .compact) {
                 if draft.ownerReason != nil, unresolvableOwner == nil { assumedMark }
                 if let missing = unresolvableOwner {
                     Image(systemName: "person.crop.circle.badge.questionmark")
