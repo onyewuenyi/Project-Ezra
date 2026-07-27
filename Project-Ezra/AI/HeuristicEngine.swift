@@ -5,8 +5,13 @@
 //  Deterministic, always-available fallback for when Foundation Models isn't on
 //  the device (older hardware, Apple Intelligence disabled, or the simulator).
 //  It keeps the whole loop working with keyword categorization and rule-based
-//  confidence — lower ceiling than the LLM, so it routes more items to Needs
-//  Decision rather than guessing, exactly as the confidence-lever framing intends.
+//  confidence — a lower CEILING than the LLM (0.85 max), but note the floor: the
+//  only sub-0.5 score is the judgment call's 0.4, so on this path Needs Decision
+//  at birth ⟺ judgment call, and the confirm card's low-confidence "?" state
+//  structurally never renders. That is a known parity gap (the audit's P3), not
+//  the "routes more to Needs Decision" behavior an earlier version of this
+//  comment claimed — lowering ambiguous scores below 0.5 would need the
+//  RambleEval floors re-calibrated with it.
 //
 
 import Foundation
@@ -137,7 +142,6 @@ struct HeuristicEngine: AIEngine {
             effortMinutes: effortMinutes(from: lower)
         )
     }
-
 
     private static func cleanTitle(_ line: String) -> String {
         var t = line.trimmingCharacters(in: .whitespaces)
