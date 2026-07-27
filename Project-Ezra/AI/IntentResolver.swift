@@ -36,7 +36,20 @@ enum IntentResolver {
         suppressions: [RelationshipSuppression] = [], now: Date = Date()
     ) -> TaskDraft {
         let intent = applyRules(rules, to: intent)
-        let dueDate = resolveDate(expression: intent.dateExpression, now: now)
+        // The date the user actually EXPRESSED, kept separate from the one inferred
+        // from the task's nature below — the two are not interchangeable downstream.
+        let spokenDate = resolveDate(expression: intent.dateExpression, now: now)
+        let workIntent =
+            intent.workIntent.flatMap { WorkIntent(rawValue: $0) }
+            ?? inferredWorkIntent(title: intent.title)
+        // A captured wait suppresses the proposal. Two reasons, one of which the eval
+        // caught: the blocker's own words are IN the title ("book flights after passport
+        // is done" read as a passport renewal and got a two-week deadline), and a task
+        // that can't start yet is precisely where a manufactured date becomes a false
+        // Overdue. A spoken date still lands on a blocked task — that one the user meant.
+        let proposedDue =
+            spokenDate == nil && intent.blockerPhrase == nil
+            ? inferredDueDate(title: intent.title, now: now) : nil
         var draft = TaskDraft(
             title: intent.title,
             category: intent.category,
@@ -45,21 +58,24 @@ enum IntentResolver {
                 confidence: intent.confidence, isJudgmentCall: intent.isJudgmentCall),
             isJudgmentCall: intent.isJudgmentCall,
             reasoning: intent.reasoning,
-            dueDate: dueDate,
+            dueDate: spokenDate ?? proposedDue?.date,
             blockedBy: intent.blockerPhrase,
             isUrgent: intent.isUrgent,
             // Metadata backfill: whatever the engine left empty is inferred here,
             // deterministically and uniformly — no candidate reaches the confirm
             // card with a hole the user has to fill from scratch. Extracted values
-            // always win; backfill only fills gaps. Due dates are the deliberate
-            // exception: inventing a date with no time signal manufactures a
-            // future false Overdue, so an undated task stays honestly undated.
+            // always win; backfill only fills gaps.
+            //
+            // Importance reads the SPOKEN date only. It returns `highImportance` for
+            // anything due within two days, so feeding it an inferred date would let
+            // a guess inflate the attention score — inference stacked on inference.
             aiImportance: intent.importance
-                ?? inferredImportance(title: intent.title, dueDate: dueDate, now: now),
+                ?? inferredImportance(title: intent.title, dueDate: spokenDate, now: now),
             ownerName: intent.personReference,
             effortMinutes: intent.effortMinutes ?? estimatedEffort(for: intent.title)
         )
-        draft.workIntent = intent.workIntent.flatMap { WorkIntent(rawValue: $0) }
+        draft.workIntent = workIntent
+        draft.dueReason = proposedDue?.reason
         draft.blocks = detectDependents(for: intent, among: openTasks)
         draft.edgeProposals = edgeProposals(
             for: intent, candidates: candidates, suppressions: suppressions)
@@ -72,6 +88,7 @@ enum IntentResolver {
             category: draft.category,
             dueDate: draft.dueDate,
             isUrgent: draft.isUrgent,
+            workIntent: draft.workIntent,
             ownerName: draft.ownerName,
             effortMinutes: draft.effortMinutes,
             blockerPhrase: draft.blockedBy,
@@ -252,11 +269,114 @@ enum IntentResolver {
         "clean", "reorganize", "review", "figure", "decide",
     ]
 
+    // MARK: - Work-intent backfill (axis 2, when the engine didn't classify)
+
+    /// What KIND of work this is, from the wording alone — the deterministic half of
+    /// axis 2, so the heuristic path (the simulator, and any user whose Apple
+    /// Intelligence is off or unavailable by region) doesn't reach the confirm card
+    /// with the field blank. An engine-supplied classification always wins; this only
+    /// fills the gap.
+    ///
+    /// Two rules this must not break:
+    ///
+    /// 1. **It never reads `isJudgmentCall` or `needsDecision`.** Axis 2 (what kind of
+    ///    work) and axis 3 (what demands attention) answer different questions, and
+    ///    deriving one from the other re-fuses them. Lexical signals only.
+    /// 2. **Everything unrecognised falls to `.action`**, which is behaviourally
+    ///    identical to nil (same CTA verb, same capability set) — so the default arm is
+    ///    a naming, not a behaviour change.
+    static func inferredWorkIntent(title: String) -> WorkIntent {
+        let lower = title.lowercased()
+        // Phrases first: "figure out if" and "figure out how" are different questions
+        // and share a stem, so word-level matching can't separate them.
+        if decisionPhrases.contains(where: lower.contains) { return .decision }
+        if planningPhrases.contains(where: lower.contains) { return .planning }
+        let words = CorrectionProfile.significantWords(title)
+        if !decisionWords.isDisjoint(with: words) { return .decision }
+        if !planningWords.isDisjoint(with: words) { return .planning }
+        return .action
+    }
+
+    /// Deliberately kept separate from `focusedSignals` above (which shares several
+    /// words): effort and type answer different questions, and collapsing them into one
+    /// vocabulary would make a tweak to either silently move the other.
+    private static let decisionPhrases = [
+        "should i", "should we", "figure out if", "figure out whether", "decide whether",
+        "pick between", "choose between", "worth it",
+    ]
+    private static let decisionWords: Set<String> = ["decide", "decision", "choose", "whether"]
+    private static let planningPhrases = [
+        "figure out how", "break down", "map out", "think through", "work out how",
+    ]
+    /// Deliberately excludes "schedule" and "prepare": both read as concrete actions at
+    /// least as often as planning ("schedule a dentist appointment", "prepare dinner"),
+    /// and `.action` is the safe default — a wrong `.planning` mislabels the CTA verb.
+    private static let planningWords: Set<String> = [
+        "plan", "planning", "organize", "organise", "research", "outline",
+    ]
+
+    // MARK: - Due-date proposal (from the task's nature, not a spoken phrase)
+
+    /// A due date proposed from what the task IS, for the recurring obligations that
+    /// carry a real deadline the user rarely bothers to say out loud ("pay rent",
+    /// "renew the passport"). Only ever consulted when `resolveDate` found no spoken
+    /// phrase — an expressed date always wins.
+    ///
+    /// This is a deliberate reversal of the old "an undated task stays honestly
+    /// undated" rule, and it is contained four ways: the table below is short and
+    /// explicit rather than a general "everything gets a week", `resolve` skips it
+    /// entirely for a blocked task, the returned `reason` renders under the chip so the
+    /// user can see WHY a date appeared while it is still one tap to clear, and the
+    /// result never feeds `inferredImportance` (see `resolve`).
+    ///
+    /// The residual cost, accepted knowingly: `TaskItem.isStale` only fires on undated
+    /// tasks, so anything that gets a proposed date leaves stale detection.
+    static func inferredDueDate(title: String, now: Date = Date()) -> (date: Date, reason: String)? {
+        let words = CorrectionProfile.significantWords(title)
+        let cal = Calendar.current
+
+        if !recurringBillSignals.isDisjoint(with: words) {
+            guard let month = cal.dateInterval(of: .month, for: now),
+                let lastDay = cal.date(byAdding: .day, value: -1, to: month.end)
+            else { return nil }
+            return (cal.startOfDay(for: lastDay), "Bills usually land at month end.")
+        }
+        if !renewalSignals.isDisjoint(with: words) {
+            guard let date = cal.date(byAdding: .day, value: 14, to: cal.startOfDay(for: now))
+            else { return nil }
+            return (date, "Renewals need a couple of weeks' lead time.")
+        }
+        if !deadlineSignals.isDisjoint(with: words) {
+            guard let date = cal.date(byAdding: .day, value: 7, to: cal.startOfDay(for: now))
+            else { return nil }
+            return (date, "Reads like a deadline — a week's lead time.")
+        }
+        return nil
+    }
+
+    private static let recurringBillSignals: Set<String> = [
+        "rent", "bill", "bills", "invoice", "mortgage", "subscription",
+    ]
+    private static let renewalSignals: Set<String> = [
+        "renew", "renewal", "registration", "insurance", "visa", "passport", "prescription",
+        "expires", "expiring",
+    ]
+    private static let deadlineSignals: Set<String> = ["tax", "taxes", "deadline"]
+
     // MARK: - Date resolution (deterministic, testable)
 
     /// Resolve a raw time phrase to a concrete date. Handles the common natural
     /// forms plus ISO passthrough; nil for anything it can't honestly resolve —
     /// a wrong guess is worse than an empty field the user can fill at confirm.
+    ///
+    /// **The arm order is load-bearing**, because several of these phrases contain each
+    /// other as substrings. Most specific first: "day after tomorrow" before "tomorrow",
+    /// a named weekday before any bare week reference (so "next week friday" is Friday,
+    /// not Monday), and "weekend" before "this week" (which "this weekend" contains).
+    ///
+    /// Everything resolves to a start-of-day. There is no time-of-day parsing: the
+    /// prompt sends the model no clock, and every consumer of `dueDate` treats it as a
+    /// day.
     static func resolveDate(expression: String?, now: Date = Date()) -> Date? {
         guard let raw = expression?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             !raw.isEmpty
@@ -267,18 +387,37 @@ enum IntentResolver {
         // ISO passthrough (the model may echo a date the user literally said).
         if let iso = parseISO(raw) { return iso }
 
+        // Before "tomorrow" — it contains it.
+        if raw.contains("day after tomorrow") {
+            return cal.date(byAdding: .day, value: 2, to: today)
+        }
         if raw.contains("today") || raw == "tonight" { return today }
         if raw.contains("tomorrow") {
             return cal.date(byAdding: .day, value: 1, to: today)
         }
-        if raw.contains("next week") {
-            // The start of the next calendar week — the honest reading of an
-            // expression that names a week, not a day.
-            if let thisWeek = cal.dateInterval(of: .weekOfYear, for: now) {
-                return thisWeek.end
-            }
-            return cal.date(byAdding: .day, value: 7, to: today)
+
+        // "in three days", "in 2 weeks", "a week from now".
+        if let offset = parseRelativeOffset(raw) {
+            return cal.date(byAdding: offset.unit, value: offset.value, to: today)
         }
+
+        // A named month and day ("july 20", "20 july", "jul 20th").
+        if let calendarDate = parseMonthDay(raw, now: now, cal: cal) { return calendarDate }
+
+        // A named weekday beats any bare week reference below.
+        if let weekday = weekdayNumber(in: raw) {
+            var comps = DateComponents()
+            comps.weekday = weekday
+            let next = cal.nextDate(after: now, matching: comps, matchingPolicy: .nextTime)
+                .map(cal.startOfDay(for:))
+            // "next week friday" names the Friday of the FOLLOWING week, not this
+            // week's. Bare "next friday" stays the next occurrence — that one is
+            // genuinely ambiguous in English and the nearer reading is the safer guess.
+            guard raw.contains("next week"), let next else { return next }
+            return cal.date(byAdding: .weekOfYear, value: 1, to: next)
+        }
+
+        // Before the week arms — "this weekend" contains "this week".
         if raw.contains("weekend") {
             // The coming Saturday (or today, if it already is the weekend).
             if cal.isDateInWeekend(now) { return today }
@@ -288,17 +427,119 @@ enum IntentResolver {
                 .map(cal.startOfDay(for:))
         }
 
-        let weekdays = [
-            "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
-            "thursday": 5, "friday": 6, "saturday": 7,
-        ]
-        for (name, weekday) in weekdays where raw.contains(name) {
-            var comps = DateComponents()
-            comps.weekday = weekday
-            return cal.nextDate(after: now, matching: comps, matchingPolicy: .nextTime)
-                .map(cal.startOfDay(for:))
+        if raw.contains("end of the month") || raw.contains("end of month") {
+            guard let month = cal.dateInterval(of: .month, for: now) else { return nil }
+            return cal.date(byAdding: .day, value: -1, to: month.end).map(cal.startOfDay(for:))
+        }
+        if raw.contains("next month") {
+            // The start of the next calendar month, matching how "next week" reads.
+            guard let month = cal.dateInterval(of: .month, for: now) else { return nil }
+            return month.end
+        }
+        if raw.contains("end of the week") || raw.contains("end of week")
+            || raw.contains("this week")
+        {
+            guard let thisWeek = cal.dateInterval(of: .weekOfYear, for: now) else { return nil }
+            return cal.date(byAdding: .day, value: -1, to: thisWeek.end).map(cal.startOfDay(for:))
+        }
+        if raw.contains("next week") {
+            // The start of the next calendar week — the honest reading of an
+            // expression that names a week, not a day.
+            if let thisWeek = cal.dateInterval(of: .weekOfYear, for: now) {
+                return thisWeek.end
+            }
+            return cal.date(byAdding: .day, value: 7, to: today)
         }
         return nil
+    }
+
+    /// Weekday names in a fixed order — an array, not a dictionary, because a
+    /// dictionary's iteration order is unspecified and a phrase naming two days would
+    /// resolve differently between runs.
+    private static let weekdayNames: [(String, Int)] = [
+        ("sunday", 1), ("monday", 2), ("tuesday", 3), ("wednesday", 4),
+        ("thursday", 5), ("friday", 6), ("saturday", 7),
+    ]
+
+    private static func weekdayNumber(in raw: String) -> Int? {
+        weekdayNames.first { raw.contains($0.0) }?.1
+    }
+
+    /// "in N days" / "in N weeks" / "in a week" / "a week from now" — N as digits or
+    /// spelled out. Returns the calendar unit and count to add to today.
+    private static func parseRelativeOffset(
+        _ raw: String
+    )
+        -> (unit: Calendar.Component, value: Int)?
+    {
+        let pattern =
+            #"(?:in|within)\s+(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(day|week|month)s?"#
+        if let match = raw.range(of: pattern, options: .regularExpression) {
+            let phrase = String(raw[match])
+            let unit: Calendar.Component =
+                phrase.contains("month") ? .month : (phrase.contains("week") ? .weekOfYear : .day)
+            if let count = spelledNumber(in: phrase) { return (unit, count) }
+        }
+        // "a week from now", "two days from today".
+        let fromPattern =
+            #"(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(day|week|month)s?\s+from\s+(now|today)"#
+        if let match = raw.range(of: fromPattern, options: .regularExpression) {
+            let phrase = String(raw[match])
+            let unit: Calendar.Component =
+                phrase.contains("month") ? .month : (phrase.contains("week") ? .weekOfYear : .day)
+            if let count = spelledNumber(in: phrase) { return (unit, count) }
+        }
+        return nil
+    }
+
+    private static let spelledNumbers: [String: Int] = [
+        "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    ]
+
+    private static func spelledNumber(in phrase: String) -> Int? {
+        if let digits = phrase.range(of: #"\d+"#, options: .regularExpression) {
+            return Int(phrase[digits])
+        }
+        for (word, value) in spelledNumbers.sorted(by: { $0.key.count > $1.key.count })
+        where phrase.range(of: #"\b"# + word + #"\b"#, options: .regularExpression) != nil {
+            return value
+        }
+        return nil
+    }
+
+    private static let monthNames = [
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    ]
+
+    /// A month/day with no year ("july 20", "20 july", "jul 20th"), resolved to the
+    /// NEXT occurrence — a date the user names is always ahead of them, never a
+    /// past-dated task that lands already overdue.
+    private static func parseMonthDay(_ raw: String, now: Date, cal: Calendar) -> Date? {
+        // The full name or its three-letter abbreviation, whole-word — never a prefix
+        // match, which would read "market" as March.
+        guard
+            let month = monthNames.firstIndex(where: {
+                raw.range(
+                    of: #"\b(?:"# + $0 + "|" + $0.prefix(3) + #")\b"#, options: .regularExpression)
+                    != nil
+            })
+        else { return nil }
+        guard let dayRange = raw.range(of: #"\b\d{1,2}(st|nd|rd|th)?\b"#, options: .regularExpression),
+            let day = Int(raw[dayRange].prefix(while: \.isNumber)), (1...31).contains(day)
+        else { return nil }
+
+        var comps = DateComponents()
+        comps.month = month + 1
+        comps.day = day
+        comps.year = cal.component(.year, from: now)
+        guard let candidate = cal.date(from: comps).map(cal.startOfDay(for:)) else { return nil }
+        if candidate < cal.startOfDay(for: now) {
+            comps.year = (comps.year ?? 0) + 1
+            return cal.date(from: comps).map(cal.startOfDay(for:))
+        }
+        return candidate
     }
 
     private static func parseISO(_ raw: String) -> Date? {

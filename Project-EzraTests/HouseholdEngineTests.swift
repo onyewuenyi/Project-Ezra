@@ -154,12 +154,12 @@ struct HouseholdEngineTests {
             title: "insurance", status: .todo, dueDate: days(-1), ownerID: maya.uuid, createdAt: now)
         let blocked = TaskItem(title: "remodel", status: .todo, ownerID: maya.uuid, createdAt: now)
         blocked.addExternalBlocker("the plumber", among: [blocked])
-        // A reference item is NOT on the plate: it is owned and live but never
-        // resolves, so counting it would inflate the plate forever and (through the
-        // overload modifier and the affinity denominator) stop Maya being proposed work.
-        let note = TaskItem(title: "gate code", status: .todo, ownerID: maya.uuid, createdAt: now)
-        note.workIntent = .reference
-        let snap = compute([active, dueToday, overdue, blocked, note], members: [maya])
+        // A RESOLVED task is off the plate — the plate counts live work only. (There is
+        // no longer a live task that sits outside the workload systems: `.reference`
+        // was the only one, and retiring it removed all five exclusion gates.)
+        let finished = TaskItem(title: "gate code", status: .todo, ownerID: maya.uuid, createdAt: now)
+        finished.complete()
+        let snap = compute([active, dueToday, overdue, blocked, finished], members: [maya])
         let load = loadFor(snap, member: maya)
         #expect(load?.activeCount == 4)
         #expect(load?.dueTodayCount == 1)

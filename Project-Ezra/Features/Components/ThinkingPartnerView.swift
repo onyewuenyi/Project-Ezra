@@ -5,29 +5,53 @@
 //  The Thinking Partner expansion inside the detail's decision section (Decision Framing,
 //  P0). On demand it asks the on-device model to FRAME the choice — the options with
 //  their tradeoffs and the cost of waiting — shown calmly, no action buttons (framing
-//  doesn't decide; `resolveDecisionAndLog` stays the only clearer). Absent off-device:
-//  `DecisionFramingService.frame` returns nil there and the view collapses to nothing.
+//  doesn't decide; `resolveDecisionAndLog` stays the only clearer).
+//
+//  Off-device this view is never DRAWN — the detail checks availability before rendering
+//  the section, so there is no button to tap that could vanish. That means `.failed` here
+//  can only mean a real attempt that failed, which is why it now offers a retry instead
+//  of collapsing to nothing.
 //
 
 import SwiftUI
 
 struct ThinkingPartnerView: View {
     let context: DecisionContext
+    /// False once this page stops being the one on screen. The pager keeps neighbours
+    /// MOUNTED, so `.onDisappear` never fires for a swiped-past page — this is the only
+    /// signal that the user has moved on, and an in-flight generation must stop.
+    var isActive: Bool = true
 
     @State private var phase: Phase = .idle
+    @State private var work: Task<Void, Never>?
 
     private enum Phase {
         case idle
         case loading
         case framed(DecisionFraming)
-        case unavailable
+        /// A real attempt that produced nothing usable — a timeout, a refusal, or a
+        /// decode failure. Distinct from "no model here", which never reaches this view.
+        case failed
     }
 
     var body: some View {
+        Group {
+            phaseContent
+        }
+        .onChange(of: isActive) { _, active in
+            // The pager keeps neighbouring pages mounted, so a swipe never fires
+            // `.onDisappear` — this is the moment the user actually left.
+            if !active { work?.cancel() }
+        }
+        .onDisappear { work?.cancel() }
+    }
+
+    @ViewBuilder
+    private var phaseContent: some View {
         switch phase {
         case .idle:
             Button {
-                Task { await think() }
+                start()
             } label: {
                 Label("Think it through", systemImage: "sparkles")
                     .font(.controlLabel)
@@ -48,17 +72,29 @@ struct ThinkingPartnerView: View {
         case .framed(let framing):
             framedContent(framing).transition(.opacity)
 
-        case .unavailable:
-            EmptyView()
+        case .failed:
+            RetryLine(message: "That didn't finish.") { start() }
         }
+    }
+
+    /// Start (or restart) a framing, replacing any run already in flight.
+    private func start() {
+        work?.cancel()
+        work = Task { await think() }
     }
 
     private func think() async {
         withAnimation(Motion.settle) { phase = .loading }
-        if let framing = await DecisionFramingService().frame(context) {
+        let outcome = await DecisionFramingService().frame(context)
+        switch outcome {
+        case .success(let framing):
             withAnimation(Motion.settle) { phase = .framed(framing) }
-        } else {
-            withAnimation(Motion.settle) { phase = .unavailable }
+        case .cancelled:
+            // The user left mid-generation. Say nothing and keep the card as it was —
+            // surfacing an error for their own navigation would be noise.
+            break
+        case .unavailable, .timedOut, .failed:
+            withAnimation(Motion.settle) { phase = .failed }
         }
     }
 

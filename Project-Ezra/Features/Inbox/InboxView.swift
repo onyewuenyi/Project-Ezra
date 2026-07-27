@@ -135,7 +135,7 @@ struct InboxView: View {
             entry.undone = true
             ChangeLogUndo.revert(entry, in: context)
         }
-        try? context.save()
+        context.saveChanges()
     }
 
     // MARK: - Diagnostics footer (dev-only plan tiers)
@@ -147,6 +147,13 @@ struct InboxView: View {
             #if DEBUG
             Text(planDiagnosticsLine)
                 .metadataStyle()
+            // One line per capability that has actually run a model call — the evidence
+            // behind `ModelDeadline.cardSeconds`. Silent until something has been called,
+            // so this costs nothing on a fresh install.
+            ForEach(ModelMetrics.shared.footerLines(), id: \.self) { line in
+                Text(line)
+                    .metadataStyle()
+            }
             #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)

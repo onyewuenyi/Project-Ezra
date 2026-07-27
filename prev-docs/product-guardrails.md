@@ -33,6 +33,26 @@ re-engagement loops (the PRD's V1 learning guardrail, promoted to a standing rul
 Optimize instead for: reduced interaction, faster completion, higher AI confidence,
 lower cognitive load. A feature that increases sessions but not trust is a regression.
 
+### The one carve-out: the daily briefing nudge (2026-07-26)
+
+`BriefingReminder` ships a single local notification, which reads against the
+"notification-driven re-engagement" refusal below. It is allowed as a **narrow, named
+exception**, not a softening of the rule, and only while all of these hold:
+
+- **One notification type.** A second one is the signal this was abused, not a precedent.
+- **Off by default, at a time the user picks.** An alarm they set, not a hook we cast.
+- **No badges, no counts, no "5 tasks overdue", no escalation, no streaks.**
+- **It never fires on a day the briefing already played** (`BriefingSchedule.occurrences`,
+  asserted in `BriefingScheduleTests`).
+- **It does not inflate the engagement metric.** An open the app solicited is excluded
+  from `Metrics.selfInitiatedOpens` — otherwise the one honest pull metric quietly
+  becomes the vanity number this section exists to refuse.
+
+The reasoning: the Today sequence is a once-a-day moment that only happens if you
+remember it, and a moment you have to remember is a chore. The rule is about not
+optimizing for sessions; a self-scheduled alarm that actively skips days you already
+showed up for does the opposite.
+
 ## Performance Budgets (engineering constraints, not aspirations)
 
 | Interaction | Budget |

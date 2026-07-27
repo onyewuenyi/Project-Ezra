@@ -119,25 +119,14 @@ struct TaskStatusTests {
         #expect(task.status == .todo)
     }
 
-    // MARK: - The workload predicate
+    // MARK: - The type axis
 
-    @Test("Only reference leaves the workload systems; unknown intent counts as work")
-    func workloadPredicate() {
-        let task = TaskItem(title: "x")
-        // Nil intent — the heuristic path, and every user whose Apple Intelligence is
-        // off or unavailable. Unknown must count as work, the safe direction.
-        #expect(task.workIntent == nil)
-        #expect(task.countsAsWorkload)
-
-        for intent in WorkIntent.allCases {
-            task.workIntent = intent
-            #expect(task.countsAsWorkload == (intent != .reference))
-        }
-    }
-
-    @Test("WorkIntent no longer carries a waiting case — blocked is a separate axis")
-    func waitingIsCut() {
+    @Test("WorkIntent carries three kinds — waiting and reference are both retired")
+    func retiredCasesAreGone() {
+        // `waiting` duplicated the derived blocked flag; `reference` existed only to be
+        // excluded from the workload systems, and removing it collapsed all five gates.
         #expect(WorkIntent(rawValue: "waiting") == nil)
-        #expect(Set(WorkIntent.allCases) == [.action, .decision, .planning, .reference])
+        #expect(WorkIntent(rawValue: "reference") == nil)
+        #expect(Set(WorkIntent.allCases) == [.action, .decision, .planning])
     }
 }

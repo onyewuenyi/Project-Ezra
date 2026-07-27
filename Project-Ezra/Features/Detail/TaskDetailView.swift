@@ -54,6 +54,13 @@ struct TaskDetailView: View {
     @State private var appeared = false
     @State private var actionPulse = 0
     @State private var showAllActivity = false
+    /// Set when Unstick routes the user into the breakdown card, so the section can
+    /// render even for a task whose eligibility the user is only now being told about.
+    @State private var showBreakdown = false
+    /// The in-flight re-classification, held so it can be cancelled. Unlike the card
+    /// views this runs unprompted, so it is the one most likely to outlive the user's
+    /// interest in this page.
+    @State private var classifyWork: Task<Void, Never>?
 
     /// Freely-typed fields diff on focus loss (title/description) — snapshots of what they
     /// held when editing began, so a change logs exactly one "edited" row per commit.
@@ -78,11 +85,18 @@ struct TaskDetailView: View {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 titleSection.rise(0, appeared, reduceMotion)
                 decisionSection.rise(1, appeared, reduceMotion)
-                propertyCard.rise(2, appeared, reduceMotion)
-                descriptionSection.rise(3, appeared, reduceMotion)
-                whySection.rise(4, appeared, reduceMotion)
-                activitySection.rise(5, appeared, reduceMotion)
-                footer.rise(6, appeared, reduceMotion)
+                breakdownSection.rise(2, appeared, reduceMotion)
+                unstickSection.rise(3, appeared, reduceMotion)
+                propertyCard.rise(4, appeared, reduceMotion)
+                descriptionSection.rise(5, appeared, reduceMotion)
+                whySection.rise(6, appeared, reduceMotion)
+                activitySection.rise(7, appeared, reduceMotion)
+                // Conditioned here rather than inside `footer` so a task with no
+                // honest next move (a reference, or someone else's work) doesn't
+                // leave the VStack holding spacing for an absent button.
+                if let action = task.recommendedAction(among: allTasks, currentUserID: currentUserID) {
+                    footer(action).rise(6, appeared, reduceMotion)
+                }
             }
             .padding(Spacing.lg)
         }
@@ -94,8 +108,16 @@ struct TaskDetailView: View {
             // Prewarm the on-device model when the Thinking Partner will render, so the
             // first framing tap isn't paying the cold model-load cost. Only for the page
             // actually on screen — a neighbour in the pager hasn't earned the load.
-            if isActive, TaskCapabilities.available(for: task).contains(.thinkingPartner) {
+            if isActive, capabilities.contains(.thinkingPartner) {
                 ModelWarmup.prewarmSharedSession()
+            }
+            // Work changes shape. A parent whose last step just completed elsewhere is
+            // no longer planning work, and nothing else would notice — resolution
+            // happens on rows, in Today, and on other devices, none of which can run an
+            // async on-device classify. Re-reading on open is the one place that sees
+            // every route. Gated on having children so this is rare, not per-open.
+            if isActive, !task.children(among: allTasks).isEmpty {
+                reclassifyWorkIntent()
             }
         }
         .onAppear {
@@ -112,7 +134,12 @@ struct TaskDetailView: View {
             // Swiping to the next task doesn't unmount this page, so `.onDisappear` can't
             // be the backstop for an in-flight edit. Dropping focus runs the commit path
             // above, which logs the edit before the page leaves the screen.
-            if !active { focusedField = nil }
+            if !active {
+                focusedField = nil
+                // Same reasoning for model work: the user has left this task, so a
+                // classification still running is spend with nobody waiting on it.
+                classifyWork?.cancel()
+            }
         }
         .onDisappear {
             // Backstop for a dismiss mid-edit (focus never formally left the field). The
@@ -124,7 +151,10 @@ struct TaskDetailView: View {
             // engagement on the clock staleness and the deferral discriminator trust.
             commitTitleEdit()
             commitNotesEdit()
-            try? context.save()
+            context.saveChanges()
+            // The detail was dismissed outright (not just swiped past), so nothing is
+            // waiting on a classification either.
+            classifyWork?.cancel()
         }
         .alert("New person", isPresented: $showAddPerson) {
             TextField("Name", text: $newPersonName)
@@ -436,15 +466,124 @@ struct TaskDetailView: View {
 
     // MARK: - Decision (the judgment-call resolution)
 
-    /// Capability-driven: the detail renders whatever `TaskCapabilities` returns. V1 has one
-    /// capability — the Thinking Partner — offered when the task is a genuine decision (the
-    /// `needsDecision` flag OR a `.decision` work-intent). A flagged decision shows the full
-    /// card (reason + "Mark decided" + framing); an intent-only decision shows the lighter
-    /// card (framing, no flag fabricated, no clear button).
+    /// The reason to offer a breakdown, from either route: offered proactively on a
+    /// healthy big task, or revealed after Unstick explained that size is why it stalled.
+    private var breakdownReason: BreakdownEligibility.Reason? {
+        for capability in capabilities {
+            if case .breakDown(let reason) = capability { return reason }
+            if showBreakdown, case .unstick(.tooBig(let reason)) = capability { return reason }
+        }
+        return nil
+    }
+
+    /// "This keeps sliding" — the inertia capability. Present only when the task has
+    /// demonstrably stalled, and it names WHY rather than just that it has.
+    ///
+    /// Never absent off-device: `StallDetector` is deterministic end to end, so this
+    /// renders identically with Apple Intelligence off — unlike the other two cards.
+    @ViewBuilder
+    private var unstickSection: some View {
+        if let diagnosis = capabilities.compactMap({ capability -> StallDiagnosis? in
+            if case .unstick(let diagnosis) = capability { return diagnosis }
+            return nil
+        }).first {
+            UnstickView(
+                diagnosis: diagnosis,
+                deferralCount: Int(task.deferralCount),
+                onBreakDown: { showBreakdown = true },
+                onMakeDecision: { setWorkIntent(.decision) },
+                onDoItNow: { applyStatus(.doing) },
+                onDefer: { setDue(dayOffset: 7) },
+                onKill: { applyStatus(.canceled) }
+            )
+        }
+    }
+
+    /// Accept a breakdown: create the selected steps as real child tasks.
+    ///
+    /// `proposed` is the full set the model offered, so each deselection is recorded as
+    /// a `Correction` — the user telling the classifier it over-reached is exactly the
+    /// signal the correction loop wants, and it exists nowhere else.
+    private func accept(_ steps: [BreakdownStep], proposed: [BreakdownStep]) {
+        guard !steps.isEmpty else { return }
+        actionPulse += 1
+        Motion.withMotion(Motion.decide) {
+            task.splitInto(steps, in: context)
+        }
+        let kept = Set(steps.map(\.title))
+        for declined in proposed where !kept.contains(declined.title) {
+            context.insert(
+                Correction(
+                    taskUUID: task.uuid, captureID: task.captureID,
+                    fieldCorrected: "split", aiValue: declined.title, userValue: "declined",
+                    in: context))
+        }
+        // A task that has just become a container is a different kind of work than it
+        // was a moment ago — see `reclassifyWorkIntent`.
+        reclassifyWorkIntent()
+        context.saveChanges()
+    }
+
+    /// Everything this task is offered, computed once per body evaluation.
+    private var capabilities: [Capability] {
+        TaskCapabilities.available(for: task, among: allTasks)
+    }
+
+    /// Whether a model exists to produce card CONTENT. The capability triggers stay
+    /// deterministic — they must answer in the sim and with Apple Intelligence off — so
+    /// this is a separate question asked at the render layer, never inside
+    /// `TaskCapabilities`. Read once here rather than per section: it reads
+    /// `SystemLanguageModel.default.availability` on every call.
+    private var modelAvailable: Bool { AppBrain.onDeviceModelAvailable() }
+
+    /// "Break this down" — the complexity capability. Absent off-device (the service
+    /// returns nil), and absent entirely for a task that isn't big or compound.
+    @ViewBuilder
+    private var breakdownSection: some View {
+        // Every part of this card is model output, so with no model there is nothing to
+        // draw. Rendering the header alone used to leave a titled empty box, and worse,
+        // a "Break this down" button that silently vanished when tapped.
+        if let reason = breakdownReason, modelAvailable {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "square.stack.3d.down.right")
+                        .font(.system(size: IconSize.small))
+                        .foregroundStyle(Palette.accentFlat)
+                    Text("This looks like several steps")
+                        .font(.sectionHeader)
+                        .foregroundStyle(Palette.primaryText)
+                }
+                BreakdownView(
+                    context: BreakdownContext(task: task), reason: reason, isActive: isActive,
+                    onAccept: { accept($0, proposed: $1) })
+            }
+            .padding(Spacing.md)
+            .background(
+                Palette.primarySurface,
+                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(Palette.border, lineWidth: 0.5)
+            }
+        }
+    }
+
+    /// Capability-driven: the detail renders whatever `TaskCapabilities` returns, without
+    /// knowing why any of it was offered.
+    ///
+    /// The Thinking Partner appears when the task is a genuine decision (the
+    /// `needsDecision` flag OR a `.decision` work-intent). A flagged decision shows the
+    /// full card (reason + "Mark decided" + framing); an intent-only decision shows the
+    /// lighter card (framing, no flag fabricated, no clear button).
     @ViewBuilder
     private var decisionSection: some View {
-        if TaskCapabilities.available(for: task).contains(.thinkingPartner) {
-            let flagged = task.needsDecision && !task.status.isResolved
+        let flagged = task.needsDecision && !task.status.isResolved
+        // Gate the FRAMING, never the section. A flagged decision must keep its reason
+        // line and its "Mark decided" button with no model present — those are human
+        // affordances, and `resolveDecision()` is the only thing that clears the flag.
+        // An intent-only decision has nothing but framing to show, so it drops out.
+        if capabilities.contains(.thinkingPartner), flagged || modelAvailable {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "hand.raised.fill")
@@ -459,7 +598,10 @@ struct TaskDetailView: View {
                         .supportingStyle()
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                ThinkingPartnerView(context: DecisionContext(task: task, among: allTasks))
+                if modelAvailable {
+                    ThinkingPartnerView(
+                        context: DecisionContext(task: task, among: allTasks), isActive: isActive)
+                }
                 if flagged {
                     Button {
                         markDecided()
@@ -498,7 +640,7 @@ struct TaskDetailView: View {
     private func markDecided() {
         actionPulse += 1
         Motion.withMotion(Motion.decide) { task.resolveDecisionAndLog(in: context) }
-        try? context.save()
+        context.saveChanges()
     }
 
     // MARK: - Description
@@ -591,14 +733,22 @@ struct TaskDetailView: View {
 
     // MARK: - Footer (the one obvious next move)
 
-    private var footer: some View {
-        let action = task.recommendedAction(among: allTasks)
-        return Button {
+    /// One slot, and only when there is an honest move to put in it. A task owned by
+    /// someone else resolves to nil upstream — better no button than the most accented
+    /// control on screen offering something that isn't the user's to do. Its proxy
+    /// actions live in `TaskMoreMenu`.
+    private func footer(_ action: RecommendedAction) -> some View {
+        Button {
             performPrimary(action)
         } label: {
             Text(action.title)
                 .font(.ctaLabel)
                 .foregroundStyle(Palette.onAccent)
+                // Start doesn't dismiss — it relabels to "Mark done" under the tap,
+                // so the lifecycle is taught by the button rather than documented.
+                // The transition is what makes that read as a state change rather
+                // than a redraw.
+                .contentTransition(.numericText())
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
                 .background(Palette.accentGradient, in: Capsule())
@@ -609,9 +759,9 @@ struct TaskDetailView: View {
     private func performPrimary(_ action: RecommendedAction) {
         actionPulse += 1
         Motion.withMotion(Motion.decide) {
-            task.performRecommendedAction(among: allTasks, in: context)
+            task.performRecommendedAction(action, among: allTasks, in: context)
         }
-        try? context.save()
+        context.saveChanges()
         if action.dismissesDetail { onResolved() }
     }
 
@@ -621,7 +771,7 @@ struct TaskDetailView: View {
         guard state != task.status else { return }
         actionPulse += 1
         Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
-        try? context.save()
+        context.saveChanges()
         if state.isResolved { onResolved() }
     }
 
@@ -629,7 +779,7 @@ struct TaskDetailView: View {
         guard id != task.ownerID else { return }
         actionPulse += 1
         Motion.withMotion(Motion.decide) { task.claimAndLog(ownerID: id, among: allTasks, in: context) }
-        try? context.save()
+        context.saveChanges()
     }
 
     private func addPerson() {
@@ -643,7 +793,7 @@ struct TaskDetailView: View {
     private func toggleUrgent() {
         actionPulse += 1
         task.setUrgent(!task.isUrgent, among: allTasks, in: context)
-        try? context.save()
+        context.saveChanges()
     }
 
     private func setCategory(_ cat: String) {
@@ -654,7 +804,7 @@ struct TaskDetailView: View {
         task.logHumanEdit(
             field: "category", oldValue: old, newValue: cat,
             summary: "Recategorized to \(cat)", in: context)
-        try? context.save()
+        context.saveChanges()
     }
 
     /// A HUMAN type correction. Logged as a plain field edit (coalescing, out of the
@@ -669,14 +819,16 @@ struct TaskDetailView: View {
             field: "workIntent", oldValue: old?.rawValue, newValue: intent?.rawValue,
             summary: intent.map { "Set kind to \($0.label)" } ?? "Cleared the kind of work",
             in: context)
-        if let old {
-            context.insert(
-                Correction(
-                    taskUUID: task.uuid, captureID: task.captureID,
-                    fieldCorrected: "workIntent", aiValue: old.rawValue,
-                    userValue: intent?.rawValue ?? "none", in: context))
-        }
-        try? context.save()
+        // Recorded even when the prior value was nil. A nil intent is precisely the
+        // heuristic / Apple-Intelligence-off case this chip exists to correct, so
+        // gating the row on a non-nil `old` dropped the signal on the exact tasks that
+        // most needed it.
+        context.insert(
+            Correction(
+                taskUUID: task.uuid, captureID: task.captureID,
+                fieldCorrected: "workIntent", aiValue: old?.rawValue ?? "none",
+                userValue: intent?.rawValue ?? "none", in: context))
+        context.saveChanges()
     }
 
     private func setEffort(_ minutes: Int?) {
@@ -688,7 +840,7 @@ struct TaskDetailView: View {
         task.logHumanEdit(
             field: "effortMinutes", oldValue: old.map(String.init),
             newValue: minutes.map(String.init), summary: summary, in: context)
-        try? context.save()
+        context.saveChanges()
     }
 
     private func effortText(_ minutes: Int) -> String {
@@ -708,7 +860,7 @@ struct TaskDetailView: View {
         task.logHumanEdit(
             field: "blockers", oldValue: nil, newValue: id.uuidString, summary: "Added blocker",
             coalescable: false, in: context)
-        try? context.save()
+        context.saveChanges()
         reclassifyWorkIntent()  // gaining a blocker is a structural change
     }
 
@@ -720,7 +872,7 @@ struct TaskDetailView: View {
         task.logHumanEdit(
             field: "blockers", oldValue: nil, newValue: note ?? "something else",
             summary: "Added blocker", reversible: false, coalescable: false, in: context)
-        try? context.save()
+        context.saveChanges()
         reclassifyWorkIntent()
     }
 
@@ -730,7 +882,7 @@ struct TaskDetailView: View {
         task.logHumanEdit(
             field: "blockers", oldValue: blockerID.uuidString, newValue: nil,
             summary: "Removed blocker", reversible: false, coalescable: false, in: context)
-        try? context.save()
+        context.saveChanges()
         reclassifyWorkIntent()  // losing a blocker is a structural change
     }
 
@@ -748,7 +900,7 @@ struct TaskDetailView: View {
         task.logHumanEdit(
             field: "dueDate", oldValue: ChangeLogEntry.encodeDate(old),
             newValue: ChangeLogEntry.encodeDate(date), summary: summary, in: context)
-        try? context.save()
+        context.saveChanges()
     }
 
     private var dueBinding: Binding<Date> {
@@ -767,7 +919,7 @@ struct TaskDetailView: View {
             field: "title", oldValue: originalTitle, newValue: updated, summary: "Renamed task",
             in: context)
         originalTitle = updated
-        try? context.save()
+        context.saveChanges()
         reclassifyWorkIntent()  // a material title change may change what kind of work this is
     }
 
@@ -778,7 +930,7 @@ struct TaskDetailView: View {
             field: "notes", oldValue: originalNotes, newValue: updated,
             summary: updated == nil ? "Cleared description" : "Updated description", in: context)
         originalNotes = updated
-        try? context.save()
+        context.saveChanges()
         reclassifyWorkIntent()
     }
 
@@ -792,12 +944,20 @@ struct TaskDetailView: View {
     private func reclassifyWorkIntent() {
         guard !task.status.isResolved else { return }
         let snapshot = WorkIntentContext(task: task, among: allTasks)
-        Task {
-            guard let intent = await WorkIntentClassifier().classify(snapshot) else { return }
-            // Routed through the mutation seam so a move across the workload boundary
-            // is logged and reversible rather than silently re-scoping five systems.
+        // Replace any classification still in flight — a second edit supersedes the first,
+        // and letting both land would race to write `workIntent`.
+        classifyWork?.cancel()
+        classifyWork = Task {
+            let outcome = await WorkIntentClassifier().classify(snapshot)
+            // Only a success writes. `.unavailable` / `.timedOut` / `.failed` all leave
+            // the cached value alone — this path must never clobber a good classification
+            // with a guess. `.cancelled` must not write at all: the user has moved on and
+            // a stale intent landing behind them is exactly what cancellation prevents.
+            guard case .success(let intent) = outcome, !Task.isCancelled else { return }
+            // Routed through the mutation seam rather than writing `workIntent` directly,
+            // so every classifier write lands in one place.
             task.reclassify(to: intent, in: context)
-            try? context.save()
+            context.saveChanges()
         }
     }
 
@@ -820,7 +980,7 @@ struct TaskDetailView: View {
             entry.undone = true
             ChangeLogUndo.revert(entry, in: context)
         }
-        try? context.save()
+        context.saveChanges()
     }
 
     private func dueText(_ date: Date) -> String {

@@ -38,7 +38,7 @@ struct HouseholdRosterView: View {
             // Ensures Household + UserProfile + the linked "you" household member all
             // exist, so the editor always has the full identity to bind to.
             UserProfile.bootstrapIdentity(in: context)
-            try? context.save()
+            context.saveChanges()
         }
     }
 }
@@ -71,7 +71,7 @@ private struct HouseholdRosterContent: View {
     private func syncYou() {
         guard let me = youMember else { return }
         profile.syncIdentity(to: me)
-        try? context.save()
+        context.saveChanges()
     }
 
     var body: some View {
@@ -86,7 +86,7 @@ private struct HouseholdRosterContent: View {
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Manage household")
         .navigationBarTitleDisplayMode(.inline)
-        .onDisappear { try? context.save() }
+        .onDisappear { context.saveChanges() }
         .alert("Add someone", isPresented: $showAddPerson) {
             TextField("Name", text: $newPersonName)
             Button("Add") { addPerson() }
@@ -103,7 +103,7 @@ private struct HouseholdRosterContent: View {
             PhotoPickerButton { data in
                 household.photoData = data
                 household.photoUpdatedAt = Date()
-                try? context.save()
+                context.saveChanges()
             } label: {
                 AvatarView(household: household, size: 88)
             }
@@ -174,7 +174,7 @@ private struct HouseholdRosterContent: View {
             PhotoPickerButton { data in
                 member.photoData = data
                 member.photoUpdatedAt = Date()
-                try? context.save()
+                context.saveChanges()
             } label: {
                 AvatarView(member: member, size: 44)
             }
@@ -194,7 +194,7 @@ private struct HouseholdRosterContent: View {
                     ForEach(FamilyRelationship.allCases) { relation in
                         Button(relation.label) {
                             member.relationship = relation
-                            try? context.save()
+                            context.saveChanges()
                         }
                     }
                 } label: {
@@ -255,13 +255,13 @@ private struct HouseholdRosterContent: View {
         guard !trimmed.isEmpty else { return }
         let member = FamilyMember(name: trimmed, in: context)
         member.household = household
-        try? context.save()
+        context.saveChanges()
     }
 
     /// Soft-delete: the record stays so a task they once owned keeps its attribution.
     private func remove(_ member: FamilyMember) {
         Motion.withMotion(Motion.decide) { member.deletedAt = Date() }
-        try? context.save()
+        context.saveChanges()
     }
 }
 

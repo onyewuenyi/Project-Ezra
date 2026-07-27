@@ -26,58 +26,19 @@ enum MyTasksTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// What a section on the Assigned tab is headed by. Almost always a lifecycle state
-/// — but `.reference` is deliberately NOT one.
-///
-/// A reference item ("the wifi password is hunter2") is owned and live yet never
-/// needs to complete, so filing it under "Todo" claims it is queued work, which it
-/// is not. Giving it its own section is the honest rendering, and it is also the
-/// visible symptom of a deferred question: the task primitive is currently doing two
-/// jobs (execution and knowledge). This section is the seam a future
-/// knowledge/execution split would cut along — see `docs/task-model.md`.
-enum MyTasksSectionKind: Hashable {
-    case status(TaskStatus)
-    case reference
-
-    var label: String {
-        switch self {
-        case .status(let status): return status.label
-        case .reference: return "Reference"
-        }
-    }
-
-    var rawValue: String {
-        switch self {
-        case .status(let status): return status.rawValue
-        case .reference: return "reference"
-        }
-    }
-}
-
 /// One section on the Assigned tab: a header and the chain-grouped entries under it,
 /// already stack-ordered.
 struct MyTasksSection: Identifiable {
-    let kind: MyTasksSectionKind
+    let status: TaskStatus
     let entries: [TaskLaneEntry]
 
-    var id: String { kind.rawValue }
+    var id: String { status.rawValue }
 }
 
 enum MyTasksSlices {
     /// The canonical section order — live pipeline first (In Progress → Todo), then
-    /// the resolution ledger (Done → Canceled), then the reference shelf last. Kept
-    /// last on purpose: it is a record you consult, never a queue you work.
-    static let sectionOrder: [MyTasksSectionKind] = [
-        .status(.doing), .status(.todo), .status(.done), .status(.canceled), .reference,
-    ]
-
-    /// Which section a task heads. A LIVE reference item goes to the reference shelf;
-    /// a resolved one goes to Done/Canceled like anything else, because at that point
-    /// it really is a resolution record.
-    static func sectionKind(for task: TaskItem) -> MyTasksSectionKind {
-        if task.status.isLive, task.workIntent == .reference { return .reference }
-        return .status(task.status)
-    }
+    /// the resolution ledger (Done → Canceled).
+    static let sectionOrder: [TaskStatus] = [.doing, .todo, .done, .canceled]
 
     /// The filter-menu predicate: an optional status filter and an optional category
     /// filter. `nil` means "All" for either axis. This is also how the Done/Canceled
@@ -102,10 +63,10 @@ enum MyTasksSlices {
             $0.isMine(currentUserID: currentUserID) && applyFilters($0, status: status, category: category)
         }
         let entries = laneEntries(from: scoped, allTasks: tasks)
-        let grouped = Dictionary(grouping: entries) { sectionKind(for: $0.anchor) }
-        return sectionOrder.compactMap { kind in
-            guard let items = grouped[kind], !items.isEmpty else { return nil }
-            return MyTasksSection(kind: kind, entries: items)
+        let grouped = Dictionary(grouping: entries) { $0.anchor.status }
+        return sectionOrder.compactMap { status in
+            guard let items = grouped[status], !items.isEmpty else { return nil }
+            return MyTasksSection(status: status, entries: items)
         }
     }
 

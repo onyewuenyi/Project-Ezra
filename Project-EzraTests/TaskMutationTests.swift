@@ -48,6 +48,36 @@ struct TaskMutationTests {
         #expect(task.updatedAt > born)
     }
 
+    // MARK: - Picking a task up (the Start commitment)
+
+    @Test("Starting a task resets its staleness — picking it up is a human touch")
+    func startBumpsHumanClock() {
+        let context = TestStore.makeContext()
+        let born = Date(timeIntervalSinceNow: -20 * 24 * 3600)
+        let task = TaskItem(title: "x", status: .todo, createdAt: born, in: context)
+        #expect(task.humanTouchedAt == born)
+
+        task.setStatus(.doing, in: context)
+        // The live relevance layer reads this clock; if Start didn't bump it, a task
+        // you just committed to would keep decaying as though untouched.
+        #expect(task.humanTouchedAt > born)
+        #expect(task.currentStateEnteredAt != nil)
+    }
+
+    @Test("Starting a task is not household news — it stays out of the Inbox feed")
+    func startStaysOutOfTheFeed() throws {
+        let context = TestStore.makeContext()
+        let task = TaskItem(title: "x", status: .todo, in: context)
+        task.setStatus(.doing, in: context)
+
+        let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
+        let mine = entries.filter { $0.taskUUID == task.uuid }
+        #expect(!mine.isEmpty)
+        // Nudging a task in and out of flight while you work is a personal marker,
+        // not something the rest of the household needs pushed at them.
+        #expect(mine.allSatisfy { !$0.isInboxVisible })
+    }
+
     // MARK: - Reopen restores the prior status (from the state timeline)
 
     @Test("reopen() restores the exact status the task left")

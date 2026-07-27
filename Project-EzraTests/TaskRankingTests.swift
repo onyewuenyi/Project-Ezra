@@ -150,6 +150,72 @@ struct TaskRankingTests {
         #expect(precedes(justFreed, longAgo, among: all))
     }
 
+    // MARK: - The start commitment (`.doing` as a live signal, not a glyph color)
+
+    /// Build a task that entered `.doing` at a specific moment, through the real
+    /// transition path so the `StateVisit` the boost reads is genuine.
+    private func started(_ title: String, at when: Date, createdAt: Date? = nil) -> TaskItem {
+        let task = TaskItem(title: title, status: .todo, createdAt: createdAt ?? when)
+        task.transition(to: .doing, now: when)
+        return task
+    }
+
+    private func relevance(_ task: TaskItem) -> Double {
+        TaskRanking.currentRelevance(
+            for: task, now: now, recentlyGainedDependent: false, neighborDueDates: [])
+    }
+
+    @Test("Picking a task up boosts it — finishing beats starting")
+    func startedWorkRises() {
+        let inFlight = score(started("in flight", at: now.addingTimeInterval(-3600)), 50)
+        let peer = score(TaskItem(title: "peer", status: .todo, createdAt: now), 50)
+        let all = [inFlight, peer]
+        #expect(precedes(inFlight, peer, among: all))
+        #expect(!precedes(peer, inFlight, among: all))
+    }
+
+    @Test("The boost expires with the window — abandoned in-flight work stops floating")
+    func startedBoostExpires() {
+        // Same creation date, so staleness is identical and only the boost differs.
+        let born = days(-30)
+        let fresh = started("fresh", at: now.addingTimeInterval(-3600), createdAt: born)
+        let abandoned = started("abandoned", at: days(-14), createdAt: born)
+        #expect(relevance(fresh) - relevance(abandoned) == TaskRanking.startedBoost)
+    }
+
+    @Test("The boost reads the CURRENT visit, not summed dwell across every visit")
+    func startedBoostReadsOpenVisit() {
+        // Worked on for days a fortnight ago, dropped, and only just picked back up.
+        // `secondsIn(.doing)` is enormous here; the live commitment is an hour old.
+        let task = TaskItem(title: "resumed", status: .todo, createdAt: days(-30))
+        task.transition(to: .doing, now: days(-14))
+        task.transition(to: .todo, now: days(-11))
+        task.transition(to: .doing, now: now.addingTimeInterval(-3600))
+        #expect(task.secondsIn(.doing, now: now) > TaskRanking.recentWindow)
+
+        let peer = TaskItem(title: "peer", status: .todo, createdAt: days(-30))
+        #expect(relevance(task) - relevance(peer) == TaskRanking.startedBoost)
+    }
+
+    @Test("A todo task gets no start boost — the signal is the commitment, not the age")
+    func todoGetsNoStartBoost() {
+        let todo = TaskItem(title: "todo", status: .todo, createdAt: now)
+        #expect(relevance(todo) == 0)
+    }
+
+    @Test("The start boost lives in the live layer, never in the persisted score")
+    func startBoostNeverTouchesAttention() {
+        // The band must stay fact-fed: `.doing` is the fastest fact in the system, so
+        // it must not reach `AttentionMetadata`, only `currentRelevance`.
+        let task = started("in flight", at: now)
+        AttentionEngine.recompute([task], among: [task])
+        let inFlightScore = task.attention.score
+
+        let peer = TaskItem(title: "peer", status: .todo, createdAt: now)
+        AttentionEngine.recompute([peer], among: [peer])
+        #expect(inFlightScore == peer.attention.score)
+    }
+
     @Test("currentRelevance clamps to ±25 in both directions")
     func relevanceClamp() {
         let buried = TaskItem(title: "buried", status: .todo, createdAt: days(-365))

@@ -45,6 +45,17 @@ extension TaskItem {
     /// read the human clock only, so a system write can never fake engagement.
     func touchHuman(now: Date = Date()) {
         lastHumanTouchAt = now
+        // Engagement breaks the avoidance streak. `deferralCount` counts times the task
+        // was PLANNED AND IGNORED, so it must mean "consecutively", not "ever": the
+        // rollover only ever increments it, and nothing else clears it, so without this
+        // reset a task that crossed `StallDetector.deferralThreshold` once would show
+        // "This keeps sliding" for the rest of its live life — every Unstick action
+        // (do it now, defer, break it down) routes through here, so the card would
+        // survive the very tap meant to dismiss it. It would also carry the ranking
+        // pull-down forever, penalising a task the user has since picked back up.
+        // `carriedOverCount` is the lifetime worked-but-unfinished counter and is
+        // deliberately NOT reset — the two answer different questions.
+        deferralCount = 0
         touch(now: now)
     }
 
@@ -95,43 +106,21 @@ extension TaskItem {
 
     /// Apply a fresh `WorkIntent` from the classifier.
     ///
-    /// **A reclassification that crosses the workload boundary must be logged.** Via
-    /// `countsAsWorkload`, the intent gates five operational systems — member loads,
-    /// the affinity denominator, Today candidacy, ranked-stack membership, and the
-    /// stale auto-archive. An `action → reference` move would therefore remove a task
-    /// from all five on a model call, with no human action and nothing in any log.
-    /// That is the one thing every other consequential AI write in this codebase is
-    /// forbidden from doing, so it gets a reversible `.ai` entry the user can see and
-    /// undo.
+    /// A plain write. It used to log a reversible entry when the intent crossed the
+    /// *workload boundary* (`action ↔ reference`), because that quietly re-scoped five
+    /// operational systems on a model call. With `.reference` retired there is no such
+    /// boundary left — every remaining kind counts as work — so a reclassification only
+    /// changes which capability the detail offers, which was always the silent case.
     ///
-    /// A reclassification that does NOT cross the boundary (`action → decision`) stays
-    /// silent: it changes which module the detail renders, not what the system counts.
+    /// The HUMAN path (`TaskDetailView.setWorkIntent`) still logs and writes a
+    /// `Correction`: a person correcting the AI is a real signal, an AI refining its own
+    /// guess is not.
     func reclassify(
         to intent: WorkIntent, in context: NSManagedObjectContext, now: Date = Date()
     ) {
         guard intent != workIntent else { return }
-        let wasWorkload = countsAsWorkload
-        let previous = workIntent
         workIntent = intent
         touch(now: now)
-        guard wasWorkload != countsAsWorkload else { return }
-        let phrase =
-            countsAsWorkload
-            ? "counts as work again" : "reads as a reference note, so it's out of your workload"
-        context.insert(
-            ChangeLogEntry(
-                summary: "Reclassified “\(title)” — \(phrase)",
-                detail: "It no longer affects your plan, load, or sweeps.",
-                action: "reclassified",
-                fieldChanged: "workIntent",
-                oldValue: previous?.rawValue,
-                newValue: intent.rawValue,
-                initiatedBy: .ai,
-                isReversible: true,
-                taskTitle: title,
-                taskUUID: uuid,
-                timestamp: now, in: context
-            ))
     }
 
     /// The human explicitly making the call a Needs Decision flag was waiting on.
@@ -201,6 +190,14 @@ extension TaskItem {
     /// the status alone — the task simply stops reading as blocked on the next
     /// derivation. Human-initiated (a detail/recommended-action tap), so it stamps
     /// both `lastUnblockedAt` (the recently-unblocked fact) and the human clock.
+    ///
+    /// **Known gap — this is destructive and unlogged.** It removes N edges, writes no
+    /// `ChangeLogEntry`, and is therefore the one mutation on this type with no Undo.
+    /// `ActivityVocab` already carries an `"unblocked"` glyph, tint and word that nothing
+    /// writes, so the trail entry was designed and never wired. Splitting the call by
+    /// `Origin` was considered and rejected: `addTaskBlocker`/`addExternalBlocker` both
+    /// default to `.human`, so an origin-gated version would prompt on nearly every tap
+    /// while still leaving the underlying action irreversible. Reversibility is the fix.
     func unblock(now: Date = Date()) {
         guard !blockers.isEmpty else { return }
         removeRelationships { $0.kind == .blocks }
@@ -298,23 +295,108 @@ extension TaskItem {
             removeBlocker(blocker.id, among: tasks)
         }
     }
+
+    // MARK: - Break this down (the split seam)
+
+    /// Turn accepted breakdown steps into real child tasks.
+    ///
+    /// Three rules this encodes, each of which is a product invariant rather than an
+    /// implementation choice:
+    ///
+    /// 1. **Children are created, exactly like a capture.** A task comes into existence
+    ///    only when a human confirms it, so these are born `.todo` with `confirmedAt`
+    ///    stamped — the accept tap IS that confirm. They inherit the parent's owner and
+    ///    category, because a step of your work is your work.
+    /// 2. **One entry, not N.** The user performed one action; the feed should say so,
+    ///    and Undo should reverse the whole split rather than leave a half-decomposed
+    ///    parent. The created ids ride in `newValue` so the undo arm can find them.
+    /// 3. **The AI never splits on its own.** This is only ever called from an explicit
+    ///    accept — the service proposes, the person decides.
+    ///
+    /// Returns the created children. Callers own `save()`.
+    @discardableResult
+    func splitInto(
+        _ steps: [BreakdownStep], in context: NSManagedObjectContext, now: Date = Date()
+    ) -> [TaskItem] {
+        guard !steps.isEmpty, let selfID = uuid else { return [] }
+        var created: [TaskItem] = []
+        for step in steps {
+            let child = TaskItem(
+                title: step.title,
+                category: category,
+                status: .todo,
+                creatorID: creatorID,
+                confidence: confidence,
+                reasoning: "A step of “\(title)”.",
+                isUrgent: false,
+                ownerID: ownerID,
+                ownerOrigin: ownerOrigin,
+                effortMinutes: step.effortMinutes,
+                captureID: captureID,
+                rawCapture: rawCapture,
+                createdAt: now,
+                in: context)
+            child.confirmedAt = now  // the accept tap is the confirm
+            child.linkParent(selfID)
+            context.insert(child)
+            created.append(child)
+        }
+        touchHuman(now: now)
+        context.insert(
+            ChangeLogEntry(
+                summary: "Broke “\(title)” into \(created.count) steps",
+                detail: created.map(\.title).joined(separator: " · "),
+                action: "split",
+                fieldChanged: "children",
+                newValue: created.compactMap { $0.uuid?.uuidString }.joined(separator: ","),
+                initiatedBy: .human,
+                isReversible: true,
+                taskTitle: title,
+                taskUUID: uuid,
+                actorID: UserProfile.currentMemberID(in: context),
+                timestamp: now, in: context
+            ))
+        return created
+    }
 }
 
 // MARK: - Recommended Action (the derived "one obvious next tap")
 
-/// The single best next move for a task, inferred from its status and the AI's
-/// live assessment. Fuses what used to be two parallel switches (button title +
-/// behavior) into one value, so the label and the action can never drift apart.
-enum RecommendedAction {
+/// The single best next move for a task, derived from its lifecycle stage, its
+/// obstacles, and who owns it. Fuses what used to be two parallel switches (button
+/// title + behavior) into one value, so the label and the action can never drift
+/// apart — which is why `.start` carries its verb's input rather than letting a
+/// separate function compute the title.
+enum RecommendedAction: Equatable {
     case claim  // take ownership of one handed back to the household
     case unblock  // drop the blockers holding it
-    case resolve  // mark an actionable task done
+    case start(WorkIntent?)  // pick it up — .todo → .doing, voiced by the work's type
+    case resume  // pick it up AGAIN — .todo → .doing on a task with a closed `.doing` visit
+    case resolve  // mark an in-flight task done
     case reopen  // bring a resolved task back
 
+    /// `.start` is the one CTA whose word comes from axis 2. The type never appears
+    /// as its own control — it manifests as the verb on the button already there.
+    /// A nil intent (heuristic path, or Apple Intelligence off/unavailable) reads
+    /// "Start", so the voicing degrades invisibly rather than going blank.
+    ///
+    /// **The verb may only promise what this button actually does, which is move the
+    /// lifecycle.** `.planning` used to read "Break it down" and it was a lie: every
+    /// arm of `performRecommendedAction` runs `setStatus(.doing)`, so the most
+    /// prominent control on the screen promised a breakdown and started the task
+    /// instead. Breaking work into steps belongs to the `.breakDown` capability card,
+    /// which already renders itself whenever `BreakdownEligibility` says so — a CTA
+    /// duplicating it would either lie (as this did) or double-render the same offer.
+    ///
+    /// `.decision` keeps its verb because it stays true: the Thinking Partner frames
+    /// and never decides, so picking the task up IS how you start deciding.
     var title: String {
         switch self {
         case .claim: return "That's mine"
         case .unblock: return "Unblock"
+        case .start(.decision): return "Decide"
+        case .start: return "Start"
+        case .resume: return "Resume"
         case .resolve: return "Mark done"
         case .reopen: return "Reopen"
         }
@@ -322,26 +404,59 @@ enum RecommendedAction {
 
     /// The detail sheet dismisses after resolving (the task leaves the working
     /// set); every other action keeps it open so the user sees the result in place.
+    /// `.start` deliberately stays — the button relabels to "Mark done" underneath
+    /// the tap, which is how the lifecycle teaches itself.
     var dismissesDetail: Bool { self == .resolve }
 }
 
 extension TaskItem {
-    /// The recommended next action, derived from status + assessment. Precedence:
-    /// a resolved task reopens; a blocked one wants unblocking; one handed back to
-    /// the household wants claiming; otherwise it's ready to finish. (There is no
-    /// `.confirm` any more — a task that exists has already been confirmed.)
-    func recommendedAction(among tasks: [TaskItem]) -> RecommendedAction {
+    /// The recommended next action — nil when this surface has no honest move to
+    /// offer. Read as a tree, not a ladder: *is it settled → is it even a to-do →
+    /// is it mine → can it be worked on → what stage is it in.*
+    ///
+    /// The nil arm is the point. A task owned by someone else is not yours to advance
+    /// — offering it a primary CTA means offering a button that is wrong by
+    /// construction. Its proxy actions live in the "…" menu, and the empty slot is
+    /// reserved for Nudge/Comment once `HouseholdSync` makes those real.
+    ///
+    /// Claim precedes unblock on purpose: you take the thing before you clear its path.
+    ///
+    /// Takes `currentUserID` (`UserProfile.linkedMemberID`) rather than a context on
+    /// purpose — this is read during view body evaluation, and `currentMemberID(in:)`
+    /// bootstraps an identity, so passing a context here would insert and save mid-render.
+    /// A nil id (no profile yet) falls through to the normal lifecycle CTA rather than
+    /// blanking the button: hide the slot only when the owner is *known* to be someone
+    /// else.
+    func recommendedAction(among tasks: [TaskItem], currentUserID: UUID?) -> RecommendedAction? {
         if status.isResolved { return .reopen }
-        if hasActiveBlockers(among: tasks) { return .unblock }
         if ownerID == nil { return .claim }
-        return .resolve
+        if let currentUserID, !isMine(currentUserID: currentUserID) { return nil }
+        if hasActiveBlockers(among: tasks) { return .unblock }
+        switch status {
+        // A task with a closed `.doing` visit has been here before. "Resume" outranks the
+        // intent verb because it is the more useful thing to know: you are picking
+        // something back up, not choosing what kind of work it is.
+        case .todo: return hasBeenStarted ? .resume : .start(workIntent)
+        case .doing: return .resolve
+        case .done, .canceled: return .reopen  // unreachable — `isResolved` caught these
+        }
     }
 
-    /// Run whatever `recommendedAction` currently returns. Callers own `save()`.
-    func performRecommendedAction(among tasks: [TaskItem], in context: NSManagedObjectContext) {
-        switch recommendedAction(among: tasks) {
+    /// Run an already-resolved action, so the label the user tapped and the mutation
+    /// that runs are the same decision rather than two independent derivations.
+    /// Callers own `save()`.
+    func performRecommendedAction(
+        _ action: RecommendedAction, among tasks: [TaskItem], in context: NSManagedObjectContext
+    ) {
+        switch action {
         case .claim: claimAndLog(ownerID: UserProfile.currentMemberID(in: context), among: tasks, in: context)
+        // Inferred edges only. A human-authored blocker survives this call — the caller
+        // that wants it gone has to ask the user and pass `includingHuman: true`.
         case .unblock: unblock()
+        // Through the shared seam: records the StateVisit, logs a coalescing human
+        // edit that self-deletes on a round-trip, stays out of the Inbox feed, and
+        // bumps the human clock so picking a task up resets its staleness.
+        case .start, .resume: setStatus(.doing, in: context)
         case .resolve: completeAndResurface(in: context)
         case .reopen: reopenAndReblock(in: context)
         }

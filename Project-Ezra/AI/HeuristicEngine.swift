@@ -134,40 +134,10 @@ struct HeuristicEngine: AIEngine {
             reasoning: reasoning,
             isUrgent: urgencySignal(for: lower),
             importance: importanceSignal(for: lower),
-            effortMinutes: effortMinutes(from: lower),
-            workIntent: isReference(lower) ? WorkIntent.reference.rawValue : nil
+            effortMinutes: effortMinutes(from: lower)
         )
     }
 
-    /// Phrases that read as something to KEEP rather than something to do — "the wifi
-    /// password is hunter2", "gate code 4417", "remember that the vet closes at six".
-    ///
-    /// This is the one `WorkIntent` the heuristic path classifies, and it is **not a
-    /// test seam**. `workIntent` is otherwise on-device only, and Apple Intelligence
-    /// can be off by user setting or unavailable by region — so without this, every
-    /// non-AI user has nil intent, `countsAsWorkload` is universally true, and the
-    /// whole reference exclusion never fires for them. It is also what makes the five
-    /// gated sites verifiable in the simulator at all.
-    ///
-    /// Deliberately narrow: a false positive silently removes a real task from the
-    /// plan, the load counts, and the sweeps, so it only fires on wording that is
-    /// clearly a stored fact, never on a bare noun phrase.
-    static func isReference(_ lower: String) -> Bool {
-        // A record-keeping noun followed by a value: "password is …", "code: 4417".
-        let subjects = ["password", "passcode", "pin", "code", "wifi", "wi-fi", "login", "username"]
-        if subjects.contains(where: { lower.contains($0) }),
-            lower.contains(" is ") || lower.contains(":") || lower.contains("=")
-        {
-            return true
-        }
-        // An explicit "keep this" framing, but NOT "remember to …", which is a to-do.
-        if lower.hasPrefix("remember that ") || lower.hasPrefix("note that ")
-            || lower.hasPrefix("fyi ") || lower.hasPrefix("for reference")
-        {
-            return true
-        }
-        return false
-    }
 
     private static func cleanTitle(_ line: String) -> String {
         var t = line.trimmingCharacters(in: .whitespaces)
@@ -362,15 +332,35 @@ struct HeuristicEngine: AIEngine {
     }
 
     /// Extract the raw time phrase — the intent carries it verbatim and
-    /// `IntentResolver.resolveDate` turns it into an actual date. Longest/most
-    /// specific token first so "day after tomorrow" never truncates to "today".
+    /// `IntentResolver.resolveDate` turns it into an actual date — so a truncated
+    /// phrase is a wrong DATE, not just a cosmetic one.
     static func dateExpression(from lower: String) -> String? {
+        // Ordering is load-bearing and used to be wrong: "tomorrow" led the list, so
+        // "day after tomorrow" truncated to it and resolved a day early. Longest/most
+        // specific first — every token that CONTAINS another must precede it.
         let tokens = [
-            "tomorrow", "today", "tonight", "next week", "this weekend", "weekend",
+            "day after tomorrow", "tomorrow", "today", "tonight",
+            "end of the month", "end of month", "next month",
+            "end of the week", "end of week", "this weekend", "weekend",
+            "this week", "next week",
             "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
         ]
         for token in tokens where lower.contains(token) {
             return token
+        }
+        // Open-ended forms a fixed token list can't hold ("in three days", "july 20"),
+        // handed over verbatim for `resolveDate` to interpret.
+        let phrases = [
+            #"\b(?:in|within)\s+(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:day|week|month)s?\b"#,
+            #"\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:day|week|month)s?\s+from\s+(?:now|today)\b"#,
+            #"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?\b"#,
+            #"\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"#,
+            #"\b\d{4}-\d{2}-\d{2}\b"#,
+        ]
+        for pattern in phrases {
+            if let range = lower.range(of: pattern, options: .regularExpression) {
+                return String(lower[range])
+            }
         }
         return nil
     }

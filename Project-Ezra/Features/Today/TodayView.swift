@@ -26,6 +26,7 @@ struct TodayView: View {
     @Environment(\.openCapture) private var openCapture
     @Environment(\.openInbox) private var openInbox
     @Environment(\.resumeCapture) private var resumeCapture
+    @Environment(\.scenePhase) private var scenePhase
 
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var changesResults: FetchedResults<ChangeLogEntry>
@@ -49,6 +50,16 @@ struct TodayView: View {
     /// AI-handled count for the held-depth tile — excludes the daily "planned" entry.
     private var tidiedCount: Int {
         changesResults.filter { !$0.undone && $0.initiatedBy == .ai && $0.action != "planned" }.count
+    }
+
+    /// The plan's actions that still resolve to a real task, paired with it. A merge or a
+    /// store reset can leave an id behind; rendering the section from this (rather than
+    /// skipping inside the loop) keeps the step numbering contiguous and stops a plan of
+    /// entirely-vanished ids from drawing an empty "The plan" header.
+    private func liveActions(of plan: GeneratedPlan) -> [(action: PlannedAction, task: TaskItem)] {
+        plan.actions.compactMap { action in
+            tasksByID[action.taskID].map { (action: action, task: $0) }
+        }
     }
 
     /// What the detail pages through from Today: the advisor's action plan, in the order
@@ -88,6 +99,9 @@ struct TodayView: View {
         .onChange(of: sequence.isGenerating) { _, generating in
             if !generating { trySwapToBriefing() }
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { restartIfDayRolledOver() }
+        }
     }
 
     @ViewBuilder
@@ -109,6 +123,25 @@ struct TodayView: View {
         sequence.start(
             tasks: tasks, logs: Array(logsResults),
             currentUserID: profiles.first?.linkedMemberID, context: context)
+        playRecapEntrance()
+    }
+
+    /// The app can outlive the day it launched in — a phone left on Today overnight, or
+    /// (the common case) backgrounded and reopened the next morning from the nudge. Re-arm
+    /// the sequence and replay the entrance so the new day gets its briefing instead of
+    /// resting on yesterday's.
+    private func restartIfDayRolledOver() {
+        guard
+            sequence.restartIfDayRolledOver(
+                now: Date(), tasks: tasks, logs: Array(logsResults),
+                currentUserID: profiles.first?.linkedMemberID, context: context)
+        else { return }
+        recapAppeared = false
+        recapEntrancePlayed = false
+        playRecapEntrance()
+    }
+
+    private func playRecapEntrance() {
         guard sequence.beat == .recap else { return }
         withAnimation(reduceMotion ? Motion.fade : Motion.heroSettle) {
             recapAppeared = true
@@ -178,7 +211,7 @@ struct TodayView: View {
 
     @ViewBuilder
     private func briefingScene(resting: Bool) -> some View {
-        if let plan = sequence.plan, !plan.actions.isEmpty {
+        if let plan = sequence.plan, !liveActions(of: plan).isEmpty {
             briefingContent(plan, resting: resting)
         } else if sequence.isGenerating {
             readingCover
@@ -201,7 +234,15 @@ struct TodayView: View {
     }
 
     private func briefingContent(_ plan: GeneratedPlan, resting: Bool) -> some View {
-        ScrollView {
+        // The plan is a live surface, not a printed page: the user works it, comes back,
+        // and needs to see the difference. Resolved steps read as struck-through record,
+        // and the two accented slots — the hero edge and the CTA — follow the first step
+        // still OPEN rather than staying pinned to step 1. Crowning a finished task with
+        // the day's payoff gradient is the tell that nothing is watching.
+        let steps = liveActions(of: plan)
+        let next = steps.first { !$0.task.status.isResolved }
+        let doneCount = steps.filter { $0.task.status.isResolved }.count
+        return ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 // Headline — the advisor's one-line read (or a plain title on the
                 // deterministic fallback).
@@ -222,12 +263,12 @@ struct TodayView: View {
                 }
 
                 // The action plan — tappable steps that open the task.
-                briefingSection("The plan") {
+                briefingSection("The plan", trailing: planProgress(done: doneCount, of: steps.count)) {
                     VStack(alignment: .leading, spacing: Spacing.xs) {
-                        ForEach(Array(plan.actions.enumerated()), id: \.element.taskID) { index, action in
-                            if let task = tasksByID[action.taskID] {
-                                actionStep(index: index, task: task, line: action.rationale)
-                            }
+                        ForEach(Array(steps.enumerated()), id: \.element.action.taskID) { index, step in
+                            actionStep(
+                                number: index + 1, task: step.task, line: step.action.rationale,
+                                isHero: step.action.taskID == next?.action.taskID)
                         }
                     }
                 }
@@ -243,8 +284,10 @@ struct TodayView: View {
                     }
                 }
 
-                if let first = plan.actions.first, let task = tasksByID[first.taskID] {
-                    primaryCTA(task: task)
+                if let next {
+                    primaryCTA(task: next.task)
+                } else {
+                    planClearedLine
                 }
 
                 if resting, tidiedCount > 0 {
@@ -297,22 +340,25 @@ struct TodayView: View {
     }
 
     /// One action on the plan: a tappable step (→ the task) with the advisor's line.
-    private func actionStep(index: Int, task: TaskItem, line: String?) -> some View {
-        let isHero = index == 0
+    ///
+    /// `isHero` is the first step still OPEN, not step 1 — see `briefingContent`. A
+    /// resolved step keeps its place and stays tappable (the record of the day is part of
+    /// the briefing), but reads as done: its numeral becomes the status glyph, the title
+    /// strikes through, and the whole card recedes.
+    private func actionStep(number: Int, task: TaskItem, line: String?, isHero: Bool) -> some View {
+        let isDone = task.status.isResolved
         return Button {
             selectedTask = task
         } label: {
             HStack(alignment: .top, spacing: Spacing.sm) {
-                Text("\(index + 1)")
-                    .font(.controlLabel)
-                    .foregroundStyle(Palette.accentFlat)
-                    .frame(width: 20, alignment: .leading)
+                stepMarker(number: number, task: task)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(task.title)
                         .font(isHero ? .sectionHeader : .taskTitle)
-                        .foregroundStyle(Palette.primaryText)
+                        .foregroundStyle(isDone ? Palette.secondaryText : Palette.primaryText)
+                        .strikethrough(isDone, color: Palette.mutedText)
                         .multilineTextAlignment(.leading)
-                    if let line, !line.isEmpty {
+                    if let line, !line.isEmpty, !isDone {
                         Text(line)
                             .metadataStyle()
                             .multilineTextAlignment(.leading)
@@ -339,10 +385,55 @@ struct TodayView: View {
                         .strokeBorder(Palette.accentGradient, lineWidth: 1.5)
                 }
             }
+            .recessed(isDone)
         }
         .buttonStyle(.pressable)
         .transition(reduceMotion ? .opacity : Motion.cardEntry)
+        .animation(reduceMotion ? Motion.fade : Motion.settle, value: isDone)
+        .accessibilityLabel(
+            isDone ? "\(task.title), \(task.status.label)" : "Step \(number), \(task.title)"
+        )
         .accessibilityHint("Opens the task")
+    }
+
+    /// The step's leading mark: its number while open, its status glyph once resolved —
+    /// one slot, so a finished step never claims a position in the remaining order.
+    @ViewBuilder
+    private func stepMarker(number: Int, task: TaskItem) -> some View {
+        if task.status.isResolved {
+            Image(systemName: task.status.symbol)
+                .font(.system(size: IconSize.small, weight: .semibold))
+                .foregroundStyle(task.status.tint)
+                .frame(width: 20, alignment: .leading)
+        } else {
+            Text("\(number)")
+                .font(.controlLabel)
+                .monospacedDigit()
+                .foregroundStyle(Palette.accentFlat)
+                .frame(width: 20, alignment: .leading)
+        }
+    }
+
+    /// "2 of 5 done", beside the section header — the only count on this surface, and it
+    /// reports the user's own progress rather than a backlog. Absent until something is.
+    private func planProgress(done: Int, of total: Int) -> String? {
+        done > 0 ? "\(done) of \(total) done" : nil
+    }
+
+    /// Where the CTA sits once every step is resolved. The briefing stays on screen as the
+    /// record of the day — it just stops asking for anything.
+    private var planClearedLine: some View {
+        HStack(spacing: Spacing.xs) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: IconSize.small))
+                .foregroundStyle(Palette.accentFlat)
+            Text("That's the plan, all of it.")
+                .font(.controlLabel)
+                .foregroundStyle(Palette.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Spacing.xs)
+        .accessibilityElement(children: .combine)
     }
 
     private func primaryCTA(task: TaskItem) -> some View {
@@ -375,14 +466,24 @@ struct TodayView: View {
     // MARK: - Shared bits
 
     private func briefingSection<Content: View>(
-        _ title: String, @ViewBuilder content: () -> Content
+        _ title: String, trailing: String? = nil, @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            Text(title)
-                .font(.metadata.weight(.semibold))
-                .foregroundStyle(Palette.mutedText)
-                .textCase(.uppercase)
-                .tracking(0.8)
+            HStack(spacing: Spacing.xs) {
+                Text(title)
+                    .font(.metadata.weight(.semibold))
+                    .foregroundStyle(Palette.mutedText)
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+                if let trailing {
+                    Text(trailing)
+                        .font(.metadata)
+                        .monospacedDigit()
+                        .foregroundStyle(Palette.accentFlat)
+                        .transition(.opacity)
+                }
+                Spacer(minLength: 0)
+            }
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)

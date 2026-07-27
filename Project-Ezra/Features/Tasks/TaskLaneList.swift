@@ -59,10 +59,10 @@ func completeTask(
     notice: Binding<UndoNotice?>
 ) {
     let unblocked = task.completeAndResurface(in: context)
-    try? context.save()
+    context.saveChanges()
     notice.wrappedValue = .resolution("Completed", task.title, unblocked: unblocked) {
         task.reopenAndReblock(in: context)
-        try? context.save()
+        context.saveChanges()
     }
 }
 
@@ -72,10 +72,10 @@ func cancelTask(
     notice: Binding<UndoNotice?>
 ) {
     let unblocked = task.killAndResurface(in: context)
-    try? context.save()
+    context.saveChanges()
     notice.wrappedValue = .resolution("Canceled", task.title, unblocked: unblocked) {
         task.reopenAndReblock(in: context)
-        try? context.save()
+        context.saveChanges()
     }
 }
 
@@ -165,10 +165,10 @@ struct AssignedSectionsView: View {
 
     private func sectionHeader(_ section: MyTasksSection) -> some View {
         HStack(spacing: Spacing.xs) {
-            Image(systemName: section.kind.symbol)
+            Image(systemName: section.status.symbol)
                 .font(.system(size: IconSize.caption, weight: .semibold))
-                .foregroundStyle(section.kind.tint)
-            Text(section.kind.label)
+                .foregroundStyle(section.status.tint)
+            Text(section.status.label)
                 .metadataStyle()
                 .textCase(.uppercase)
                 .tracking(0.6)

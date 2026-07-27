@@ -63,12 +63,17 @@ struct WorkIntentTests {
         #expect(TaskCapabilities.available(for: task).isEmpty)
     }
 
-    @Test("The classifier returns nil off-device and never touches the flag")
-    func classifyNilInSim() async {
+    @Test("The classifier reports unavailable off-device and never touches the flag")
+    func classifyUnavailableInSim() async {
         let task = TaskItem(title: "x", status: .todo, needsDecision: true)
         let result = await WorkIntentClassifier().classify(
             WorkIntentContext(task: task, among: [task]))
-        #expect(result == nil)  // simulator / test host → nil
+        // Simulator / test host → `.unavailable`, distinct from a real attempt that
+        // failed. The caller writes only on `.success`, so either way the cached
+        // `workIntent` survives — but only one of them should ever reach a user as an
+        // error, which is why they are no longer the same value.
+        if case .unavailable = result {} else { Issue.record("expected .unavailable, got \(result)") }
+        #expect(!result.isRetryable)  // nothing to retry when there is no model
         #expect(task.needsDecision)  // classification is read-only over the flag
     }
 }

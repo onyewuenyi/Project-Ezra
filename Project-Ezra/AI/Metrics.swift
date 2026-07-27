@@ -217,3 +217,107 @@ final class PlanMetrics {
         static let lastAvailability = "today.gen.lastAvailability"
     }
 }
+
+/// Per-capability model-call outcomes — the evidence behind `ModelDeadline.cardSeconds`.
+///
+/// Picking a 20-second deadline without data is guesswork, and the Today plan already
+/// regressed once from a deadline that was too tight for a cold model. This records what
+/// actually happens so the next adjustment is measured rather than argued.
+///
+/// **Local only, and that is a deliberate boundary.** Same shape as `PlanMetrics`:
+/// UserDefaults-backed, surfaced in the DEBUG diagnostics footer, never transmitted.
+/// `prev-docs/product-guardrails.md` refuses vanity metrics and the store holds real
+/// personal data, so shipping per-feature latency off-device would be a product-posture
+/// change — one that deserves its own decision, not a ride along inside a timeout fix.
+///
+/// A singleton because `ModelRun` is a free function with no instance to hang off, unlike
+/// `PlanMetrics` which rides on `AppBrain`.
+@MainActor
+@Observable
+final class ModelMetrics {
+    static let shared = ModelMetrics()
+
+    /// One capability's tally. `calls` is derived (`successes + timeouts + failures`)
+    /// rather than stored, because cancellations are deliberately not counted — the user
+    /// walking away says nothing about whether the deadline is well chosen.
+    struct Stats: Sendable, Equatable {
+        var successes = 0
+        var timeouts = 0
+        var failures = 0
+        var lastLatencyMs = -1
+        var lastError: String?
+
+        var calls: Int { successes + timeouts + failures }
+    }
+
+    enum Outcome {
+        case success
+        case timedOut
+        case failed(String)
+    }
+
+    private let defaults: UserDefaults
+    private(set) var stats: [ModelFeature: Stats] = [:]
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        for feature in ModelFeature.allCases {
+            stats[feature] = Stats(
+                successes: defaults.integer(forKey: Key.successes(feature)),
+                timeouts: defaults.integer(forKey: Key.timeouts(feature)),
+                failures: defaults.integer(forKey: Key.failures(feature)),
+                lastLatencyMs: defaults.object(forKey: Key.lastLatencyMs(feature)) as? Int ?? -1,
+                lastError: defaults.string(forKey: Key.lastError(feature)))
+        }
+    }
+
+    func record(_ feature: ModelFeature, _ outcome: Outcome, latencyMs: Int) {
+        var entry = stats[feature] ?? Stats()
+        entry.lastLatencyMs = latencyMs
+        switch outcome {
+        case .success:
+            entry.successes += 1
+            // A success means the capability is working; clear the stale failure so the
+            // footer shows the CURRENT state rather than an error from days ago.
+            entry.lastError = nil
+            defaults.removeObject(forKey: Key.lastError(feature))
+        case .timedOut:
+            entry.timeouts += 1
+            entry.lastError = "timedOut"
+            defaults.set("timedOut", forKey: Key.lastError(feature))
+        case .failed(let label):
+            entry.failures += 1
+            entry.lastError = label
+            defaults.set(label, forKey: Key.lastError(feature))
+        }
+        stats[feature] = entry
+        defaults.set(entry.successes, forKey: Key.successes(feature))
+        defaults.set(entry.timeouts, forKey: Key.timeouts(feature))
+        defaults.set(entry.failures, forKey: Key.failures(feature))
+        defaults.set(latencyMs, forKey: Key.lastLatencyMs(feature))
+    }
+
+    /// One line per capability that has actually been exercised, for the DEBUG footer.
+    /// Features with no calls are omitted — an all-zero list is noise, not information.
+    func footerLines() -> [String] {
+        ModelFeature.allCases.compactMap { feature in
+            guard let entry = stats[feature], entry.calls > 0 else { return nil }
+            var line = "\(feature.label): \(entry.successes) ok"
+            if entry.timeouts > 0 { line += " · \(entry.timeouts) timeout" }
+            if entry.failures > 0 { line += " · \(entry.failures) fail" }
+            if entry.lastLatencyMs >= 0 {
+                line += String(format: " · last %.1fs", Double(entry.lastLatencyMs) / 1000)
+            }
+            if let error = entry.lastError { line += " · \(error)" }
+            return line
+        }
+    }
+
+    private enum Key {
+        static func successes(_ f: ModelFeature) -> String { "model.\(f.rawValue).successes" }
+        static func timeouts(_ f: ModelFeature) -> String { "model.\(f.rawValue).timeouts" }
+        static func failures(_ f: ModelFeature) -> String { "model.\(f.rawValue).failures" }
+        static func lastLatencyMs(_ f: ModelFeature) -> String { "model.\(f.rawValue).lastLatencyMs" }
+        static func lastError(_ f: ModelFeature) -> String { "model.\(f.rawValue).lastError" }
+    }
+}

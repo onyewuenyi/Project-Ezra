@@ -217,13 +217,9 @@ enum HouseholdEngine {
             return ownerID == currentUserID ? .you : .member(ownerID)
         }
 
-        // `countsAsWorkload` keeps reference items off every plate. A saved wifi
-        // password is owned and live but never resolves, so counting it would inflate
-        // someone's plate permanently — and through the overload modifier AND the
-        // affinity denominator, a shelf of notes would stop them being proposed work.
         func load(for kind: MemberLoad.Kind, name: String) -> MemberLoad {
             let mine = open.filter {
-                sameBucket(bucket($0), kind) && $0.status.isLive && $0.countsAsWorkload
+                sameBucket(bucket($0), kind) && $0.status.isLive
             }
             let dueToday = mine.filter {
                 $0.dueDate.map { cal.isDate($0, inSameDayAs: now) } ?? false

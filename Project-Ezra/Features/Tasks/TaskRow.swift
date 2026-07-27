@@ -201,14 +201,14 @@ struct TaskRow: View {
 
     private func applyDirect(_ state: TaskStatus) {
         Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
-        try? context.save()
+        context.saveChanges()
     }
 
     /// The Signal toggle from the long-press menu — routes through the shared mutation
     /// seam (which logs to the task's Activity timeline + recomputes attention), then saves.
     private func toggleUrgent() {
         task.setUrgent(!task.isUrgent, among: allTasks, in: context)
-        try? context.save()
+        context.saveChanges()
     }
 
     private func complete() {

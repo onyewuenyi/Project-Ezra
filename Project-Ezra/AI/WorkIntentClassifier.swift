@@ -19,10 +19,10 @@ import Foundation
 import FoundationModels
 
 @Generable
-struct WorkIntentClassification {
+struct WorkIntentClassification: Sendable {
     @Guide(
         description:
-            "Exactly one of: action, decision, planning, reference. Use decision ONLY when the task is choosing between options."
+            "Exactly one of: action, decision, or planning. Use decision ONLY when the task is choosing between options."
     )
     let workIntent: String
 }
@@ -47,27 +47,38 @@ struct WorkIntentContext: Sendable {
 }
 
 struct WorkIntentClassifier {
-    /// Re-classify on-device. Returns nil off-device, under tests, or on failure — the
-    /// caller then leaves the cached `workIntent` unchanged (never clobbers with nil).
-    func classify(_ context: WorkIntentContext) async -> WorkIntent? {
-        guard AppBrain.onDeviceModelAvailable() else { return nil }
-        let session = LanguageModelSession(instructions: Self.instructions)
-        guard
-            let result = try? await session.respond(
+    /// Re-classify on-device, bounded by `ModelDeadline.backgroundSeconds` — shorter than
+    /// a card's deadline because the output is one word and nothing on screen is blocked
+    /// waiting for it.
+    ///
+    /// Anything other than `.success` leaves the cached `workIntent` untouched; this path
+    /// never clobbers a good value with a guess. A word outside the enum (the model
+    /// reaching for a kind that no longer exists) is `noUsableOutput`, not a silent nil —
+    /// otherwise a systematically wrong prompt would look exactly like a quiet model.
+    func classify(_ context: WorkIntentContext) async -> ModelResult<WorkIntent> {
+        let outcome = await ModelRun.perform(.workIntent, deadline: ModelDeadline.backgroundSeconds) {
+            let session = LanguageModelSession(instructions: Self.instructions)
+            return try await session.respond(
                 to: Self.prompt(context), generating: WorkIntentClassification.self
             ).content
-        else { return nil }
-        return WorkIntent(rawValue: result.workIntent.trimmingCharacters(in: .whitespaces).lowercased())
+        }
+        guard case .success(let result) = outcome else { return outcome.map { _ in .action } }
+        let raw = result.workIntent.trimmingCharacters(in: .whitespaces).lowercased()
+        guard let intent = WorkIntent(rawValue: raw) else {
+            return .failed(ModelResult<WorkIntent>.noUsableOutput)
+        }
+        return .success(intent)
     }
 
     private static let instructions = """
         You classify a single task by the KIND of work it represents: action (a concrete
-        thing to do), decision (a choice between options), planning (figuring out an
-        approach or breaking something down), or reference (a note to keep, not really a
-        to-do). Answer with exactly one word.
+        thing to do), decision (a choice between options), or planning (figuring out an
+        approach or breaking something down). Answer with exactly one word.
         Use "decision" ONLY when the task is genuinely choosing between options.
         There is NO "waiting" kind: being blocked is a separate axis the app derives
         from the task graph, so classify blocked work by what it actually is.
+        There is NO "reference" kind either: a note worth keeping is still a task here,
+        so classify it by what it asks of the person — usually "action".
         """
 
     private static func prompt(_ context: WorkIntentContext) -> String {

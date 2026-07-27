@@ -3,7 +3,7 @@
 //  Project-Ezra
 //
 //  Deterministic fixture data covering every core user flow except onboarding
-//  (see docs/mock-data-user-flows.md for the full walkthrough and how to
+//  (see prev-docs/mock-data-user-flows.md for the full walkthrough and how to
 //  reproduce each state by hand). Unlike `-SeedSampleData` (which runs real text
 //  through the live triage engine, so results depend on which engine is active),
 //  this constructs TaskItem/ChangeLogEntry directly so status, confidence, and
@@ -396,7 +396,7 @@ enum SampleFlowFixtures {
         }
         AttentionEngine.recompute(scored, among: scored, now: now)
 
-        try? context.save()
+        context.saveChanges()
     }
 
     /// A synthesized stand-in headshot: a deterministic two-tone gradient (hue keyed to

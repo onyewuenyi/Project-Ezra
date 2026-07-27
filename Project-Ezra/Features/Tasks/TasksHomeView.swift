@@ -40,41 +40,73 @@ struct TasksHomeView: View {
 
     private var filtersActive: Bool { statusFilter != nil || categoryFilter != nil }
 
-    private var assignedSections: [MyTasksSection] {
-        MyTasksSlices.assigned(
-            tasks: tasks, currentUserID: currentUserID, status: statusFilter, category: categoryFilter)
-    }
-    private var createdEntries: [TaskLaneEntry] {
-        MyTasksSlices.createdEntries(
-            tasks: tasks, currentUserID: currentUserID, status: statusFilter, category: categoryFilter)
+    /// Assigned and Created answer the same question until somebody else is in the
+    /// household: with a roster of one, every task you created is a task assigned to
+    /// you, so the pill is a two-tab control over two identical lists on the most-used
+    /// screen. It appears the moment a second member exists.
+    private var showsTabs: Bool { !othersRoster.isEmpty }
+
+    /// The visible tab's rows, sliced once.
+    ///
+    /// Slicing is not free — both cases run `TaskRanking.rankKeys` over the FULL working
+    /// set plus chain construction. They used to be computed properties read twice per
+    /// render (once to build the list, once to hand the detail its peer order), so every
+    /// redraw of the record surface paid for two complete ranking passes over every task
+    /// the user owns. `body` resolves this once and passes it to both.
+    private enum VisibleSlice {
+        case assigned([MyTasksSection])
+        case created([TaskLaneEntry])
+
+        /// What the detail pages through: exactly the rows on screen, in order, with
+        /// chain stacks unrolled root-first.
+        var peers: [TaskItem] {
+            switch self {
+            case .assigned(let sections): return TaskDetailPeers.flatten(sections)
+            case .created(let entries): return TaskDetailPeers.flatten(entries)
+            }
+        }
     }
 
-    /// What the detail pages through: exactly the rows the visible tab is rendering, in
-    /// order, with chain stacks unrolled root-first.
-    private var visiblePeers: [TaskItem] {
-        switch tab {
-        case .assigned: return TaskDetailPeers.flatten(assignedSections)
-        case .created: return TaskDetailPeers.flatten(createdEntries)
+    /// The tab actually in effect. Reading `tab` directly would strand a user who had
+    /// selected Created and then lost the control — the roster can shrink back to one
+    /// (a member removed), and the pill would vanish leaving no way back to Assigned.
+    private var effectiveTab: MyTasksTab { showsTabs ? tab : .assigned }
+
+    private var visibleSlice: VisibleSlice {
+        switch effectiveTab {
+        case .assigned:
+            return .assigned(
+                MyTasksSlices.assigned(
+                    tasks: tasks, currentUserID: currentUserID, status: statusFilter,
+                    category: categoryFilter))
+        case .created:
+            return .created(
+                MyTasksSlices.createdEntries(
+                    tasks: tasks, currentUserID: currentUserID, status: statusFilter,
+                    category: categoryFilter))
         }
     }
 
     var body: some View {
-        NavigationStack {
+        let slice = visibleSlice
+        return NavigationStack {
             VStack(spacing: Spacing.sm) {
-                tabBar
-                    .padding(.horizontal, Spacing.lg)
-                    .padding(.top, Spacing.xs)
+                if showsTabs {
+                    tabBar
+                        .padding(.horizontal, Spacing.lg)
+                        .padding(.top, Spacing.xs)
+                }
 
                 Group {
-                    switch tab {
-                    case .assigned:
+                    switch slice {
+                    case .assigned(let sections):
                         AssignedSectionsView(
-                            sections: assignedSections, allTasks: tasks, othersRoster: othersRoster,
+                            sections: sections, allTasks: tasks, othersRoster: othersRoster,
                             searchIsActive: filtersActive,
                             selectedTask: $selectedTask, notice: $notice)
-                    case .created:
+                    case .created(let entries):
                         CreatedFlatView(
-                            entries: createdEntries, allTasks: tasks, othersRoster: othersRoster,
+                            entries: entries, allTasks: tasks, othersRoster: othersRoster,
                             searchIsActive: filtersActive,
                             selectedTask: $selectedTask, notice: $notice)
                     }
@@ -114,7 +146,7 @@ struct TasksHomeView: View {
             .navigationDestination(isPresented: $showRoster) { HouseholdRosterView() }
             .sheet(isPresented: $showSearch) { TaskSearchView() }
             .sheet(isPresented: $showSettings) { SettingsView() }
-            .taskDetailSheet($selectedTask, peers: visiblePeers)
+            .taskDetailSheet($selectedTask, peers: slice.peers)
             .undoNotice($notice)
             .task { openDetailIfRequested() }
         }
@@ -128,7 +160,7 @@ struct TasksHomeView: View {
         let args = ProcessInfo.processInfo.arguments
         guard let flag = args.firstIndex(of: "-OpenTaskDetail") else { return }
         let index = args.indices.contains(flag + 1) ? Int(args[flag + 1]) ?? 0 : 0
-        let peers = visiblePeers
+        let peers = visibleSlice.peers
         guard peers.indices.contains(index) else { return }
         selectedTask = peers[index]
     }

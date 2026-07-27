@@ -14,6 +14,7 @@ import SwiftUI
 
 struct TaskSearchView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: [NSSortDescriptor(keyPath: \TaskItem.createdAt, ascending: false)])
     private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
@@ -21,6 +22,7 @@ struct TaskSearchView: View {
 
     @State private var searchText = ""
     @State private var selectedTask: TaskItem?
+    @State private var notice: UndoNotice?
 
     private var tasks: [TaskItem] { Array(tasksResults) }
     private var members: [FamilyMember] { Array(membersResults) }
@@ -58,6 +60,24 @@ struct TaskSearchView: View {
                                     ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                                     ownerPhotoData: task.ownerPhotoData(among: othersRoster),
                                     interactive: !task.status.isResolved,
+                                    // Resolving from search routes through the SAME
+                                    // undo-aware seams the record surface uses. Without
+                                    // these the row still completed correctly, but did it
+                                    // silently — no Undo pill, and no voice for the
+                                    // dependents the completion just unblocked. The same
+                                    // gesture on the same row must not mean two things.
+                                    onComplete: task.status.isResolved
+                                        ? nil
+                                        : {
+                                            completeTask(
+                                                task, in: context, tasks: tasks, notice: $notice)
+                                        },
+                                    onCancel: task.status.isResolved
+                                        ? nil
+                                        : {
+                                            cancelTask(
+                                                task, in: context, tasks: tasks, notice: $notice)
+                                        },
                                     onOpen: { selectedTask = task }
                                 )
                             }
@@ -79,6 +99,7 @@ struct TaskSearchView: View {
                 }
             }
             .taskDetailSheet($selectedTask, peers: matches)
+            .undoNotice($notice)
         }
     }
 }

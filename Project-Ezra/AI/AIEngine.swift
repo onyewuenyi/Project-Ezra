@@ -58,6 +58,12 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     var isJudgmentCall: Bool
     var reasoning: String
     var dueDate: Date?
+    /// Why a due date the user never spoke is here, in one short phrase — rendered as a
+    /// caption under the due chip, exactly like `ownerReason` below. **Nil when the date
+    /// came from the user's own words**: extracting a phrase they said is not an
+    /// inference, and claiming it was would be the same overreach the `.defaultSelf`
+    /// owner rung avoids. Set only by `IntentResolver.inferredDueDate`.
+    var dueReason: String? = nil
     /// What this task is waiting on, when the capture names it ("after passport is
     /// done" → "passport"). A free-text hint the engine infers pre-commit (it can't
     /// know a real task reference yet); `AppBrain.commit` resolves it to a
@@ -68,8 +74,10 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     /// The AI's importance estimate 0…1 — stamped into the attention score at commit.
     /// Nil when the engine has no signal.
     var aiImportance: Double? = nil
-    /// The model's `WorkIntent` classification, stamped onto the task at materialization.
-    /// Nil on the heuristic path (left to re-classify later, device-only).
+    /// What KIND of work this is, stamped onto the task at materialization. The model
+    /// classifies it on device; off device `IntentResolver.inferredWorkIntent` backfills
+    /// it from the wording, so it is populated and editable on every confirm card
+    /// regardless of engine.
     var workIntent: WorkIntent? = nil
     /// The other person's name when the capture delegates the task ("ask Sarah to…");
     /// nil means it's the user's own. The 1→N multiplayer seam starts here.
@@ -129,6 +137,14 @@ struct TaskDraft: Identifiable, Hashable, Codable {
         }
         if isUrgent != ai.isUrgent {
             diffs.append(("urgent", ai.isUrgent ? "true" : "false", isUrgent ? "true" : "false"))
+        }
+        if workIntent != ai.workIntent {
+            // Same field name the detail sheet's own correction uses, so the two
+            // surfaces write one vocabulary rather than two.
+            diffs.append(
+                (
+                    "workIntent", ai.workIntent?.rawValue ?? "none", workIntent?.rawValue ?? "none"
+                ))
         }
         if ownerName != ai.ownerName {
             // Only a SPOKEN owner may teach a name-alias. `CorrectionProfile` turns a
@@ -220,6 +236,10 @@ struct AIFieldSnapshot: Hashable, Codable {
     var category: String
     var dueDate: Date?
     var isUrgent: Bool
+    /// Frozen so a kind corrected at confirm is diffable — and so a re-parse that
+    /// changes only the classification isn't mistaken for an unchanged candidate by
+    /// `ComposerView.merge(fresh:into:)`, which compares whole snapshots.
+    var workIntent: WorkIntent? = nil
     var ownerName: String?
     var effortMinutes: Int?
     var blockerPhrase: String? = nil

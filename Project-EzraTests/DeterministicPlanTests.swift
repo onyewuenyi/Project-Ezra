@@ -28,6 +28,26 @@ struct DeterministicPlanTests {
             candidateItems: all, allTasks: all, recapCount: 0, typicalCompleted: typical, now: now)
     }
 
+    @Test("An in-progress task carries that fact to both the advisor and the fallback")
+    func inProgressIsAnObservableFact() throws {
+        let task = TaskItem(title: "Rewire the shed", status: .todo)
+        task.transition(to: .doing, now: now)
+        let snapshot = try #require(PlanTaskSnapshot.from(task, among: [task], now: now))
+
+        #expect(snapshot.facts.contains("in progress"))
+        // One array, two consumers: the model's prompt row and the voiceless
+        // fallback's per-action line.
+        #expect(snapshot.promptLine(index: 1).contains("in progress"))
+        #expect(snapshot.factLine.contains("in progress"))
+    }
+
+    @Test("A todo task claims no such fact")
+    func todoIsNotInProgress() throws {
+        let task = TaskItem(title: "Rewire the shed", status: .todo)
+        let snapshot = try #require(PlanTaskSnapshot.from(task, among: [task], now: now))
+        #expect(!snapshot.facts.contains("in progress"))
+    }
+
     @Test("Top fallbackCount candidates, fact-line lines, no advisor voice")
     func fallbackShape() async throws {
         let req = request(typical: 2)

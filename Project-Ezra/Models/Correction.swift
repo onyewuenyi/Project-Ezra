@@ -23,8 +23,10 @@ final class Correction: NSManagedObject {
     /// The capture that produced the task, for tracing corrections to inputs.
     @NSManaged var captureID: UUID?
     /// Which field was corrected — the vocabulary `TaskDraft.corrections` actually
-    /// writes: "title", "category", "dueDate", "urgent", "owner", "effort",
-    /// "blocker", "blocks", "duplicate", "parent". Loose vocabulary, not an enum —
+    /// writes: "title", "category", "dueDate", "urgent", "workIntent", "owner",
+    /// "effort", "blocker", "blocks", "duplicate", "parent". "workIntent" is shared
+    /// with the detail sheet's own correction, so a kind fixed at confirm and a kind
+    /// fixed later read as the same signal. Loose vocabulary, not an enum —
     /// same reasoning as `ChangeLogEntry.action`. ("priority" is retired; nothing
     /// writes it — eval tooling should key on "urgent".)
     @NSManaged var fieldCorrected: String

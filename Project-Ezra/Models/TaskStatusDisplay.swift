@@ -46,22 +46,3 @@ extension TaskStatus {
     /// Does this task match the selected state? The filter-menu predicate.
     func matches(_ task: TaskItem) -> Bool { task.status == self }
 }
-
-extension MyTasksSectionKind {
-
-    /// The section header's glyph. Reference borrows the note vocabulary rather than a
-    /// lifecycle glyph — it is a shelf, not a stage of the pipeline.
-    var symbol: String {
-        switch self {
-        case .status(let status): return status.symbol
-        case .reference: return "text.book.closed"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .status(let status): return status.tint
-        case .reference: return Palette.mutedText
-        }
-    }
-}

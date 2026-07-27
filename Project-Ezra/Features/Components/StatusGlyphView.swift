@@ -75,7 +75,7 @@ struct StatusGlyphView: View {
         Motion.withMotion(Motion.decide) {
             task.setStatus(state, in: context)
         }
-        try? context.save()
+        context.saveChanges()
     }
 }
 

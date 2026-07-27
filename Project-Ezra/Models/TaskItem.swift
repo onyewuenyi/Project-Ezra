@@ -83,7 +83,6 @@ enum WorkIntent: String, Codable, CaseIterable, Identifiable {
     case action  // a concrete thing to do
     case decision  // a choice between options
     case planning  // figuring out an approach / breaking something down
-    case reference  // a note to keep, not really a to-do
 
     var id: String { rawValue }
 
@@ -92,20 +91,9 @@ enum WorkIntent: String, Codable, CaseIterable, Identifiable {
         case .action: return "Action"
         case .decision: return "Decision"
         case .planning: return "Planning"
-        case .reference: return "Reference"
         }
     }
 
-    /// Whether a task of this kind is *work* — the thing the load, ranking, briefing,
-    /// and sweep systems are counting. Only `.reference` is not: it is owned and live
-    /// but never needs to complete, so leaving it in those systems would inflate
-    /// `MemberLoad.activeCount` (and through it the overload modifier AND the affinity
-    /// denominator), sit in Today as permanently unresolvable, and be auto-archived as
-    /// stale — backwards for something whose whole job is to persist.
-    ///
-    /// See `TaskItem.countsAsWorkload` for the task-level read, which is what the five
-    /// gated sites actually call.
-    var isWorkload: Bool { self != .reference }
 }
 
 // MARK: - Owner origin (who established this ownership)
@@ -409,15 +397,6 @@ final class TaskItem: NSManagedObject {
         set { ownerOriginRaw = newValue.rawValue }
     }
 
-    /// Whether this task is *work* — the read the five gated sites call (member loads,
-    /// the affinity denominator, Today candidacy, ranked-stack membership, and the
-    /// stale auto-archive). See `WorkIntent.isWorkload` for why `.reference` is out.
-    ///
-    /// **Unknown counts as work.** `workIntent` is nil on the heuristic path and for
-    /// every user whose Apple Intelligence is off or unavailable by region, so nil
-    /// must not silently remove tasks from the systems that measure them.
-    var countsAsWorkload: Bool { workIntent?.isWorkload ?? true }
-
     /// Record a status change and close out the previous state's visit.
     ///
     /// Writes `statusRaw` directly rather than `status`, which is what keeps the
@@ -592,6 +571,26 @@ final class TaskItem: NSManagedObject {
         }
     }
 
+    /// When the task entered the state it is in *right now* — the open visit's
+    /// `enteredAt`. Distinct from `secondsIn(_:)`, which sums EVERY visit to a
+    /// state: a task started, dropped, and picked back up has a large total dwell
+    /// but a fresh current visit, and "how long since this commitment" is the
+    /// second question. Nil when there is no recorded history.
+    var currentStateEnteredAt: Date? {
+        stateTimeline.last { $0.exitedAt == nil }?.enteredAt
+    }
+
+    /// Has this task been picked up before and put back down? True when the timeline
+    /// holds a CLOSED `.doing` visit — a visit that was entered and later exited.
+    ///
+    /// Read by the CTA so a task you have already had in flight offers "Resume" rather
+    /// than "Start". The distinction is small on screen and honest underneath: never
+    /// started and started-then-dropped are different situations, and the timeline is
+    /// the only thing that knows which one you are looking at.
+    var hasBeenStarted: Bool {
+        stateTimeline.contains { $0.state == TaskStatus.doing.rawValue && $0.exitedAt != nil }
+    }
+
     /// Capture → resolution. Nil until the task is resolved.
     var timeToResolution: TimeInterval? {
         completedAt.map { $0.timeIntervalSince(createdAt) }
@@ -678,6 +677,16 @@ extension TaskItem {
             other.uuid != selfID && !other.status.isResolved
                 && other.taskBlockerIDs.contains(selfID)
         }
+    }
+
+    /// The tasks that name this one as their parent — its steps.
+    ///
+    /// Distinct from `dependents(among:)`, which is the BLOCKING reverse edge (tasks
+    /// waiting on this one). Two different graphs: `.parent` is containment, `.blocks`
+    /// is sequencing, and conflating them is an easy and silent mistake.
+    func children(among tasks: [TaskItem]) -> [TaskItem] {
+        guard let selfID = uuid else { return [] }
+        return tasks.filter { $0.parentTaskID == selfID }
     }
 
     /// The Blocking flag, derived: true when any other unresolved task's blocker

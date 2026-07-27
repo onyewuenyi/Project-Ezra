@@ -74,12 +74,24 @@ enum ChangeLogUndo {
         case "decided":
             // The human's "Mark decided" re-escalates to the open decision.
             task.escalateToDecision()
-        case "reclassified":
-            // The classifier moved a task across the workload boundary (see
-            // `WorkIntent.isWorkload`), which silently changes what five systems count.
-            // Undo restores the prior intent — written raw, so it never re-triggers the
-            // logged reclassification seam.
-            task.workIntent = entry.oldValue.flatMap(WorkIntent.init(rawValue:))
+        case "split":
+            // Undo of a breakdown: delete the children this split created, and with them
+            // their `.parent` edges (the edge lives ON the child, so deleting the child
+            // removes it — but a child the user has since edited or completed is NOT
+            // reclaimed, because the split is no longer the only thing that happened to
+            // it). The parent itself is untouched.
+            let ids = (entry.newValue ?? "").split(separator: ",").compactMap {
+                UUID(uuidString: String($0))
+            }
+            guard !ids.isEmpty else { return }
+            let all = fetchAll(in: context)
+            for child in all where child.uuid.map(ids.contains) ?? false {
+                // Only reclaim an untouched step. A completed or human-edited child is
+                // real work now; silently deleting it would destroy something the undo
+                // never promised to reverse.
+                guard !child.status.isResolved, child.lastHumanTouchAt == nil else { continue }
+                context.delete(child)
+            }
             task.touch(now: now)
         case ChangeLogEntry.editedAction:
             // A manual field edit → restore the named field from `oldValue`. Writes go

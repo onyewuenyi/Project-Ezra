@@ -92,18 +92,16 @@ Phase C is deliberately *after* B despite its strategic appeal: `product-readine
 
 `carriedOverCount` graduates from write-only once ~4 weeks of real data accrue: a small *positive* term in `currentRelevance` (carried work was touched — it's alive, the opposite of deferral), and recalibrate the uncalibrated priors noted in spec §13.4 against observed deferral data. Invisible feature; ships as a tuning change with property tests. The distinction was recorded precisely so this moment could happen — honor it.
 
-### B1 — Break this down (decomposition)
+### B1 — Break this down — **SHIPPED**
 
-**Job:** the biggest absent feature. Attacks task-too-big paralysis; completes the capability system the detail view already scaffolds.
+Built, with one deliberate change from the sketch below and one addition.
 
-- **Trigger & surface:** a **"Break this down"** capability in the detail (exactly where `thinkingPartner` sits), offered when `workIntent == .planning`, or effort is large (≥ the 60-min band), or the title reads compound/vague. Also capture-adjacent: when a captured intent parses as obviously multi-part, the confirm card may carry pre-split drafts (the missing-structure proposal channel from spec §5.5 already sanctions this shape).
-- **AI shape:** `DecisionFramingService` is the template — on-device `@Generable`, generated on expand, never persisted: 2–5 proposed steps (title + effort band each), grounded in provenance ("You said"). Steps render as **proposal chips**; the user deselects any; one accept creates the children.
-- **Commit semantics:** children are real `.inbox→confirm` tasks with `.parent` edges via the existing `TaskMutations.linkParent` — one reversible "split" ChangeLog entry whose Undo removes the children and the edges (parent untouched). Parent becomes the umbrella: objectives-lite (§13.6) already renders `step of "…"` context everywhere it matters; ranking needs one decision — recommend the parent **recedes while it has open children** (it's now a container; surfacing both parent and step is double-billing the same work). That is a `currentRelevance` pull-down, not a band change.
-- **Autonomy:** suggest-only, per the PRD's own action table. Never auto-splits.
-- **Fallback:** quietly absent (capability hidden on the heuristic path) — same rule as the Thinking Partner.
-- **Learning signal:** chip deselections and post-split edits are `Correction` rows (`fieldCorrected: "split"`), feeding the existing profile mechanism.
-- **Guardrail check:** removes the start-friction step; user decides; reversible; explainable. ✅
-- **Open questions:** depth (recommend: one level — the graph grows by edges, not hierarchy; re-split a child if needed); whether completing the last child prompts to complete the parent (recommend: surface a one-tap suggestion in the parent's detail, never auto-complete — "the AI never marks work done").
+- **The trigger inverted.** The sketch offered it "when `workIntent == .planning`, or effort is large, or the title reads compound". That has the primary and secondary signals backwards: the capability reduces *complexity*, so complexity triggers it. `BreakdownEligibility` is an ordered ladder — large effort → compound title → planning intent **above a lower bar** — and intent alone is never sufficient. A 15-minute "plan birthday dinner" now gets nothing; a 90-minute "renew passport" gets the card. Suppressed once the task has children.
+- **Everything else landed as specced:** `TaskBreakdownService` on the `DecisionFramingService` model (on-device, generated on expand, never persisted, absent off-device), deselectable chips, one accept creating real children via `linkParent`, one reversible `"split"` entry, `Correction` rows on deselection, one level of depth, never auto-splits.
+- **The undo is stricter than specced.** It spares any child the user has since completed or edited — undo promised to reverse the split, not to destroy work done since.
+- **Ranking:** the parent recedes while it has open children, via a named `currentRelevance` term (`containerRecede`), not a band change.
+
+**A2 also shipped, as the third capability.** "Unstick" is the inertia counterpart: a deterministic trigger (`deferralCount >= 3`, or quiet past half the archive threshold) and a deterministic *diagnosis* that routes into the other capabilities rather than just reflecting the deferral count back. See `docs/task-model.md`.
 
 ### B2 — Inbox-confirm nudge
 

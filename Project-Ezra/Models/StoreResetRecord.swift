@@ -1,0 +1,83 @@
+//
+//  StoreResetRecord.swift
+//  Project-Ezra
+//
+//  The receipt for a destroyed store. The clean-break schema policy (see
+//  `Project_EzraApp.schemaGeneration`) is only honest while the store holds disposable
+//  seed data; once it holds real captured work, a wipe that happens SILENTLY is
+//  indistinguishable from the app losing your life's admin. So every path that calls
+//  `PersistenceStack.destroyStore(reason:)` writes one of these, and `SettingsView`
+//  surfaces it — with the safety copy attached — until the user dismisses it.
+//
+//  Deliberately UserDefaults-backed rather than Core Data: the whole point is to survive
+//  the store being deleted.
+//
+
+import Foundation
+
+/// Why the local store was destroyed.
+enum StoreResetReason: Codable, Equatable {
+    /// A deliberate clean-break bump — the stored data's MEANING changed.
+    case schemaGeneration(from: Int, to: Int)
+    /// The store could not be opened, and the self-heal reset it to keep the app launchable.
+    /// In practice this almost always means the model was edited without adding a new
+    /// version, leaving lightweight migration no source model to work from.
+    case loadFailure(String)
+
+    /// Plain-language explanation, for the Settings card.
+    var explanation: String {
+        switch self {
+        case .schemaGeneration(let from, let to):
+            return "the data model moved from generation \(from) to \(to)"
+        case .loadFailure:
+            return "the saved data couldn't be opened"
+        }
+    }
+
+    /// The underlying technical detail, when there is one worth showing.
+    var detail: String? {
+        switch self {
+        case .schemaGeneration: return nil
+        case .loadFailure(let message): return message
+        }
+    }
+}
+
+/// A single reset, pending acknowledgement.
+struct StoreResetRecord: Codable, Equatable {
+    let reason: StoreResetReason
+    let date: Date
+    /// The safety copy's folder name inside `PersistenceStack.backupsDirectory`, or nil if
+    /// there was nothing to copy (a first launch) or the copy itself failed.
+    let backupName: String?
+    /// Whether a store actually existed and was destroyed. False on a first launch, where
+    /// the "reset" is a formality and must stay invisible. **A record with
+    /// `destroyedData == true` and no `backupName` is the worst case — data lost AND the
+    /// copy failed — and must still be shown.**
+    let destroyedData: Bool
+
+    /// The safety copy, if it still exists on disk. Main-actor isolated because
+    /// `PersistenceStack` is (the target defaults types to `MainActor`), and the only
+    /// reader is `SettingsView`.
+    @MainActor var backupURL: URL? { backupName.flatMap { PersistenceStack.backupURL(named: $0) } }
+}
+
+/// Storage for the pending reset receipt. Injectable defaults, like `MetricsRecorder`.
+enum StoreResetLog {
+    private static let key = "store.lastReset"
+
+    static func write(_ record: StoreResetRecord, to defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(record) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    /// The reset the user has not yet acknowledged, if any.
+    static func pending(in defaults: UserDefaults = .standard) -> StoreResetRecord? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(StoreResetRecord.self, from: data)
+    }
+
+    static func clear(in defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: key)
+    }
+}

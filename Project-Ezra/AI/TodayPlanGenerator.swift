@@ -56,6 +56,10 @@ struct PlanTaskSnapshot: Sendable, Codable, Hashable {
         let blocksTitles = task.dependents(among: tasks).map(\.title)
 
         var facts: [String] = []
+        // Already picked up. Rides the existing facts array on purpose: it reaches
+        // the advisor prompt via `promptLine` AND the deterministic fallback's line
+        // via `factLine`, with no new stored property and no day-cache shape change.
+        if task.status == .doing { facts.append("in progress") }
         if dueToday {
             facts.append("due today")
         } else if let days = overdueDays {

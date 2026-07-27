@@ -83,13 +83,34 @@ enum TaskRanking {
 
     /// Staleness pull-down per day since the last HUMAN touch.
     static let stalenessPerDay = -0.6
-    /// Pull-down per time the task was planned and left untouched (`deferralCount`).
+    /// Pull-down per CONSECUTIVE time the task was planned and left untouched
+    /// (`deferralCount`, which `touchHuman` resets — so this recovers as soon as the
+    /// user engages, rather than penalising a task they have since picked back up).
     /// `carriedOverCount` (worked-but-unfinished) is deliberately unread for now.
     static let deferralPenalty = -1.5
     /// Boost while a cleared blocker is fresh (`lastUnblockedAt` within the window).
     static let recentUnblockBoost = 12.0
     /// Boost while a newly-gained dependent is fresh (a reverse `.blocks` edge's age).
     static let recentDependentBoost = 8.0
+    /// Boost while an explicit start commitment is fresh (`.doing`, entered within
+    /// the window). Deliberately a peer of `recentUnblockBoost`, NOT the full clamp:
+    /// `relevanceClamp` is a shared budget across every term below, so a boost that
+    /// large would saturate it alone and collapse this whole layer into a boolean.
+    ///
+    /// **This is the only layer `.doing` may touch.** It is the fastest fact in the
+    /// system, and `AttentionEngine`'s persisted score reads slow inputs only — that
+    /// is what makes "the AI never decides the band" true by construction.
+    static let startedBoost = 12.0
+    /// Pull-down while a task has OPEN children — it has become a container, and the
+    /// steps are the real work. Surfacing the umbrella alongside its own steps
+    /// double-bills the same job in the stack, which is what makes a freshly split task
+    /// feel like it multiplied instead of clarified.
+    ///
+    /// A relevance term, deliberately NOT a band change: the parent still ranks on its
+    /// own merits (an overdue container still sinks-or-rises on that), it just stops
+    /// competing with its steps. It lifts automatically when the last child resolves,
+    /// because the term reads the OPEN set.
+    static let containerRecede = -10.0
     /// Max boost from a related task's approaching due date (linear decay to 0).
     static let dueProximityMax = 15.0
     /// The freshness window for the two event boosts.
@@ -110,6 +131,7 @@ enum TaskRanking {
         // (parent/children/blocking/blocked) that feed due-date proximity.
         var blockingIDs: Set<UUID> = []
         var recentlyGainedDependent: Set<UUID> = []
+        var parentsWithOpenChildren: Set<UUID> = []
         var neighborIDs: [UUID: Set<UUID>] = [:]
         for task in open {
             guard let id = task.uuid else { continue }
@@ -126,6 +148,9 @@ enum TaskRanking {
                     neighborIDs[id, default: []].insert(target)
                     neighborIDs[target, default: []].insert(id)
                 case .parent:
+                    // The edge lives on the CHILD and points at the parent, and this
+                    // loop walks the OPEN set — so the parent records a live step.
+                    parentsWithOpenChildren.insert(target)
                     neighborIDs[id, default: []].insert(target)
                     neighborIDs[target, default: []].insert(id)
                 case .related:
@@ -141,6 +166,7 @@ enum TaskRanking {
             let relevance = currentRelevance(
                 for: task, now: now,
                 recentlyGainedDependent: recentlyGainedDependent.contains(id),
+                hasOpenChildren: parentsWithOpenChildren.contains(id),
                 neighborDueDates: neighborDueDates)
             keys[id] = RankKey(
                 needsDecision: task.needsDecision && !task.status.isResolved,
@@ -160,7 +186,8 @@ enum TaskRanking {
     /// inputs (the graph terms arrive precomputed), evaluated once per snapshot.
     static func currentRelevance(
         for task: TaskItem, now: Date,
-        recentlyGainedDependent: Bool, neighborDueDates: [Date]
+        recentlyGainedDependent: Bool, hasOpenChildren: Bool = false,
+        neighborDueDates: [Date]
     ) -> Double {
         var relevance = 0.0
         let staleDays = max(0, now.timeIntervalSince(task.humanTouchedAt) / 86_400)
@@ -172,6 +199,19 @@ enum TaskRanking {
             relevance += recentUnblockBoost
         }
         if recentlyGainedDependent { relevance += recentDependentBoost }
+        // Broken down: the steps carry the work now, so the umbrella steps back.
+        if hasOpenChildren { relevance += containerRecede }
+        // Freshly picked up: you have the context loaded, so finishing beats starting.
+        // Gated on the CURRENT visit, not summed dwell — otherwise a task started,
+        // dropped, and resumed would age out of the boost while genuinely fresh. The
+        // expiry is also what keeps abandoned in-flight work from pinning itself to
+        // the top forever; after the window it ranks on its own merits and stays
+        // sweep-eligible like anything else.
+        if task.status == .doing, let startedAt = task.currentStateEnteredAt, startedAt <= now,
+            now.timeIntervalSince(startedAt) <= recentWindow
+        {
+            relevance += startedBoost
+        }
         relevance += dueProximity(neighborDueDates, now: now)
         return min(max(relevance, -relevanceClamp), relevanceClamp)
     }

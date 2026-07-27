@@ -28,7 +28,7 @@ struct MyTasksSlicesTests {
         let tasks = [todo, backlog, ip, notMine]
 
         let sections = MyTasksSlices.assigned(tasks: tasks, currentUserID: me)
-        #expect(sections.map(\.kind) == [.status(.doing), .status(.todo)])
+        #expect(sections.map(\.status) == [.doing, .todo])
         // The not-mine task never appears in any section.
         let allTitles = sections.flatMap { $0.entries }.compactMap { entry -> String? in
             if case .single(let t) = entry { return t.title }
@@ -47,7 +47,7 @@ struct MyTasksSlicesTests {
 
         // A single chain entry, sectioned under the anchor (root) — In Progress.
         #expect(sections.count == 1)
-        #expect(sections[0].kind == .status(.doing))
+        #expect(sections[0].status == .doing)
         guard case .chain = sections[0].entries[0] else {
             Issue.record("expected a chain entry")
             return
@@ -61,7 +61,7 @@ struct MyTasksSlicesTests {
         let decide = TaskItem(
             title: "decide", status: .todo, needsDecision: true, ownerID: me)
         let sections = MyTasksSlices.assigned(tasks: [plain, decide], currentUserID: me)
-        let todoSection = try? #require(sections.first { $0.kind == .status(.todo) })
+        let todoSection = try? #require(sections.first { $0.status == .todo })
         guard case .single(let first)? = todoSection?.entries.first else {
             Issue.record("expected a single row")
             return
@@ -137,7 +137,7 @@ struct MyTasksSlicesTests {
         let done = TaskItem(title: "d", status: .todo, ownerID: me)
         done.complete()
         let sections = MyTasksSlices.assigned(tasks: [active, done], currentUserID: me, status: .done)
-        #expect(sections.map(\.kind) == [.status(.done)])
+        #expect(sections.map(\.status) == [.done])
         #expect(sections[0].entries.count == 1)
     }
 
@@ -154,25 +154,6 @@ struct MyTasksSlicesTests {
 
         // Same order the eye reads: In Progress → Todo → Done.
         #expect(TaskDetailPeers.flatten(sections).map(\.title) == ["ip", "todo", "done"])
-    }
-
-    @Test("A LIVE reference item gets its own section, never Todo")
-    func referenceSectionsSeparately() {
-        let me = UUID()
-        let todo = TaskItem(title: "todo", status: .todo, ownerID: me)
-        let note = TaskItem(title: "wifi password", status: .todo, ownerID: me)
-        note.workIntent = .reference
-
-        let sections = MyTasksSlices.assigned(tasks: [todo, note], currentUserID: me)
-        // Filing a saved password under "Todo" would claim it is queued work. It is
-        // not — and the separate section is the seam a future knowledge/execution
-        // split would cut along.
-        #expect(sections.map(\.kind) == [.status(.todo), .reference])
-
-        // Once RESOLVED it really is a resolution record, so it files normally.
-        note.complete()
-        let after = MyTasksSlices.assigned(tasks: [todo, note], currentUserID: me)
-        #expect(after.map(\.kind) == [.status(.todo), .status(.done)])
     }
 
     @Test("flatten unrolls a chain stack root-first, where the stack sits")

@@ -47,7 +47,10 @@ final class TodaySequenceModel {
 
     private let brain: AppBrain
     private let store: TodayPlanStore
-    let now: Date
+    /// The clock this run of the sequence is anchored to. Mutable ONLY through
+    /// `restartIfDayRolledOver` — the app can outlive the day it launched in, and a
+    /// briefing frozen at yesterday's `now` would keep resting on screen forever.
+    private(set) var now: Date
 
     private var allTasks: [TaskItem] = []
     private var capacityLogs: [CapacityLog] = []
@@ -115,6 +118,34 @@ final class TodaySequenceModel {
         started = true
         AppBrain.prewarmTodayModel()
         Task { await generate() }
+    }
+
+    /// The calendar day rolled over while the app stayed alive — re-arm the sequence for
+    /// the new day and return true so the caller can replay the Recap entrance.
+    ///
+    /// Without this, "the briefing plays once a day" only held across cold launches: a
+    /// phone left on the Today tab overnight (or backgrounded and reopened the next
+    /// morning — the exact path the daily nudge creates) kept resting on yesterday's
+    /// briefing, and the rollover reconciliation that turns yesterday's plan into a
+    /// `CapacityLog` + deferral counts never ran.
+    ///
+    /// The date test routes through `TodayPlanStore.shouldReplay` — the single reset
+    /// predicate — rather than comparing days here, so the swappable trigger stays
+    /// swappable.
+    @discardableResult
+    func restartIfDayRolledOver(
+        now newNow: Date, tasks: [TaskItem], logs: [CapacityLog], currentUserID: UUID? = nil,
+        context: NSManagedObjectContext
+    ) -> Bool {
+        guard started, !isGenerating, store.shouldReplay(now: newNow) else { return false }
+        generation += 1  // orphan anything still in flight against the old day
+        now = newNow
+        started = false
+        resting = false
+        plan = nil
+        beat = .recap
+        start(tasks: tasks, logs: logs, currentUserID: currentUserID, context: context)
+        return true
     }
 
     // MARK: - Scene transition (data-driven, never timed)
@@ -201,12 +232,17 @@ final class TodaySequenceModel {
             }
             task.lastSurfacedAt = now
         }
-        try? context?.save()
+        context?.saveChanges()
+        // Carry today's existing completion stamp forward. A replan/self-heal rewrites the
+        // cache for a day that already played, and resetting `completedAt` to nil here
+        // would make `markSequenceComplete` treat the re-performance as the day's first —
+        // moving the recap cutoff past hours the morning Recap already covered.
+        let playedAt = store.cache(for: now)?.completedAt
         store.save(
             TodayPlanCache(
                 dateKey: TodayPlanStore.dayKey(for: now), tier: plan.tier, headline: plan.headline,
                 tradeoffs: plan.tradeoffs, risks: plan.risks, actions: plan.actions,
-                generatedAt: now, docketSignature: candidateIDs, completedAt: nil))
+                generatedAt: now, docketSignature: candidateIDs, completedAt: playedAt))
         store.markSequenceComplete(now: now)
     }
 
@@ -221,10 +257,8 @@ final class TodaySequenceModel {
     /// The advisor's candidate set: my live work plus open decisions, in `TaskRanking`
     /// order (so the most important land in the capped candidate list).
     ///
-    /// Two exclusions, both deliberate:
+    /// One exclusion, deliberate:
     ///
-    /// - **`countsAsWorkload`** drops reference items. A saved wifi password is owned
-    ///   and live but never resolves, so it would sit in the briefing forever.
     /// - **Ownership, but only once sync is live.** Today is *my* execution and
     ///   Household is *our* coordination, so work owned by someone else does not
     ///   belong here. That filter is gated on `HouseholdSync.isLive` because without
@@ -234,7 +268,6 @@ final class TodaySequenceModel {
     private func candidateTasks(from tasks: [TaskItem]) -> [TaskItem] {
         let open = tasks.filter {
             ($0.status.isLive || ($0.needsDecision && !$0.status.isResolved))
-                && $0.countsAsWorkload
                 && (!HouseholdSync.isLive || $0.isMine(currentUserID: currentUserID))
         }
         return TaskRanking.sorted(open, among: tasks, now: now)

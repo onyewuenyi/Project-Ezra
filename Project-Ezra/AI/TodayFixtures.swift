@@ -37,6 +37,12 @@ enum TodayFixtures {
     /// requiring the app to be deleted first. Identity (Household / FamilyMember /
     /// UserProfile) is preserved — `seed` re-bootstraps it idempotently.
     static func reset(in context: NSManagedObjectContext) {
+        // The third destructive path, and the easiest to fire by accident: leaving
+        // `-SeedTodayFixtures` ticked in the scheme wipes real captured work on the next
+        // ⌘R. Take the same safety copy the schema reset takes. Best-effort by design —
+        // this copies a store that is currently open, and a dev seam must never be able
+        // to fail the seed it precedes.
+        _ = PersistenceStack.backupStore()
         for entity in [
             "TaskItem", "CapacityLog", "Capture", "ChangeLogEntry", "Correction",
             "SuppressionRecord", "EmbeddingCache",
@@ -44,7 +50,7 @@ enum TodayFixtures {
             let request = NSFetchRequest<NSManagedObject>(entityName: entity)
             (try? context.fetch(request))?.forEach(context.delete)
         }
-        try? context.save()
+        context.saveChanges()
         // The Today plan cache + recap cutoff live in UserDefaults, keyed by day — clear
         // them so a stale resting plan can't reference wiped tasks.
         let defaults = UserDefaults.standard
@@ -227,16 +233,6 @@ enum TodayFixtures {
         // Light: 3 days → below the 5-sample floor → cold-starts to the static default.
         logDays(.light, completions: [2, 1, 2], startOffset: 15)
 
-        // A reference item, so the five workload exclusions are actually exercisable in
-        // the simulator: this must NOT appear in Today, must not count toward anyone's
-        // load, and must never be auto-archived as stale. It also lands in its own
-        // My Tasks section rather than under Todo.
-        let wifi = TaskItem(
-            title: "Wifi password is hunter2-guest", category: "Home",
-            confidence: 0.9, reasoning: "Reads as something to keep, not something to do.",
-            ownerID: me, ownerOrigin: .inferred, createdAt: now.addingTimeInterval(-9 * day),
-            in: context)
-        wifi.workIntent = .reference
 
         // Authorship and a WorkIntent spread so My Tasks + the detail read correctly
         // (fixtures bypass the model's classification, so stamp a plausible intent per
@@ -264,6 +260,6 @@ enum TodayFixtures {
         // TaskItems directly, bypassing the commit-time stamp).
         AttentionEngine.recompute(all, among: all, now: now)
 
-        try? context.save()
+        context.saveChanges()
     }
 }

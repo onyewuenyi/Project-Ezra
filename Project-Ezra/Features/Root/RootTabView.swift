@@ -28,6 +28,7 @@ struct RootTabView: View {
     @AppStorage("hasOnboarded") private var hasOnboarded = false
     @Environment(\.managedObjectContext) private var context
     @Environment(AppBrain.self) private var brain
+    @Environment(BriefingReminder.self) private var briefing
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
@@ -87,15 +88,27 @@ struct RootTabView: View {
         }
         .tint(Palette.accentFlat)
         .overlay(alignment: .bottomTrailing) { captureButton }
-        .environment(\.openCapture, {
-            resumingCapture = nil
-            showComposer = true
-        })
-        .environment(\.resumeCapture, { capture in
-            resumingCapture = capture
-            showComposer = true
-        })
+        .environment(
+            \.openCapture,
+            {
+                resumingCapture = nil
+                showComposer = true
+            }
+        )
+        .environment(
+            \.resumeCapture,
+            { capture in
+                resumingCapture = capture
+                showComposer = true
+            }
+        )
         .environment(\.openInbox, { selection = 1 })
+        // Tapping the daily nudge lands on Today, wherever the app was left.
+        .onChange(of: briefing.pendingOpenBriefing) { _, pending in
+            guard pending else { return }
+            selection = 0
+            briefing.pendingOpenBriefing = false
+        }
         .sheet(isPresented: $showComposer) { ComposerView(resuming: resumingCapture) }
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView {
@@ -104,6 +117,12 @@ struct RootTabView: View {
             }
         }
         .task {
+            // A cold launch from the nudge can set the flag before `onChange` is
+            // watching, so catch it here too.
+            if briefing.pendingOpenBriefing {
+                selection = 0
+                briefing.pendingOpenBriefing = false
+            }
             if ProcessInfo.processInfo.arguments.contains("-SeedFlowFixtures") {
                 // Flow fixtures own their identity setup (a named "you" member + owned
                 // tasks), so bootstrap is deliberately not called here.
@@ -188,7 +207,7 @@ struct RootTabView: View {
         // Judgment and low-confidence items still arrive wearing their Needs Decision
         // flag — creation never clears that.
         brain.commit(drafts, rawCapture: sample, into: context)
-        try? context.save()
+        context.saveChanges()
         hasOnboarded = true
         showOnboarding = false
     }
@@ -196,7 +215,7 @@ struct RootTabView: View {
     /// Deterministic verification seam. Launch with `-SeedFlowFixtures` to populate
     /// hand-built data covering every core user flow except onboarding, bypassing
     /// the AI engine so status/confidence/autonomy are exact — see
-    /// docs/mock-data-user-flows.md. Never fires in normal runs.
+    /// prev-docs/mock-data-user-flows.md. Never fires in normal runs.
     private func seedFlowFixturesIfRequested() {
         guard ProcessInfo.processInfo.arguments.contains("-SeedFlowFixtures") else { return }
         let existing = (try? context.count(for: NSFetchRequest<TaskItem>(entityName: "TaskItem"))) ?? 0
@@ -228,5 +247,6 @@ struct RootTabView: View {
 #Preview {
     RootTabView()
         .environment(AppBrain())
+        .environment(BriefingReminder())
         .environment(\.managedObjectContext, PersistenceStack.scratch)
 }

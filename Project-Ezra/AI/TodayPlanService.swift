@@ -102,6 +102,8 @@ enum TodayPlanInstructions {
         - Choose ONLY from the given task ids. Never invent a task, a deadline, or a
           fact that isn't in the list.
         - Reason only from the given facts (due/overdue, blocks, decision, effort).
+        - If a task is marked "in progress", the person already committed to it —
+          prefer finishing that over starting something new.
         - Plain and steady. No pep talk, no exclamation marks, no emoji.
         """
 }
@@ -309,16 +311,17 @@ extension AppBrain {
         timeout seconds: Double, salvage box: PartialBox? = nil,
         _ operation: @escaping @Sendable () async throws -> GeneratedPlan
     ) async throws -> GeneratedPlan {
-        try await withThrowingTaskGroup(of: GeneratedPlan.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                if let box, let salvaged = await box.viablePartial() { return salvaged }
-                throw PlanGenerationError.timedOut
-            }
-            guard let result = try await group.next() else { throw PlanGenerationError.timedOut }
-            group.cancelAll()
-            return result
+        // The race itself now lives in `ModelDeadline` so every model call in the app
+        // shares one implementation. What stays here is the part that is genuinely
+        // plan-specific: salvaging a viable streamed partial instead of throwing, and
+        // re-typing the timeout as `PlanGenerationError.timedOut` — the tier chain falls
+        // through on `throws`, and `errorLabel` maps that case to the "timedOut" string
+        // the DEBUG footer reads. Both contracts must survive this refactor.
+        do {
+            return try await ModelDeadline.race(timeout: seconds, operation)
+        } catch is ModelDeadline.Exceeded {
+            if let box, let salvaged = await box.viablePartial() { return salvaged }
+            throw PlanGenerationError.timedOut
         }
     }
 
@@ -421,6 +424,6 @@ extension AppBrain {
             isReversible: true,
             in: context)
         context.insert(entry)
-        try? context.save()
+        context.saveChanges()
     }
 }

@@ -90,6 +90,170 @@ struct IntentResolverTests {
         #expect(resolved("soonish") == nil)
     }
 
+    // MARK: - Date resolution: the arms that contain each other
+
+    /// The two orderings that were wrong, and stay wrong the moment an arm moves.
+    @Test("Overlapping phrases resolve by specificity, not by list position")
+    func overlappingPhrasePrecedence() {
+        // "day after tomorrow" contains "tomorrow" — it used to land a day early.
+        #expect(resolved("day after tomorrow") == day(17))
+        // A named weekday beats a bare week reference.
+        #expect(resolved("next week friday") == day(24))
+        // "this weekend" contains "this week" — the weekend arm has to win.
+        #expect(resolved("this weekend") == day(18))
+    }
+
+    @Test("Relative offsets resolve, spelled out or in digits")
+    func relativeOffsets() {
+        #expect(resolved("in 3 days") == day(18))
+        #expect(resolved("in three days") == day(18))
+        #expect(resolved("in a week") == day(22))
+        #expect(resolved("in 2 weeks") == day(29))
+        #expect(resolved("a week from now") == day(22))
+        #expect(resolved("in ten days") == day(25))
+    }
+
+    @Test("A named month and day resolves to the next occurrence, never the past")
+    func calendarDates() {
+        #expect(resolved("july 20") == day(20))
+        #expect(resolved("20 july") == day(20))
+        #expect(resolved("jul 20th") == day(20))
+        // Already past this year — rolls forward rather than landing pre-dated.
+        let january = resolved("january 5")
+        #expect(january != nil)
+        if let january {
+            #expect(Calendar.current.component(.year, from: january) == 2027)
+        }
+        // A month name is matched whole — "market" is not March.
+        #expect(resolved("the market on the 3rd") == nil)
+    }
+
+    @Test("Week and month boundaries resolve to the honest edge")
+    func boundaries() {
+        // The current week runs Sun 12 – Sat 18; its end is the Saturday.
+        #expect(resolved("end of the week") == day(18))
+        #expect(resolved("this week") == day(18))
+        #expect(resolved("end of the month") == day(31))
+        // "next month" reads like "next week": the start of it.
+        var august = DateComponents()
+        august.year = 2026
+        august.month = 8
+        august.day = 1
+        #expect(resolved("next month") == Calendar.current.date(from: august))
+    }
+
+    // MARK: - Work-intent backfill (axis 2)
+
+    @Test("Kind of work backfills from the wording; an engine value always wins")
+    func workIntentBackfill() {
+        func draft(_ title: String, engine: String? = nil) -> TaskDraft {
+            IntentResolver.resolve(
+                TaskIntent(
+                    title: title, category: "Home", confidence: 0.9, isJudgmentCall: false,
+                    reasoning: "", workIntent: engine))
+        }
+        #expect(draft("Should I switch dentists").workIntent == .decision)
+        #expect(draft("Decide on the school").workIntent == .decision)
+        #expect(draft("Figure out if we can afford it").workIntent == .decision)
+        #expect(draft("Plan the Lisbon trip").workIntent == .planning)
+        #expect(draft("Figure out how to get there").workIntent == .planning)
+        #expect(draft("Break down the move").workIntent == .planning)
+        #expect(draft("Call the plumber").workIntent == .action)
+        // The engine's classification is never second-guessed.
+        #expect(draft("Plan the Lisbon trip", engine: "action").workIntent == .action)
+        #expect(draft("Call the plumber", engine: "planning").workIntent == .planning)
+        // …but an unrecognised token falls through to the lexical backfill rather than
+        // leaving the field nil. `reference` is retired, so it is exactly such a token.
+        #expect(draft("Plan the Lisbon trip", engine: "reference").workIntent == .planning)
+    }
+
+    /// Axes 2 and 3 answer different questions. If the backfill ever keys off the
+    /// judgment flag, an action-shaped judgment call starts reading as `.decision`
+    /// and the two axes are fused again.
+    @Test("A judgment call with an action-shaped title still classifies as action")
+    func workIntentIgnoresJudgmentFlag() {
+        let draft = IntentResolver.resolve(
+            TaskIntent(
+                title: "Call the school about the transfer", category: "Family", confidence: 0.9,
+                isJudgmentCall: true, reasoning: ""))
+        #expect(draft.workIntent == .action)
+        #expect(draft.needsDecision)  // axis 3 still fires, independently
+    }
+
+    // MARK: - Due dates proposed from the task's nature
+
+    @Test("Recurring obligations propose a date; ordinary tasks stay undated")
+    func dueDateFromNature() {
+        func draft(_ title: String, due: String? = nil, kind: String? = nil) -> TaskDraft {
+            IntentResolver.resolve(
+                TaskIntent(
+                    title: title, category: "Admin", dateExpression: due, confidence: 0.9,
+                    isJudgmentCall: false, reasoning: "", workIntent: kind),
+                now: wednesday)
+        }
+        #expect(draft("Pay the rent").dueDate == day(31))  // month end
+        #expect(draft("Renew my passport").dueDate == day(29))  // +14
+        #expect(draft("File the taxes").dueDate == day(22))  // +7
+        #expect(draft("Text Sam back").dueDate == nil)  // nothing to infer
+        // A reference item never completes, so a deadline on it is meaningless.
+        #expect(draft("The wifi password is hunter2", kind: "reference").dueDate == nil)
+        // A spoken date always wins over the proposal.
+        #expect(draft("Pay the rent", due: "tomorrow").dueDate == day(16))
+    }
+
+    @Test("A proposed date carries its reason; a spoken one carries none")
+    func dueReasonOnlyForProposals() {
+        func draft(_ title: String, due: String? = nil) -> TaskDraft {
+            IntentResolver.resolve(
+                TaskIntent(
+                    title: title, category: "Admin", dateExpression: due, confidence: 0.9,
+                    isJudgmentCall: false, reasoning: ""), now: wednesday)
+        }
+        #expect(draft("Pay the rent").dueReason != nil)
+        #expect(draft("Pay the rent", due: "friday").dueReason == nil)
+        #expect(draft("Text Sam back").dueReason == nil)
+    }
+
+    /// The no-feedback rule: `inferredImportance` reads the SPOKEN date only. A
+    /// proposed date landing inside its two-day imminence window must not raise the
+    /// score, or a guess inflates the attention substrate.
+    @Test("A proposed due date never feeds the importance backfill")
+    func proposedDateDoesNotInflateImportance() {
+        // Resolved on the 30th, so the month-end proposal (the 31st) is imminent.
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 7
+        comps.day = 30
+        comps.hour = 15
+        let lateInMonth = Calendar.current.date(from: comps)!
+
+        // "subscription" proposes a month-end date but is NOT a consequence signal, so
+        // importance can only read 0.75 here by having read the proposed date.
+        let draft = IntentResolver.resolve(
+            TaskIntent(
+                title: "Cancel the gym subscription", category: "Home", confidence: 0.9,
+                isJudgmentCall: false, reasoning: ""), now: lateInMonth)
+        #expect(draft.dueDate == day(31))  // proposed, imminent
+        #expect(draft.aiImportance == IntentResolver.ordinaryImportance)  // and ignored
+    }
+
+    // MARK: - Corrections
+
+    @Test("A kind changed at confirm is diffed; an untouched one is not")
+    func workIntentCorrection() {
+        var draft = IntentResolver.resolve(
+            TaskIntent(
+                title: "Call the plumber", category: "Home", confidence: 0.9,
+                isJudgmentCall: false, reasoning: ""))
+        #expect(draft.workIntent == .action)
+        #expect(draft.corrections.isEmpty)
+
+        draft.workIntent = .planning
+        let diff = draft.corrections.first { $0.field == "workIntent" }
+        #expect(diff?.aiValue == "action")
+        #expect(diff?.userValue == "planning")
+    }
+
     // MARK: - Draft resolution
 
     @Test("Every resolved draft proposes Inbox and carries the raw fields forward")

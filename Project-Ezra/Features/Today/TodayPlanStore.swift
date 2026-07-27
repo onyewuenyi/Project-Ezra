@@ -74,6 +74,16 @@ final class TodayPlanStore {
         cache?.dateKey != Self.dayKey(for: now)
     }
 
+    /// Whether today's sequence has already been played all the way through — the one
+    /// input `BriefingReminder` needs to skip a day, readable without owning a store
+    /// instance (the app's scene-phase handler has no view context).
+    static func sequencePlayedToday(
+        now: Date = Date(), defaults: UserDefaults = .standard
+    ) -> Bool {
+        guard let cache = decodeCache(from: defaults) else { return false }
+        return cache.dateKey == dayKey(for: now) && cache.completedAt != nil
+    }
+
     // MARK: - Cache access
 
     /// The resting plan for today, or nil when a replay is due (so the caller runs
@@ -97,11 +107,21 @@ final class TodayPlanStore {
     /// Stamp the sequence as fully played and advance the recap high-water mark. The
     /// resting state renders from here on; the next day's Recap counts completions
     /// since `now`.
+    ///
+    /// **The FIRST completion of the day owns the cutoff.** A same-day replan (or the
+    /// on-device self-heal upgrade) lands here again, and re-stamping would move the
+    /// window forward over hours the morning Recap already covered — every task finished
+    /// between the two generations would be swallowed and never appear in tomorrow's
+    /// Recap. Same rule as `lastSurfacedAt` in `TodaySequenceModel.finalize`, for the
+    /// same reason: a re-performance is not a new day.
     func markSequenceComplete(now: Date) {
-        recapCutoff = now
-        defaults.set(now, forKey: Key.recapCutoff)
+        let playedToday = cache?.dateKey == Self.dayKey(for: now) && cache?.completedAt != nil
+        if !playedToday {
+            recapCutoff = now
+            defaults.set(now, forKey: Key.recapCutoff)
+        }
         if var current = cache {
-            current.completedAt = now
+            current.completedAt = current.completedAt ?? now
             save(current)
         }
     }
@@ -133,7 +153,9 @@ final class TodayPlanStore {
     /// finishing (multi-day work must NOT read as deferral — ranking would pull down
     /// actively-worked tasks, the inverted signal). The discriminator is the HUMAN
     /// clock (`humanTouchedAt`), never `updatedAt` — a system edge-write between
-    /// surface and rollover can't fake engagement.
+    /// surface and rollover can't fake engagement. This is the only site that RAISES
+    /// `deferralCount`; `touchHuman` is the only site that clears it, which is what
+    /// makes the count consecutive rather than lifetime.
     func reconcileIfNeeded(context: NSManagedObjectContext, tasks: [TaskItem], now: Date) {
         guard let stale = cache, stale.dateKey != Self.dayKey(for: now) else { return }
 
@@ -156,7 +178,7 @@ final class TodayPlanStore {
                 date: day, capacity: .steady, planCount: stale.actions.count,
                 completedCount: completed, skippedCount: skipped, in: context)
             context.insert(log)
-            try? context.save()
+            context.saveChanges()
         }
         clear()
     }

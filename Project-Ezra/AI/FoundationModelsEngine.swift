@@ -159,7 +159,11 @@ struct FoundationModelsEngine: AIEngine {
                 reasoning: task.reasoning ?? "",
                 isUrgent: task.isUrgent ?? false,
                 importance: (task.importance ?? nil).map { min(max($0, 0), 1) },
-                effortMinutes: (task.effortMinutes ?? nil).flatMap { $0 > 0 ? min($0, 8 * 60) : nil }
+                effortMinutes: (task.effortMinutes ?? nil).flatMap { $0 > 0 ? min($0, 8 * 60) : nil },
+                // Carried mid-stream like every other field. Left out, a partial always
+                // showed the resolver's lexical backfill, which the final snapshot then
+                // overwrote — a visible flicker on a chip the user may already be reading.
+                workIntent: ExtractedTask.normalizedWorkIntent(task.workIntent ?? nil)
             )
         }
     }
@@ -209,8 +213,9 @@ struct FoundationModelsEngine: AIEngine {
           this task is the SAME as one of them (set duplicateOfID + duplicateConfidence) \
           or a STEP OF one of them (set childOfID + childConfidence). Copy the id EXACTLY \
           from CANDIDATES; use null when unsure. Never set both for one task.
-        - workIntent: what KIND of work this is — action, decision, planning, or \
-          reference. Use "decision" ONLY when the task is genuinely choosing between options.
+        - workIntent: what KIND of work this is — action, decision, or planning. \
+          Use "decision" ONLY when the task is genuinely choosing between options. There \
+          is no "reference" kind: a note worth keeping is still a task here.
 
         If a line is a header, a note to self with no action, or empty, skip it.
         """
@@ -319,7 +324,7 @@ struct ExtractedTask {
 
     @Guide(
         description:
-            "What KIND of work this is — exactly one of: action, decision, planning, reference. Use decision ONLY when the task is choosing between options."
+            "What KIND of work this is — exactly one of: action, decision, or planning. Use decision ONLY when the task is choosing between options."
     )
     let workIntent: String?
 
@@ -340,7 +345,7 @@ struct ExtractedTask {
             blocksExisting: (blocksExistingTasks ?? []).compactMap(Self.trimmedOrNil),
             duplicateOf: Self.edgeRef(duplicateOfID, duplicateConfidence),
             childOf: Self.edgeRef(childOfID, childConfidence),
-            workIntent: Self.trimmedOrNil(workIntent)?.lowercased()
+            workIntent: Self.normalizedWorkIntent(workIntent)
         )
     }
 
@@ -357,5 +362,16 @@ struct ExtractedTask {
         guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), trimmed.count > 1
         else { return nil }
         return trimmed
+    }
+
+    /// The ONE normalizer for the model's work-intent token, shared by the streaming
+    /// path and the final `toIntent()`.
+    ///
+    /// They used to differ — `trimmedOrNil` requires `count > 1`, the streaming copy
+    /// accepted any non-empty string — so a single-character token was kept mid-stream
+    /// and dropped at the end. The kind chip visibly flipped as the stream closed, on a
+    /// field the user may already have been reading.
+    static func normalizedWorkIntent(_ raw: String?) -> String? {
+        trimmedOrNil(raw)?.lowercased()
     }
 }

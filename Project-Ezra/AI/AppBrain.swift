@@ -174,7 +174,7 @@ final class AppBrain {
         capture.rawText = trimmed
         capture.source = source
         capture.parkedDrafts = drafts
-        try? context.save()
+        context.saveChanges()
         return capture
     }
 
@@ -196,7 +196,7 @@ final class AppBrain {
     /// swipe-to-dismiss parks, so nothing is lost by accident.
     static func discard(_ capture: Capture, in context: NSManagedObjectContext) {
         context.delete(capture)
-        try? context.save()
+        context.saveChanges()
     }
 
     /// Give every draft an owner. Replaces the retired `applyOwnershipGate`, which did
@@ -351,7 +351,7 @@ final class AppBrain {
         capture.parsedTaskIDs = created.compactMap(\.uuid) + mergeTargets.compactMap(\.uuid)
         stampAttention(creating, created: created, mergeTargets: mergeTargets, all: all, in: context)
 
-        try? context.save()
+        context.saveChanges()
         if !created.isEmpty { metrics.recordFirstPayoffIfNeeded() }
         return created
     }

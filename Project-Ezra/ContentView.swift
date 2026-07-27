@@ -17,5 +17,6 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environment(AppBrain())
+        .environment(BriefingReminder())
         .environment(\.managedObjectContext, PersistenceStack.scratch)
 }

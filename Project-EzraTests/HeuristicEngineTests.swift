@@ -144,6 +144,29 @@ struct HeuristicEngineTests {
         #expect(HeuristicEngine.effortMinutes(from: "plan the offsite") == nil)
     }
 
+    // MARK: - Time phrases
+
+    /// The extractor hands `IntentResolver.resolveDate` a phrase verbatim, so a
+    /// truncated phrase is a wrong DATE, not just a cosmetic one. The token list is
+    /// ordered longest-first for exactly this reason and used not to be.
+    @Test("The longest matching time phrase wins, not the first one listed")
+    func timePhrasePrecedence() {
+        #expect(
+            HeuristicEngine.dateExpression(from: "call the vet day after tomorrow")
+                == "day after tomorrow")
+        #expect(HeuristicEngine.dateExpression(from: "pay it this weekend") == "this weekend")
+        #expect(HeuristicEngine.dateExpression(from: "wrap up end of the week") == "end of the week")
+        #expect(HeuristicEngine.dateExpression(from: "book it tomorrow") == "tomorrow")
+    }
+
+    @Test("Open-ended phrases a token list can't hold are extracted by shape")
+    func timePhrasePatterns() {
+        #expect(HeuristicEngine.dateExpression(from: "renew it in three days") == "in three days")
+        #expect(HeuristicEngine.dateExpression(from: "due july 20") == "july 20")
+        #expect(HeuristicEngine.dateExpression(from: "a week from now") == "a week from now")
+        #expect(HeuristicEngine.dateExpression(from: "sometime soonish") == nil)
+    }
+
     // MARK: - End-to-end triage
 
     @Test("Triage turns a messy blob into structured intents")

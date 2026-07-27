@@ -26,6 +26,12 @@ private struct ExpectedTask {
     var judgment: Bool = false
     var owner: String? = nil
     var blocked: Bool = false
+    /// True when the pipeline should land a date — either because the utterance says
+    /// one, or because the task's own nature carries a real deadline the user rarely
+    /// bothers to speak (rent, a renewal, a filing). The second kind is
+    /// `IntentResolver.inferredDueDate`'s job; before it existed every one of these
+    /// was labeled false, and the label meant "the user didn't say a date" rather than
+    /// "this task shouldn't have one".
     var expectDue: Bool = false
 }
 
@@ -41,12 +47,12 @@ private let evalSet: [EvalCase] = [
     EvalCase(
         utterance: "renew my passport",
         expected: [
-            ExpectedTask(titleContains: ["passport"], category: "Travel")
+            ExpectedTask(titleContains: ["passport"], category: "Travel", expectDue: true)
         ]),
     EvalCase(
         utterance: "pay the water bill",
         expected: [
-            ExpectedTask(titleContains: ["water bill"], category: "Finance")
+            ExpectedTask(titleContains: ["water bill"], category: "Finance", expectDue: true)
         ]),
     EvalCase(
         utterance: "call mom back",
@@ -91,17 +97,17 @@ private let evalSet: [EvalCase] = [
     EvalCase(
         utterance: "renew car registration at the dmv",
         expected: [
-            ExpectedTask(titleContains: ["registration"], category: "Car")
+            ExpectedTask(titleContains: ["registration"], category: "Car", expectDue: true)
         ]),
     EvalCase(
         utterance: "refill the prescription",
         expected: [
-            ExpectedTask(titleContains: ["prescription"], category: "Health")
+            ExpectedTask(titleContains: ["prescription"], category: "Health", expectDue: true)
         ]),
     EvalCase(
         utterance: "file the taxes",
         expected: [
-            ExpectedTask(titleContains: ["taxes"], category: "Finance")
+            ExpectedTask(titleContains: ["taxes"], category: "Finance", expectDue: true)
         ]),
     EvalCase(
         utterance: "buy groceries",
@@ -111,7 +117,7 @@ private let evalSet: [EvalCase] = [
     EvalCase(
         utterance: "email the client about the invoice",
         expected: [
-            ExpectedTask(titleContains: ["client"], category: "Work")
+            ExpectedTask(titleContains: ["client"], category: "Work", expectDue: true)
         ]),
     EvalCase(
         utterance: "book the hotel for the trip",
@@ -148,7 +154,7 @@ private let evalSet: [EvalCase] = [
     EvalCase(
         utterance: "cancel the streaming subscription",
         expected: [
-            ExpectedTask(titleContains: ["subscription"], judgment: true)
+            ExpectedTask(titleContains: ["subscription"], judgment: true, expectDue: true)
         ]),
     // Delegation.
     EvalCase(
@@ -212,7 +218,7 @@ private let evalSet: [EvalCase] = [
     EvalCase(
         utterance: "renew passport, book flights, call the bank",
         expected: [
-            ExpectedTask(titleContains: ["passport"]),
+            ExpectedTask(titleContains: ["passport"], expectDue: true),
             ExpectedTask(titleContains: ["flights"]),
             ExpectedTask(titleContains: ["bank"]),
         ]),
@@ -221,7 +227,7 @@ private let evalSet: [EvalCase] = [
         expected: [
             ExpectedTask(titleContains: ["milk"]),
             ExpectedTask(titleContains: ["package"]),
-            ExpectedTask(titleContains: ["water bill"]),
+            ExpectedTask(titleContains: ["water bill"], expectDue: true),
         ]),
     EvalCase(
         utterance: """
@@ -230,7 +236,7 @@ private let evalSet: [EvalCase] = [
             oil change overdue
             """,
         expected: [
-            ExpectedTask(titleContains: ["passport"], category: "Travel"),
+            ExpectedTask(titleContains: ["passport"], category: "Travel", expectDue: true),
             ExpectedTask(titleContains: ["side project"], judgment: true),
             ExpectedTask(titleContains: ["oil change"], category: "Car"),
         ]),
@@ -257,7 +263,7 @@ private let evalSet: [EvalCase] = [
     EvalCase(
         utterance: "so basically I need to renew the insurance",
         expected: [
-            ExpectedTask(titleContains: ["insurance"])
+            ExpectedTask(titleContains: ["insurance"], expectDue: true)
         ]),
     EvalCase(
         utterance: "text dad about the reunion and also book the campsite",
@@ -339,6 +345,8 @@ struct RambleEvalTests {
         #expect(judgment.rate >= 0.85, "judgment detection regressed: \(judgment.display)")
         #expect(owner.rate >= 0.60, "owner extraction regressed: \(owner.display)")
         #expect(blocked.rate >= 0.80, "blocker detection regressed: \(blocked.display)")
-        #expect(due.rate >= 0.75, "due detection regressed: \(due.display)")
+        // Re-baselined upward when due dates started being proposed from a task's
+        // nature as well as read from its wording — observed 48/48.
+        #expect(due.rate >= 0.95, "due detection regressed: \(due.display)")
     }
 }

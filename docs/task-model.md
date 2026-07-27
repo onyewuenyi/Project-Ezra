@@ -35,6 +35,39 @@ The retired `.inbox` case was a ghost. Every production creation path confirmed 
 
 `status.isLive` replaces the old `== .active` checks (~40 sites). Nothing stores it and nothing writes through it, so it is a read-through of the one axis, not a second one.
 
+### What `.doing` means
+
+> **`.doing` represents an explicit, *revocable* user commitment to actively execute this task.** It is not a progress percentage, nor merely a UI state. It is a **fast, live** attention signal that informs prioritization, Today planning, and collaboration — and *because* it is fast, it lives in the live relevance layer and **never** in the persisted attention score.
+
+That last clause is the load-bearing one. `AttentionEngine`'s score reads slow inputs only (urgent, AI importance, effort shape, graph centrality), which is what makes "the AI never decides the band" true *by construction* rather than by discipline. `.doing` changes several times a day. It therefore enters ranking through `TaskRanking.startedBoost` (12.0, inside `currentRelevance`) and nowhere else.
+
+Three consequences, all deliberate:
+
+- **The boost expires** with `recentWindow` (48h), gated on the **current open visit** (`TaskItem.currentStateEnteredAt`) rather than `secondsIn(.doing)` — a task started, dropped, and resumed has a large *total* dwell but a fresh commitment, and those are different questions.
+- **12.0, not 25.0.** `relevanceClamp` is a shared budget across every term in the layer; a boost the size of the clamp would saturate it alone and collapse a five-signal layer into a boolean.
+- **No archive immunity.** `BrainSweeps` treats long-abandoned in-flight work like any other stale task. A boost *plus* immunity would produce a task that can never leave the system, and `.doing` would become where tasks hide from cleanup.
+
+### The primary CTA — one slot, or none
+
+`recommendedAction(among:in:)` returns the single next move, or **nil**. Read as a tree, not a ladder:
+
+| Condition | CTA | Writes |
+|---|---|---|
+| resolved | Reopen | `reopenAndReblock` |
+| `ownerID == nil` | That's mine | `claimAndLog` |
+| owned by someone else | **— none —** | |
+| has active blockers | Unblock | `unblock` |
+| `.todo` | Start · **Decide** · **Break it down** | `setStatus(.doing)` |
+| `.doing` | Mark done | `completeAndResurface` |
+
+The nil arm is the design, not an omission: someone else's task is not yours to advance — a button there is wrong by construction, and completing it would stamp *you* as the actor attesting their work. Its proxy moves ("Mark done for ‹name›", "Take it back") live in `TaskMoreMenu`, and the empty slot is reserved for **Nudge/Comment** once `HouseholdSync.isLive` flips.
+
+**Claim precedes unblock** — you take the thing before you clear its path.
+
+**Axis 2 shows up as the verb, never as its own control.** `.start` carries the `WorkIntent` as an associated value so the label and the mutation stay one value; a nil intent (heuristic path, or Apple Intelligence off/unavailable) reads "Start", so the voicing degrades invisibly. This is the whole answer to "give each type its own lifecycle" — one lifecycle, three voices. Per-type lifecycles would re-fuse axes 1/2/3 (see the `waiting` note below).
+
+**Start does not dismiss the detail.** The button relabels to "Mark done" in place, which is how the lifecycle teaches itself — no explanation, no new pixels. Only `.resolve` sets `dismissesDetail`.
+
 ### Verbs by state
 
 | Verb | Todo | Doing | Done | Canceled |
@@ -64,7 +97,7 @@ The retired `.inbox` case was a ghost. Every production creation path confirmed 
 ## Axis 2 — Type
 
 ```swift
-enum WorkIntent: String { case action, decision, planning, reference }
+enum WorkIntent: String { case action, decision, planning }
 ```
 
 **`waiting` is cut.** It and the derived `blocked` flag were the same predicate on two axes — a task blocked on a person is both. External waits already store as an edge with a note and no target, so `blocked` covers it, and cutting it removes the type boundary a classifier would most reliably fumble.
@@ -73,22 +106,41 @@ enum WorkIntent: String { case action, decision, planning, reference }
 
 **Type stops recomputing once a task resolves** — reclassifying something finished changes which module renders on it for no benefit, and burns a model call.
 
-### Type → detail module
+### Capabilities — what help does this task need?
 
-| Type | Primary module | Built? |
-|---|---|---|
-| `action` | standard detail | ✓ |
-| `decision` | **Thinking Partner** — framed options, tradeoffs, cost-of-waiting | ✓ |
-| `planning` | subtask breakdown | **✗** B1 |
-| `reference` | notes-forward | **✗** |
+A capability is **not** "the module for this work type". Each exists to reduce a specific kind of cognitive load, and the type only *biases* which one is offered:
 
-The gate is `TaskCapabilities.available(for:)` — `.decision` **or** the `needsDecision` flag. Independent by design: an intent never reads or writes the flag.
+| Friction | Capability | Trigger | You leave with |
+|---|---|---|---|
+| **Complexity** | Break this down | `BreakdownEligibility` — size and shape | *"I have smaller executable work."* |
+| **Uncertainty** | Thinking Partner | `.decision` **or** the `needsDecision` flag | *"I have clarity."* |
+| **Inertia** | Unstick | `StallDetector` — deferred or gone quiet | *"I'm moving again."* |
+
+That framing decides a real question. Because the breakdown reduces **complexity**, complexity triggers it — not `workIntent == .planning`, which would offer it to a 15-minute "plan birthday dinner" and withhold it from a genuinely multi-step "renew passport". `BreakdownEligibility` is an ordered ladder: large effort → compound title → planning intent *above a lower bar*. Intent alone is never sufficient.
+
+**Unstick is the router, not a fourth module.** It diagnoses *why* a task stalled and hands off: blocked → resolve the blocker; too big → Break this down; reads as a choice → set the kind, and the Thinking Partner appears; otherwise → do it · defer it · let it go. A big task that is *also* stalled gets **one** card — Unstick subsumes the breakdown and routes into it, because a bare "break this down" sitting above a "this keeps sliding" that says "break it into steps" is the same advice twice.
+
+**Every card must be dismissable by its own actions.** `deferralCount` is the avoidance signal, and the rollover only ever *raises* it — so `touchHuman` clears it, making the count **consecutive rather than lifetime**. Without that reset, one task crossing the threshold would show "This keeps sliding" for the rest of its live life, surviving the very tap meant to dismiss it (every action Unstick offers routes through `touchHuman`). It also stops the `currentRelevance` pull-down from penalising a task the user has since picked back up. `carriedOverCount` — worked-but-unfinished — is deliberately **not** reset; the two answer different questions.
+
+**Nothing is offered on a resolved task.** The breakdown and stall triggers guard this themselves, but the decision arm cannot: `workIntent` is axis 2 and survives resolution by design (a decision you made was still a decision). So `TaskCapabilities.available` returns `[]` up front for a resolved task — otherwise a completed "Should we move to Lisbon?" would still offer to frame the choice, and spend a model call doing it.
+
+**Deterministic where it matters.** Every *trigger* is a pure function, so eligibility is answerable in the simulator and for every user with Apple Intelligence off. Only the *content* needs the model — which is why the Thinking Partner and the breakdown are absent off-device, while **Unstick renders identically** (its diagnosis is deterministic too; the model may only phrase it).
+
+**Absence is decided before rendering; failure after trying.** That absence is a *render-layer* decision (`AppBrain.onDeviceModelAvailable()` in `TaskDetailView`), never a capability trigger — the triggers must stay pure. The breakdown card is entirely model output, so off-device it is omitted whole; the decision section keeps its reason line and **Mark decided** (human affordances, and `resolveDecision()` is the only thing that clears the flag) and gates only the framing. This was previously wrong in both places: the header rendered, the button vanished on tap, and the user was left with an empty titled card.
+
+**Every model call is bounded and cancellable** (`ModelDeadline` · `ModelResult` · `ModelRun`). A card's call gets 20s and a background re-classification 10s; whichever loses is cancelled. Swiping to a neighbouring task cancels in flight — keyed on `isActive`, **not** `.onDisappear`, because the pager keeps neighbours mounted. Because absence is settled up front, a failure reaching a card can only mean a real attempt that failed, so it offers *"That didn't finish · Try again"* rather than collapsing. `ModelResult` keeps `LanguageModelSession.GenerationError` out of SwiftUI entirely, and `ModelMetrics` records per-capability latency and outcomes into the DEBUG footer — local only, never transmitted — so the deadline is tuned on evidence.
 
 **The Thinking Partner does not recommend.** `DecisionFraming` returns options, per-option tradeoffs, and a cost-of-waiting line, with guides that forbid inventing options. There is no recommendation field, so "the AI frames, the human decides" holds by construction.
 
+**Break this down commits, and that is its one difference.** Framing changes nothing; accepting a breakdown creates real child tasks born `.todo` with `.parent` edges, one reversible `"split"` entry, and a `currentRelevance` pull-down so the parent recedes while it has open steps. It never splits on its own.
+
 ### Availability caveat
 
-`workIntent` is on-device only, and Apple Intelligence can be **off by user setting or unavailable by region** — not just absent on old hardware. For those users every task has nil intent, `countsAsWorkload` is universally true, and the Thinking Partner never appears. This is why `HeuristicEngine.isReference` is **not a test seam**: it is the fallback classification path for every non-AI user.
+The *model's* classification is on-device only, and Apple Intelligence can be **off by user setting or unavailable by region** — not just absent on old hardware. Those users would otherwise get nil intent on every task, and no capability voiced by type.
+
+`IntentResolver.inferredWorkIntent` closes that gap: it backfills lexically at resolve time (decision/planning phrases, else `.action`), so the confirm card's kind chip is populated on every engine. It **never reads `isJudgmentCall`/`needsDecision`**, which would fuse axes 2 and 3 — test-enforced by `IntentResolverTests.workIntentIgnoresJudgmentFlag`. Its `.action` default is behaviourally identical to nil (same CTA verb, same capability set), so the backfill is a naming, not a behaviour change.
+
+A model-supplied classification always wins over the backfill.
 
 ---
 
@@ -110,36 +162,6 @@ The gate is `TaskCapabilities.available(for:)` — `.decision` **or** the `needs
 One slot, two residents, an explicit precedence: **Needs Decision** (`decisionAccent`) beats **Urgent** (`priorityUrgent`); nothing renders when neither is set. The slot means "the one thing most demanding your attention", which is honest about being a composite rather than pretending to encode a single axis.
 
 **The task's TYPE never appears there.** `.decision` (Axis 2) and `needsDecision` (Axis 3) are different questions — what kind of work this is, versus why it needs your eyes — and one glyph for both would teach the user they are the same thing. Type differentiates in the detail, where the modules live. (This reverses the older "Needs Decision is detail-only, not on rows" rule, deliberately.)
-
----
-
-## `reference` leaves the workload systems
-
-A reference item ("the wifi password is hunter2") is owned, live, and **does not need to complete**. Left in the workload systems it silently corrupts three: it inflates `MemberLoad.activeCount`, which feeds *both* `OwnerProposer`'s overload modifier and the affinity denominator — so a user with fifteen saved notes reads as overloaded and stops receiving proposals — and it sits in Today candidacy as permanently unresolvable. `BrainSweeps` would archive it as stale, backwards for something whose whole job is to persist.
-
-One derived predicate, `TaskItem.countsAsWorkload` (`workIntent != .reference`), gates five sites:
-
-| Site | Effect |
-|---|---|
-| `HouseholdEngine.memberLoads` | excluded from every count and the overload median |
-| `OwnerProposer` affinity denominator | excluded — reference items don't establish category ownership |
-| `TodaySequenceModel.candidateTasks` | excluded from the briefing |
-| `TaskRanking` quick-win / stack membership | excluded |
-| `BrainSweeps` auto-archive | excluded — never stale by construction |
-
-**Unknown counts as work** (nil intent → `true`), the safe direction.
-
-**Deliberately NOT gated**, so silence doesn't read as omission: `ContextRetrieval` candidates (a wifi password must be findable as a duplicate/child target), `AttentionEngine` graph centrality (edges still describe real structure), and search / My Tasks (visible is the whole point).
-
-**Pruning path:** Complete and Kill both stay available — a house move makes an old password dead. Auto-archive is what's wrong for them, not resolution.
-
-**A reclassification across that boundary is logged.** `TaskItem.reclassify` writes a reversible `.ai` `"reclassified"` entry when a classifier move changes `countsAsWorkload`, because otherwise a model call would silently remove a task from five operational systems with no human action and nothing in any log. Moves that don't cross the boundary (`action → decision`) stay silent — they change rendering, not accounting.
-
-**Reference gets its own My Tasks section**, not a status section. Filing a saved password under "Todo" claims it is queued work.
-
-### Recognized, not solved: a deferred knowledge-vs-execution split
-
-A wifi password is not work. Keeping it in the task primitive means the execution system is also a knowledge store, and `countsAsWorkload` patches the *accounting* without changing the fact that one primitive is doing two jobs. Keeping it is defensible — capture stays simple, you can ramble anything and it lands somewhere — but this is the Knowledge Engine question arriving through a side door, and it is **deferred, not avoided**. The separate section is the seam a future split would cut along.
 
 ---
 

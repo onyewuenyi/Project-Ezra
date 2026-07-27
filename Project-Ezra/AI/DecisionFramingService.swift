@@ -18,7 +18,7 @@ import FoundationModels
 /// The framing output: the options and the cost of waiting. Constrained by guided
 /// generation so the model can only structure what it's given, not pad it with invention.
 @Generable
-struct DecisionFraming {
+struct DecisionFraming: Sendable {
     @Guide(
         description:
             "The distinct options the person is choosing between, 2 to 4. Draw them only from the task and its context; never invent an option that isn't implied."
@@ -33,7 +33,7 @@ struct DecisionFraming {
 }
 
 @Generable
-struct FramedOption {
+struct FramedOption: Sendable {
     @Guide(description: "A short label for this option, at most 6 words.")
     let label: String
 
@@ -75,14 +75,19 @@ struct DecisionContext: Sendable {
 }
 
 struct DecisionFramingService {
-    /// Frame a decision on demand. Returns nil off-device, under tests, or on any failure —
-    /// the caller then shows the lighter (un-framed) decision card. Never persisted.
-    func frame(_ context: DecisionContext) async -> DecisionFraming? {
-        guard AppBrain.onDeviceModelAvailable() else { return nil }
-        let session = LanguageModelSession(instructions: Self.instructions)
-        return try? await session.respond(
-            to: Self.prompt(for: context), generating: DecisionFraming.self
-        ).content
+    /// Frame a decision on demand, bounded by `ModelDeadline.cardSeconds`. Never
+    /// persisted, and it never recommends — see the instructions below.
+    ///
+    /// Returns a `ModelResult` so the card can distinguish absence from failure: off
+    /// device the Thinking Partner is not drawn at all, whereas a timed-out attempt owes
+    /// the user a retry.
+    func frame(_ context: DecisionContext) async -> ModelResult<DecisionFraming> {
+        await ModelRun.perform(.decisionFraming, deadline: ModelDeadline.cardSeconds) {
+            let session = LanguageModelSession(instructions: Self.instructions)
+            return try await session.respond(
+                to: Self.prompt(for: context), generating: DecisionFraming.self
+            ).content
+        }
     }
 
     private static let instructions = """

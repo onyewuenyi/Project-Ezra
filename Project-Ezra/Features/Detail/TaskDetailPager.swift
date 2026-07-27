@@ -177,7 +177,22 @@ struct TaskMoreMenu: View {
     let onResolved: () -> Void
 
     @Environment(\.managedObjectContext) private var context
+    @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
+    @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
+    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
     @State private var actionPulse = 0
+
+    /// Someone else's live work: the primary CTA is deliberately absent for these,
+    /// so the moves that *are* legitimate live here instead. Reads the profile rather
+    /// than `currentMemberID(in:)`, which bootstraps — this is evaluated in a body.
+    private var otherOwnerName: String? {
+        // Requiring a known identity keeps this in lockstep with `recommendedAction`,
+        // which also treats "no profile yet" as "mine" rather than hiding the CTA.
+        guard !task.status.isResolved, let me = profilesResults.first?.linkedMemberID,
+            let owner = task.ownerID, owner != me
+        else { return nil }
+        return familyMembersResults.first { $0.uuid == owner }?.name
+    }
 
     var body: some View {
         Menu {
@@ -185,15 +200,39 @@ struct TaskMoreMenu: View {
                 Button {
                     actionPulse += 1
                     task.reopenAndReblock(in: context)
-                    try? context.save()
+                    context.saveChanges()
                 } label: {
                     Label("Reopen", systemImage: "arrow.uturn.backward")
                 }
             } else {
+                if let name = otherOwnerName {
+                    // A proxy completion — you're attesting on their behalf, which is
+                    // legitimate ("she told me she paid it") but should be a considered
+                    // choice, not the biggest button on the screen.
+                    Button {
+                        actionPulse += 1
+                        task.completeAndResurface(in: context)
+                        context.saveChanges()
+                        onResolved()
+                    } label: {
+                        Label("Mark done for \(name)", systemImage: "checkmark.circle")
+                    }
+
+                    Button {
+                        actionPulse += 1
+                        task.claimAndLog(
+                            ownerID: UserProfile.currentMemberID(in: context),
+                            among: Array(allTasksResults), in: context)
+                        context.saveChanges()
+                    } label: {
+                        Label("Take it back", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                }
+
                 Button(role: .destructive) {
                     actionPulse += 1
                     task.killAndResurface(in: context)
-                    try? context.save()
+                    context.saveChanges()
                     onResolved()
                 } label: {
                     Label("Cancel task", systemImage: "xmark.circle")

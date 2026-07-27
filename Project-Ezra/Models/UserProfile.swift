@@ -75,7 +75,7 @@ final class UserProfile: NSManagedObject {
         let me = FamilyMember(name: profile.displayName ?? "You", role: .owner, in: context)
         me.household = household
         profile.linkedMemberID = me.uuid
-        try? context.save()
+        context.saveChanges()
         return me
     }
 

@@ -23,6 +23,10 @@ struct OnboardingView: View {
     @State private var text = ""
     @State private var name = ""
     @State private var drafts: [TaskDraft] = []
+    /// Set when a transform came back with nothing. The first impression of the product
+    /// is this one button; bouncing silently back to the editor reads as a broken app,
+    /// not as "there was nothing to find".
+    @State private var foundNothing = false
     @FocusState private var focused: Bool
     @FocusState private var nameFocused: Bool
 
@@ -133,7 +137,7 @@ struct OnboardingView: View {
             // Ensure the "you" household member exists and carries the entered name, so
             // tasks captured in this same onboarding land owned by a correctly-named you.
             profile.syncIdentity(to: UserProfile.bootstrapIdentity(in: context))
-            try? context.save()
+            context.saveChanges()
         }
         withAnimation(.easeInOut(duration: 0.3)) { phase = .intro }
     }
@@ -176,6 +180,16 @@ struct OnboardingView: View {
                     .padding(Spacing.md)
             }
             .frame(height: 220)
+
+            if foundNothing {
+                Text(
+                    "I couldn't find anything to act on in that. Try listing things as you'd say them — “call mom back”, “pay the water bill” — one per line."
+                )
+                .font(.supporting)
+                .foregroundStyle(Palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .transition(.opacity)
+            }
 
             Button("Use a sample list") { text = sample }
                 .font(.supporting.weight(.medium))
@@ -305,12 +319,18 @@ struct OnboardingView: View {
 
     private func transform() async {
         focused = false
+        foundNothing = false
         withAnimation(.easeInOut(duration: 0.3)) { phase = .settling }
         let result = await brain.triage(text)
         // Nothing actionable found: return to the editor with the text intact rather
-        // than revealing an empty "0 areas" result (input is never discarded).
+        // than revealing an empty "0 areas" result (input is never discarded) — and SAY
+        // so, because an unexplained bounce back to the same screen is indistinguishable
+        // from the button not working.
         guard !result.isEmpty else {
-            withAnimation(.easeInOut(duration: 0.3)) { phase = .intro }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                phase = .intro
+                foundNothing = true
+            }
             return
         }
         // Hold the settle beat briefly so the motion reads (this is the earned moment).
@@ -324,7 +344,7 @@ struct OnboardingView: View {
         // The onboarding reveal ("here.s your mess, sorted") doubles as the
         // Confirm-Creation glance — the user saw the set and tapped through, and
         // `commit` is what brings the tasks into existence.
-        try? context.save()
+        context.saveChanges()
         onComplete()
     }
 }

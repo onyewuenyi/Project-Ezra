@@ -36,13 +36,8 @@ enum BrainSweeps {
         // carrying no judgment or open decision (those are a human's to resolve,
         // never silently killable). Reversible via the trail, always.
         //
-        // `countsAsWorkload` excludes reference items. A saved wifi password is
-        // *supposed* to sit untouched forever — archiving it as rot would be exactly
-        // backwards for something whose whole job is to persist. Manual Kill is how a
-        // reference item leaves.
         for task in all
         where !task.status.isResolved
-            && task.countsAsWorkload
             && !task.isJudgmentCall
             && !task.needsDecision
             && task.isStale(now: now, threshold: StalePolicy.archiveThreshold)
@@ -97,7 +92,7 @@ enum BrainSweeps {
             result.prunedCaptures.append(capture)
         }
 
-        if !result.archived.isEmpty || !result.prunedCaptures.isEmpty { try? context.save() }
+        if !result.archived.isEmpty || !result.prunedCaptures.isEmpty { context.saveChanges() }
         return result
     }
 }

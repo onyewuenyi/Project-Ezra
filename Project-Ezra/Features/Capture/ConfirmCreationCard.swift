@@ -49,6 +49,11 @@ struct ConfirmCreationCard: View {
     private var familyMembers: [FamilyMember] { Array(familyMembersResults) }
     @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
 
+    /// The due chip's three shortcuts cover the common cases; anything else needs a real
+    /// calendar, and making the user commit first and fix it in the detail is the kind of
+    /// small tax the confirm glance exists to remove.
+    @State private var showDatePicker = false
+
     /// Low confidence is a VISUAL state, never a queue: the candidate appears
     /// immediately, dimmed with a quiet question mark, and resolves (undims) if
     /// more talking or a re-parse raises the model's confidence. Judgment calls
@@ -123,6 +128,7 @@ struct ConfirmCreationCard: View {
                 // When the card will MERGE, its own fields are moot — recede them so the
                 // merge chip is the clear headline.
                 Group {
+                    kindChip
                     categoryChip
                     dueChip
                     ownerChip
@@ -145,7 +151,26 @@ struct ConfirmCreationCard: View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
             chipRow
             ownerReasonLine
+            dueReasonLine
+            if showDatePicker {
+                DatePicker("Due date", selection: dueBinding, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .tint(Palette.accentFlat)
+                    .labelsHidden()
+            }
         }
+    }
+
+    /// Non-optional for the picker's sake; only ever bound while a date exists (the
+    /// "Pick a date…" arm seeds today first), so the fallback is never read.
+    private var dueBinding: Binding<Date> {
+        Binding(
+            get: { draft.dueDate ?? Calendar.current.startOfDay(for: Date()) },
+            set: {
+                draft.dueDate = $0
+                draft.dueReason = nil
+            }
+        )
     }
 
     /// True when an accepted duplicate proposal will fold this card into an existing task.
@@ -240,14 +265,60 @@ struct ConfirmCreationCard: View {
         .accessibilityLabel("Category, assumed \(draft.category)")
     }
 
+    /// What KIND of work this is (axis 2). It leads the row on purpose: "what sort of
+    /// thing is this" reads ahead of "what area of life does it belong to".
+    ///
+    /// It is here at all because this classification is not cosmetic — it voices the
+    /// detail's primary CTA and decides which capability the task is offered. Stamping
+    /// it silently at commit made a field with real consequences the only one the
+    /// confirm glance didn't show.
+    private var kindChip: some View {
+        Menu {
+            ForEach(WorkIntent.allCases) { intent in
+                Button(intent.label) { draft.workIntent = intent }
+            }
+            if draft.workIntent != nil {
+                Divider()
+                Button("Clear", role: .destructive) { draft.workIntent = nil }
+            }
+        } label: {
+            if let intent = draft.workIntent {
+                pill {
+                    assumedMark
+                    Image(systemName: "square.stack.3d.up").font(.system(size: IconSize.caption))
+                    Text(intent.label).font(.metadata.weight(.medium))
+                }
+                .foregroundStyle(Palette.secondaryText)
+            } else {
+                // Unreachable after the resolver's backfill, but kept so a fixture or a
+                // cleared value degrades to the same add-affordance its neighbours use.
+                pill {
+                    Image(systemName: "plus").font(.system(size: IconSize.caption))
+                    Text("kind").font(.metadata.weight(.medium))
+                }
+                .foregroundStyle(Palette.mutedText)
+            }
+        }
+        .accessibilityLabel(
+            draft.workIntent.map { "Kind of work, assumed \($0.label)" } ?? "Add kind of work")
+    }
+
     private var dueChip: some View {
         Menu {
             Button("Today") { setDue(0) }
             Button("Tomorrow") { setDue(1) }
             Button("Next week") { setDue(7) }
+            Button("Pick a date…") {
+                if draft.dueDate == nil { setDue(0) }
+                showDatePicker = true
+            }
             if draft.dueDate != nil {
                 Divider()
-                Button("Clear", role: .destructive) { draft.dueDate = nil }
+                Button("Clear", role: .destructive) {
+                    draft.dueDate = nil
+                    draft.dueReason = nil
+                    showDatePicker = false
+                }
             }
         } label: {
             if let due = draft.dueDate {
@@ -321,6 +392,18 @@ struct ConfirmCreationCard: View {
     /// inference — never for the default-to-you rung.
     @ViewBuilder private var ownerReasonLine: some View {
         if let reason = draft.ownerReason {
+            Text(reason)
+                .font(.chipLabel)
+                .foregroundStyle(Palette.mutedText)
+                .lineLimit(2)
+        }
+    }
+
+    /// Why a due date the user never spoke is sitting on the card. Only ever present for
+    /// a date inferred from the task's nature — a date they actually said explains
+    /// itself, and captioning it would claim an inference that didn't happen.
+    @ViewBuilder private var dueReasonLine: some View {
+        if let reason = draft.dueReason, draft.dueDate != nil {
             Text(reason)
                 .font(.chipLabel)
                 .foregroundStyle(Palette.mutedText)
@@ -435,9 +518,12 @@ struct ConfirmCreationCard: View {
         MetadataChip(density: .compact) { content() }
     }
 
+    /// Any hand-picked date drops the rationale with it — the caption explains the AI's
+    /// proposal, and once the user has overridden it there is no proposal left to explain.
     private func setDue(_ dayOffset: Int) {
         let cal = Calendar.current
         draft.dueDate = cal.date(byAdding: .day, value: dayOffset, to: cal.startOfDay(for: Date()))
+        draft.dueReason = nil
     }
 
     private func dueText(_ date: Date) -> String {

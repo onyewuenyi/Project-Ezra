@@ -69,6 +69,10 @@ struct ComposerView: View {
     /// than starting a second parked row for the same thought.
     private let resuming: Capture?
     @State private var showDiscardConfirm = false
+    /// The text the last COMPLETED parse ran against. Only when this matches what's in the
+    /// field do we know an empty `drafts` means "the engine found nothing here" rather than
+    /// "it hasn't looked yet" — the difference between an honest message and a lie.
+    @State private var lastParsedText: String?
     @FocusState private var focused: Bool
 
     init(resuming: Capture? = nil) {
@@ -88,10 +92,9 @@ struct ComposerView: View {
                 dictationHint
 
                 if drafts.isEmpty {
-                    Text(
-                        "Dump it all — one thing or a whole messy list. Tasks take shape below as you go; fix anything that's off, then add them."
-                    )
-                    .supportingStyle()
+                    Text(foundNothing ? Self.nothingFoundHint : Self.openingHint)
+                        .supportingStyle()
+                        .animation(Motion.fade, value: foundNothing)
                     Spacer(minLength: 0)
                 } else {
                     ScrollView {
@@ -157,6 +160,21 @@ struct ComposerView: View {
         .presentationDetents([.large])
     }
 
+    // MARK: - Empty states
+
+    private static let openingHint =
+        "Dump it all — one thing or a whole messy list. Tasks take shape below as you go; fix anything that's off, then add them."
+    private static let nothingFoundHint =
+        "Nothing actionable in that yet. Try phrasing it as something to do — “call the dentist”, “decide about the gym” — and it'll take shape here."
+
+    /// A finished parse that produced no candidates. Without this the composer's only
+    /// answer to "why is the button dead?" was the same encouraging hint as an empty
+    /// field, which reads as the app having quietly failed.
+    private var foundNothing: Bool {
+        guard drafts.isEmpty, !brain.isProcessing, let lastParsedText else { return false }
+        return lastParsedText == text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Live triage loop
 
     /// Debounce ~400ms, cancel in-flight, drop stale results. The heuristic path
@@ -170,6 +188,13 @@ struct ComposerView: View {
         let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !captured.isEmpty else {
             drafts = []
+            lastParsedText = nil
+            // The user emptied the field. Parking exists so an INTERRUPTION can't destroy a
+            // thought — it must not resurrect one that was deliberately erased. Left alone,
+            // the parked row keeps the deleted text and Today goes on advertising it as a
+            // "capture waiting", which reads as the app ignoring a delete.
+            if let parked { AppBrain.discard(parked, in: context) }
+            parked = nil
             return
         }
 
@@ -215,6 +240,7 @@ struct ComposerView: View {
             Motion.withMotion(Motion.settle) {
                 drafts = merge(fresh: result, into: drafts)
             }
+            lastParsedText = captured
             // Park as soon as there is something worth keeping, not only on dismiss —
             // it shrinks the window in which the thought lives only in memory to a
             // single debounce.
@@ -275,7 +301,7 @@ struct ComposerView: View {
         // Loads count LIVE, workload-counting tasks only — the same basis as
         // `MemberLoad.activeCount`, so a shelf of reference notes can't make someone
         // read as overloaded and stop receiving proposals.
-        let live = allTasks.filter { $0.status.isLive && $0.countsAsWorkload }
+        let live = allTasks.filter { $0.status.isLive }
         let counts = live.reduce(into: [UUID: Int]()) { totals, task in
             if let owner = task.ownerID { totals[owner, default: 0] += 1 }
         }
@@ -291,7 +317,7 @@ struct ComposerView: View {
         // History spans EVERY task, resolved included — how work has been divided is a
         // longer-running fact than what is open right now.
         let history = allTasks.compactMap { task -> OwnerHistoryEntry? in
-            guard task.countsAsWorkload, let owner = task.ownerID, let name = namesByID[owner]
+            guard let owner = task.ownerID, let name = namesByID[owner]
             else { return nil }
             return OwnerHistoryEntry(
                 category: task.category, ownerName: name,
@@ -398,7 +424,7 @@ struct ComposerView: View {
         triageTask?.cancel()
         committed += 1
         // Adopt the parked row rather than creating a second one for the same event.
-        let created = brain.commit(
+        brain.commit(
             drafts, rawCapture: text, source: usedDictation ? .voice : .text, parked: parked,
             into: context)
         // "Add N tasks" IS the Confirm-Creation moment, and `commit` IS the creation:
@@ -414,7 +440,7 @@ struct ComposerView: View {
         parked = nil
         drafts = []
         text = ""
-        try? context.save()
+        context.saveChanges()
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         dismiss()
     }

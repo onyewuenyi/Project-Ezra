@@ -89,6 +89,31 @@ struct TodayPlanStoreTests {
         #expect(store.cache?.completedAt == now)
     }
 
+    @Test("A same-day replan does not advance the recap cutoff past what the Recap covered")
+    func replanKeepsFirstCutoff() {
+        let store = TodayPlanStore(defaults: freshDefaults())
+        store.save(cache(for: now))
+        store.markSequenceComplete(now: now)
+
+        // Replan five hours later. Anything the user finished in between was NOT in the
+        // morning Recap, so moving the cutoff here would swallow it — those completions
+        // would never appear in tomorrow's Recap either.
+        let later = now.addingTimeInterval(5 * 3600)
+        var replanned = cache(for: later)
+        replanned.completedAt = store.cache?.completedAt
+        store.save(replanned)
+        store.markSequenceComplete(now: later)
+
+        #expect(store.recapCutoff == now)
+        #expect(store.cache?.completedAt == now)
+
+        // A genuine new day does advance it.
+        let tomorrow = now.addingTimeInterval(24 * 3600)
+        store.save(cache(for: tomorrow))
+        store.markSequenceComplete(now: tomorrow)
+        #expect(store.recapCutoff == tomorrow)
+    }
+
     // MARK: - Day-rollover reconciliation
 
     @Test("Rollover writes one CapacityLog from yesterday's plan, then clears the cache")

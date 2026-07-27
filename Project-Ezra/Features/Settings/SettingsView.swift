@@ -25,7 +25,12 @@ struct SettingsView: View {
     private var changesResults: FetchedResults<ChangeLogEntry>
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
 
+    @Environment(BriefingReminder.self) private var briefing
+
     @State private var photoItem: PhotosPickerItem?
+    @State private var pendingReset: StoreResetRecord?
+    @State private var exportURL: URL?
+    @State private var backupArchiveURL: URL?
 
     private var profile: UserProfile? { profilesResults.first }
     private var tasks: [TaskItem] { Array(tasksResults) }
@@ -36,8 +41,13 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
+                    // The reset notice leads when present: it is the one thing here the
+                    // user did not choose and needs to know about.
+                    if let reset = pendingReset { resetCard(reset) }
                     profileCard
+                    briefingCard
                     engineCard
+                    dataCard
                     diagnosticsCard
                 }
                 .padding(Spacing.lg)
@@ -51,8 +61,18 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .onDisappear { try? context.save() }
-            .task { UserProfile.bootstrapIdentity(in: context) }
+            .onDisappear { context.saveChanges() }
+            .task {
+                UserProfile.bootstrapIdentity(in: context)
+                pendingReset = StoreResetLog.pending()
+                if let name = pendingReset?.backupName {
+                    backupArchiveURL = PersistenceStack.zippedBackup(named: name)
+                }
+                // Built once per open, so what you share is what you have. Small enough
+                // (a personal store, no photo blobs) that this is imperceptible.
+                exportURL = try? DataExport.writeTemporaryFile(in: context)
+                await briefing.refreshAuthorizationState()
+            }
         }
     }
 
@@ -114,7 +134,7 @@ struct SettingsView: View {
         if let me = members.first(where: { $0.uuid == profile.linkedMemberID }) {
             profile.syncIdentity(to: me)
         }
-        try? context.save()
+        context.saveChanges()
     }
 
     // MARK: - AI engine status
@@ -143,6 +163,12 @@ struct SettingsView: View {
                 #if DEBUG
                 Text(planDiagnosticsLine)
                     .metadataStyle()
+                // Per-capability model outcomes — the evidence behind the deadlines.
+                // Local only; nothing here is ever transmitted.
+                ForEach(ModelMetrics.shared.footerLines(), id: \.self) { line in
+                    Text(line)
+                        .metadataStyle()
+                }
                 #endif
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,6 +208,149 @@ struct SettingsView: View {
         return "\(Int((value * 100).rounded()))%"
     }
 
+    // MARK: - Reset notice (a wipe must never be silent)
+
+    /// Shown until acknowledged. `Palette.warning` is correct here — this is a literal
+    /// warning about data, not one of the split attention hues the design system
+    /// reserves (`overdue`/`statusInProgress`/`householdAttention`).
+    private func resetCard(_ reset: StoreResetRecord) -> some View {
+        settingsCard(title: "Data was reset") {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: IconSize.caption))
+                        .foregroundStyle(Palette.warning)
+                    Text(
+                        "Your saved data was cleared on \(reset.date.formatted(date: .abbreviated, time: .shortened)) because \(reset.reason.explanation)."
+                    )
+                    .font(.supporting)
+                    .foregroundStyle(Palette.primaryText)
+                }
+                if let detail = reset.reason.detail {
+                    Text(detail)
+                        .metadataStyle()
+                }
+                if reset.backupName != nil {
+                    Text("A copy of what was there was saved first.")
+                        .font(.supporting)
+                        .foregroundStyle(Palette.secondaryText)
+                    if let archive = backupArchiveURL {
+                        ShareLink(item: archive) {
+                            Label("Share the backup", systemImage: "square.and.arrow.up")
+                                .font(.controlLabel)
+                                .foregroundStyle(Palette.accentFlat)
+                        }
+                        .frame(minHeight: LayoutMetrics.hitTarget, alignment: .leading)
+                    }
+                } else {
+                    // The worst case, stated plainly rather than left to be discovered.
+                    Text("The safety copy could not be written, so this data is gone.")
+                        .font(.supporting)
+                        .foregroundStyle(Palette.warning)
+                }
+                Button("Dismiss") {
+                    StoreResetLog.clear()
+                    pendingReset = nil
+                }
+                .font(.controlLabel)
+                .foregroundStyle(Palette.secondaryText)
+                .frame(minHeight: LayoutMetrics.hitTarget, alignment: .leading)
+            }
+        }
+    }
+
+    // MARK: - Briefing nudge
+
+    /// The ONE notification this app sends. See `BriefingReminder` for why this is a
+    /// carve-out from the "no notification-driven re-engagement" guardrail, and what
+    /// keeps it honest.
+    private var briefingCard: some View {
+        @Bindable var briefing = briefing
+        return settingsCard(title: "Daily briefing") {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Toggle(isOn: $briefing.isEnabled) {
+                    Text("Remind me")
+                        .font(.supporting)
+                        .foregroundStyle(Palette.primaryText)
+                }
+                .tint(Palette.accentFlat)
+                .onChange(of: briefing.isEnabled) { _, enabled in
+                    Task {
+                        if enabled {
+                            // Permission is asked for here and nowhere else — never at
+                            // launch, where it would be a demand before any value.
+                            guard await briefing.requestAuthorization() else {
+                                briefing.isEnabled = false
+                                return
+                            }
+                            await briefing.reschedule(
+                                briefingPlayedToday: TodayPlanStore.sequencePlayedToday())
+                        } else {
+                            await briefing.cancelAll()
+                        }
+                    }
+                }
+
+                if briefing.isEnabled && !briefing.isDenied {
+                    DatePicker(
+                        "Time", selection: briefingTime, displayedComponents: .hourAndMinute
+                    )
+                    .font(.supporting)
+                    .foregroundStyle(Palette.primaryText)
+                }
+
+                if briefing.isDenied {
+                    Text("Notifications are turned off for Ezra in iOS Settings.")
+                        .metadataStyle()
+                }
+
+                Text("One a day, at a time you pick. Nothing if you've already looked.")
+                    .metadataStyle()
+            }
+        }
+    }
+
+    /// Bridges the reminder's hour/minute to a `DatePicker`, rescheduling on change.
+    private var briefingTime: Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(
+                    bySettingHour: briefing.hour, minute: briefing.minute, second: 0,
+                    of: Date()) ?? Date()
+            },
+            set: { newValue in
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+                briefing.hour = parts.hour ?? briefing.hour
+                briefing.minute = parts.minute ?? briefing.minute
+                Task {
+                    await briefing.reschedule(
+                        briefingPlayedToday: TodayPlanStore.sequencePlayedToday())
+                }
+            }
+        )
+    }
+
+    // MARK: - Data (export)
+
+    private var dataCard: some View {
+        settingsCard(title: "Data") {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                if let exportURL {
+                    ShareLink(item: exportURL) {
+                        Label("Export everything", systemImage: "square.and.arrow.up")
+                            .font(.controlLabel)
+                            .foregroundStyle(Palette.accentFlat)
+                    }
+                    .frame(minHeight: LayoutMetrics.hitTarget, alignment: .leading)
+                }
+                Text(
+                    "A readable copy of your tasks, captures and history. Everything stays on this device."
+                )
+                .metadataStyle()
+            }
+        }
+    }
+
     // MARK: - Shared card chrome
 
     private func settingsCard<Content: View>(
@@ -210,5 +379,6 @@ struct SettingsView: View {
 #Preview {
     SettingsView()
         .environment(AppBrain())
+        .environment(BriefingReminder())
         .environment(\.managedObjectContext, PersistenceStack.scratch)
 }

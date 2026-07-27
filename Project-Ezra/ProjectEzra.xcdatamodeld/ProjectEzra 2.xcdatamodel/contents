@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23000" systemVersion="24A335" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="NO" userDefinedModelVersionIdentifier="">
+    <entity name="TaskItem" representedClassName="TaskItem" syncable="YES">
+        <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="title" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="category" optional="NO" attributeType="String" defaultValueString="Admin"/>
+        <attribute name="statusRaw" optional="NO" attributeType="String" defaultValueString="todo"/>
+        <attribute name="creatorID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="confidence" optional="NO" attributeType="Double" defaultValueString="0.5" usesScalarValueType="YES"/>
+        <attribute name="isJudgmentCall" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="needsDecision" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="reasoning" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="dueDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="confirmedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="completedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="killedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="captureID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="notes" optional="YES" attributeType="String"/>
+        <attribute name="rawCapture" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="isUrgent" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="workIntentRaw" optional="YES" attributeType="String"/>
+        <attribute name="ownerID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="ownerOriginRaw" optional="YES" attributeType="String"/>
+        <attribute name="effortMinutesValue" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="stateTimelineData" optional="YES" attributeType="Binary"/>
+        <attribute name="attentionData" optional="YES" attributeType="Binary"/>
+        <attribute name="relationshipsData" optional="YES" attributeType="Binary"/>
+        <attribute name="deferralCount" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="carriedOverCount" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="lastSurfacedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastUnblockedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastHumanTouchAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="SuppressionRecord" representedClassName="SuppressionRecord" syncable="YES">
+        <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="kindRaw" optional="NO" attributeType="String" defaultValueString="duplicateMerge"/>
+        <attribute name="pairKey" optional="YES" attributeType="String"/>
+        <attribute name="targetID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="normalizedTitle" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="EmbeddingCache" representedClassName="EmbeddingCache" syncable="YES">
+        <attribute name="taskID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="vector" optional="YES" attributeType="Binary"/>
+        <attribute name="sourceHash" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="revision" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="computedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="Capture" representedClassName="Capture" syncable="YES">
+        <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="rawText" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="sourceRaw" optional="NO" attributeType="String" defaultValueString="text"/>
+        <attribute name="imageRef" optional="YES" attributeType="String"/>
+        <attribute name="parsedTaskIDsData" optional="YES" attributeType="Binary"/>
+        <attribute name="processingPathRaw" optional="NO" attributeType="String" defaultValueString="localOnly"/>
+        <attribute name="escalatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="draftsData" optional="YES" attributeType="Binary"/>
+        <attribute name="committedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="Correction" representedClassName="Correction" syncable="YES">
+        <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="taskUUID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="captureID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="fieldCorrected" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="aiValue" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="userValue" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="CapacityLog" representedClassName="CapacityLog" syncable="YES">
+        <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="date" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="capacityRaw" optional="NO" attributeType="String" defaultValueString="steady"/>
+        <attribute name="planCount" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="completedCount" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="skippedCount" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+    </entity>
+    <entity name="ChangeLogEntry" representedClassName="ChangeLogEntry" syncable="YES">
+        <attribute name="uuid" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="summary" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="detail" optional="YES" attributeType="String"/>
+        <attribute name="action" optional="YES" attributeType="String"/>
+        <attribute name="fieldChanged" optional="YES" attributeType="String"/>
+        <attribute name="oldValue" optional="YES" attributeType="String"/>
+        <attribute name="newValue" optional="YES" attributeType="String"/>
+        <attribute name="initiatedByRaw" optional="NO" attributeType="String" defaultValueString="ai"/>
+        <attribute name="isReversible" optional="NO" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="undone" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="taskTitle" optional="YES" attributeType="String"/>
+        <attribute name="taskUUID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="actorID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="Household" representedClassName="Household" syncable="YES">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="photoData" optional="YES" attributeType="Binary"/>
+        <attribute name="photoUpdatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="members" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="FamilyMember" inverseName="household" inverseEntity="FamilyMember"/>
+        <relationship name="settings" optional="YES" maxCount="1" deletionRule="Cascade" destinationEntity="HouseholdSettings" inverseName="household" inverseEntity="HouseholdSettings"/>
+        <relationship name="aiContext" optional="YES" maxCount="1" deletionRule="Cascade" destinationEntity="HouseholdAIContext" inverseName="household" inverseEntity="HouseholdAIContext"/>
+        <relationship name="memories" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="HouseholdMemory" inverseName="household" inverseEntity="HouseholdMemory"/>
+        <relationship name="invitations" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Invitation" inverseName="household" inverseEntity="Invitation"/>
+    </entity>
+    <entity name="FamilyMember" representedClassName="FamilyMember" syncable="YES">
+        <attribute name="uuid" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="photoData" optional="YES" attributeType="Binary"/>
+        <attribute name="photoUpdatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="relationshipRaw" optional="NO" attributeType="String" defaultValueString="other"/>
+        <attribute name="roleRaw" optional="NO" attributeType="String" defaultValueString="adult"/>
+        <attribute name="deletedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="household" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Household" inverseName="members" inverseEntity="Household"/>
+    </entity>
+    <entity name="UserProfile" representedClassName="UserProfile" syncable="YES">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="displayName" optional="YES" attributeType="String"/>
+        <attribute name="photoData" optional="YES" attributeType="Binary"/>
+        <attribute name="photoUpdatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="linkedMemberID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="HouseholdSettings" representedClassName="HouseholdSettings" syncable="YES">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="homeLatitude" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="homeLongitude" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="timeZoneIdentifier" optional="YES" attributeType="String"/>
+        <attribute name="calendarIdentifier" optional="YES" attributeType="String"/>
+        <attribute name="planningStyleRaw" optional="NO" attributeType="String" defaultValueString="balanced"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="household" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Household" inverseName="settings" inverseEntity="Household"/>
+    </entity>
+    <entity name="HouseholdAIContext" representedClassName="HouseholdAIContext" syncable="YES">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="automationLevelRaw" optional="YES" attributeType="String"/>
+        <attribute name="notes" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="household" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Household" inverseName="aiContext" inverseEntity="Household"/>
+    </entity>
+    <entity name="HouseholdMemory" representedClassName="HouseholdMemory" syncable="YES">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="fact" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="household" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Household" inverseName="memories" inverseEntity="Household"/>
+    </entity>
+    <entity name="Invitation" representedClassName="Invitation" syncable="YES">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="email" optional="YES" attributeType="String"/>
+        <attribute name="statusRaw" optional="NO" attributeType="String" defaultValueString="pending"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="token" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="shareURL" optional="YES" attributeType="String"/>
+        <relationship name="household" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Household" inverseName="invitations" inverseEntity="Household"/>
+    </entity>
+</model>

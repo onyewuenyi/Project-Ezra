@@ -42,6 +42,20 @@ struct SweepTests {
         #expect(entry.action == "archived")
     }
 
+    @Test("Long-abandoned in-flight work is still archived — Doing is not a hiding place")
+    func archivesAbandonedInFlight() throws {
+        let context = try makeContext()
+        // Picked up a month ago and never touched since. `.doing` earns a relevance
+        // boost, but deliberately NOT archive immunity: a boost plus immunity would
+        // make a task that can never leave the system.
+        let abandoned = TaskItem(title: "Rewire the shed", status: .todo, createdAt: daysAgo(40))
+        abandoned.transition(to: .doing, now: daysAgo(30))
+        context.insert(abandoned)
+
+        #expect(BrainSweeps.run(in: context, now: now).archived.count == 1)
+        #expect(abandoned.status == .canceled)
+    }
+
     @Test("Retro-stale but not archive-stale is left alone — the retro gets it first")
     func retroStaleSurvives() throws {
         let context = try makeContext()
