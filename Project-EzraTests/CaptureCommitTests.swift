@@ -356,6 +356,41 @@ struct CaptureCommitTests {
         #expect(after.first?.normalizedTitle == RelationshipSuppression.normalizeTitle("untouched"))
     }
 
+    // MARK: - The confirm's receipt
+
+    @Test("Commit reports what it produced, merges named")
+    func commitSummaryReportsOutcome() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        let existing = TaskItem(title: "Renew passport", status: .todo, in: context)
+        context.insert(existing)
+        try context.save()
+
+        let dup = EdgeProposal(
+            kind: .duplicateOf, targetID: existing.uuid!, targetTitle: "Renew passport",
+            confidence: 0.95, decision: .accepted)
+        _ = brain.commit(
+            [draft("Book dentist"), draft("Call mom"), draft("Renew the passport", edges: [dup])],
+            rawCapture: "", into: context)
+
+        let summary = try #require(brain.lastCommitSummary)
+        #expect(summary.created == 2)
+        // A merge names its target — that's the answer to "where did my thought go?".
+        #expect(summary.message == "Added 2 tasks · 1 merged into “Renew passport”")
+    }
+
+    @Test("Summary copy: singular, merge-only, and many-merge forms")
+    func commitSummaryCopyForms() {
+        #expect(CommitSummary(created: 1, mergedTitles: []).message == "Added 1 task")
+        #expect(CommitSummary(created: 3, mergedTitles: []).message == "Added 3 tasks")
+        #expect(
+            CommitSummary(created: 0, mergedTitles: ["Renew passport"]).message
+                == "Merged into “Renew passport”")
+        #expect(CommitSummary(created: 1, mergedTitles: ["a", "b"]).message == "Added 1 task · 2 merged")
+        // Nothing produced → nothing claimed. The notice never fires on an empty commit.
+        #expect(CommitSummary(created: 0, mergedTitles: []).isEmpty)
+    }
+
     // MARK: - Owner resolution (the chip must not promise what commit can't deliver)
 
     @Test("An owner name absent from the roster commits UNOWNED — the no-mint policy")

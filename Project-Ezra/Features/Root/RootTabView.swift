@@ -43,6 +43,8 @@ struct RootTabView: View {
     /// line. Nil for a fresh capture — opening the composer always starts a NEW one, so
     /// being interrupted twice never overwrites the first thought.
     @State private var resumingCapture: Capture?
+    /// The transient "Added N tasks" receipt, shown after the composer closes.
+    @State private var commitNotice: UndoNotice?
     @State private var selection: Int
 
     init() {
@@ -88,22 +90,11 @@ struct RootTabView: View {
         }
         .tint(Palette.accentFlat)
         .overlay(alignment: .bottomTrailing) { captureButton }
-        .environment(
-            \.openCapture,
-            {
-                AppBrain.prewarmCapture(in: context)
-                resumingCapture = nil
-                showComposer = true
-            }
-        )
-        .environment(
-            \.resumeCapture,
-            { capture in
-                AppBrain.prewarmCapture(in: context)
-                resumingCapture = capture
-                showComposer = true
-            }
-        )
+        // The confirm's receipt. It renders HERE, not in the composer, because the sheet
+        // is already gone by the time there is anything to report.
+        .undoNotice($commitNotice)
+        .environment(\.openCapture, { presentComposer(resuming: nil) })
+        .environment(\.resumeCapture, { capture in presentComposer(resuming: capture) })
         .environment(\.openInbox, { selection = 1 })
         // Tapping the daily nudge lands on Today, wherever the app was left.
         .onChange(of: briefing.pendingOpenBriefing) { _, pending in
@@ -113,7 +104,13 @@ struct RootTabView: View {
         }
         // onDismiss is the invariant's backstop: however the sheet closed (commit,
         // discard, swipe), the next open starts fresh unless \.resumeCapture re-arms it.
-        .sheet(isPresented: $showComposer, onDismiss: { resumingCapture = nil }) {
+        .sheet(
+            isPresented: $showComposer,
+            onDismiss: {
+                resumingCapture = nil
+                presentCommitNotice()
+            }
+        ) {
             ComposerView(resuming: resumingCapture)
         }
         .fullScreenCover(isPresented: $showOnboarding) {
@@ -145,6 +142,30 @@ struct RootTabView: View {
         }
     }
 
+    /// The one way the composer is presented. Every entry point (the FAB, `openCapture`,
+    /// `resumeCapture`) warms the substrate, sets the resume target explicitly — a stale
+    /// one must never leak into a fresh capture — and clears any unconsumed commit
+    /// summary, so a seed-path commit can't fire a receipt on a later dismiss.
+    private func presentComposer(resuming capture: Capture?) {
+        // Warm the model + retrieval substrate NOW: the sheet-presentation animation
+        // absorbs the cost, so the first parse doesn't pay it against the user's pause.
+        AppBrain.prewarmCapture(in: context)
+        brain.lastCommitSummary = nil
+        resumingCapture = capture
+        showComposer = true
+    }
+
+    /// Show the receipt for a confirm that just happened, once. Deliberately no Undo
+    /// button: undoing a batch means deleting the created tasks AND reversing each merge
+    /// AND unwinding the blocker edges commit wrote onto OTHER tasks — a half-honest
+    /// version of that is worse than none, so per-item Undo stays in the Inbox where it
+    /// already works, and this notice claims nothing about it.
+    private func presentCommitNotice() {
+        guard let summary = brain.lastCommitSummary, !summary.isEmpty else { return }
+        brain.lastCommitSummary = nil  // consumed — a dismiss reports its own commit only
+        commitNotice = UndoNotice(message: summary.message)
+    }
+
     /// The persistent Capture action: a circular accent-gradient button in the
     /// bottom-trailing corner. Linear's agent button sits INLINE beside its (icon-only,
     /// narrow) tab bar; ours can't — four LABELED tabs make the system capsule too wide
@@ -155,15 +176,10 @@ struct RootTabView: View {
     /// public), not a pixel-lock.
     private var captureButton: some View {
         Button {
-            // Warm the model + retrieval substrate NOW — the sheet-presentation
-            // animation absorbs the cost, so the first parse doesn't pay it against
-            // the user's first pause.
-            AppBrain.prewarmCapture(in: context)
             // Opening the composer from here always starts a NEW capture — a stale
             // resume target from an earlier \.resumeCapture must not leak into it
             // (it could be committed or deleted by now).
-            resumingCapture = nil
-            showComposer = true
+            presentComposer(resuming: nil)
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: IconSize.control, weight: .semibold))

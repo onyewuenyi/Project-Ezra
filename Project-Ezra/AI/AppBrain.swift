@@ -47,6 +47,14 @@ final class AppBrain {
     /// True while a triage call is in flight — drives the soft-glow processing UI.
     var isProcessing = false
 
+    /// What the last confirm produced, for the transient notice the PRESENTING surface
+    /// shows once the composer has closed. Parked on the brain rather than returned,
+    /// because the notice has to outlive the sheet that earned it — the composer is gone
+    /// by the time there is anywhere to draw it. Consumed (read + cleared) by
+    /// `RootTabView`, which owns the sheet; cleared again whenever the composer opens, so
+    /// a seed-path commit can never leave a stale summary to fire on a later dismiss.
+    var lastCommitSummary: CommitSummary?
+
     init() {
         let (engine, status) = Self.resolveEngine()
         self.engine = engine
@@ -425,6 +433,8 @@ final class AppBrain {
 
         context.saveChanges()
         if !created.isEmpty { metrics.recordFirstPayoffIfNeeded() }
+        lastCommitSummary = CommitSummary(
+            created: created.count, mergedTitles: mergeTargets.map(\.title))
         return created
     }
 
@@ -752,6 +762,39 @@ final class AppBrain {
                 task.addExternalBlocker(phrase, among: candidates, origin: .inferred(confidence: 0.9))
             }
         }
+    }
+}
+
+// MARK: - Commit outcome
+
+/// What one confirm produced. Values only, so the notice survives the composer's teardown.
+///
+/// The composer used to close on a haptic and nothing else: no count, no destination, no
+/// evidence. For a product whose whole wedge is "dump it and trust that it landed", the
+/// one moment that most needs a receipt had none — a capture that silently produced
+/// nothing looked identical to one that produced five tasks.
+struct CommitSummary: Equatable {
+    var created: Int
+    var mergedTitles: [String]
+
+    var isEmpty: Bool { created == 0 && mergedTitles.isEmpty }
+
+    /// "Added 3 tasks" · "Added 2 · 1 merged into “Renew passport”" · "Merged into “X”".
+    /// A merge names its target because that's the answer to "where did my thought go?",
+    /// which is the only question a merge leaves open.
+    var message: String {
+        var parts: [String] = []
+        if created > 0 { parts.append("Added \(created) task\(created == 1 ? "" : "s")") }
+        switch mergedTitles.count {
+        case 0:
+            break
+        case 1:
+            parts.append(
+                created > 0 ? "1 merged into “\(mergedTitles[0])”" : "Merged into “\(mergedTitles[0])”")
+        default:
+            parts.append("\(mergedTitles.count) merged")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
