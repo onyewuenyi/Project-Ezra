@@ -132,9 +132,15 @@ enum ChangeLogUndo {
             }
             task.touch()
         default:
-            // filed / archived / unblocked / anything else → reopen if resolved, so the
-            // task is back in the working set and the human has it again. There is no
+            // archived / unblocked / anything else → reopen if resolved, so the task is
+            // back in the working set and the human has it again. There is no
             // pre-confirm state to demote it to; `.todo` is where a task lives.
+            //
+            // "filed" is deliberately NOT in this list any more: the arm was a no-op on a
+            // task born `.todo`, so those entries are logged non-reversible and never
+            // reach here (see `AppBrain.commit`). If an action has no honest arm, the
+            // fix is to stop offering the button — not to route it to a default that
+            // pretends.
             if task.status.isResolved {
                 task.reopenAndReblock(in: context, now: now)
             } else {

@@ -448,7 +448,9 @@ enum SampleFlowFixtures {
 
     /// Mirrors the "recently tidied" change-log entry `AppBrain.commit` logs for
     /// every silent-tier draft, so the seeded data drives the Today footnote and AI
-    /// Activity Trail exactly the way a real triage commit would.
+    /// Activity Trail exactly the way a real triage commit would — including the
+    /// informational (non-reversible) flag, or the seeded feed would offer an Undo the
+    /// real one doesn't.
     private static func logSilentFiling(_ task: TaskItem, into context: NSManagedObjectContext) {
         context.insert(
             ChangeLogEntry(
@@ -456,7 +458,7 @@ enum SampleFlowFixtures {
                 detail: task.reasoning,
                 action: "filed",
                 initiatedBy: .ai,
-                isReversible: true,
+                isReversible: false,
                 taskTitle: task.title,
                 taskUUID: task.uuid, in: context
             ))

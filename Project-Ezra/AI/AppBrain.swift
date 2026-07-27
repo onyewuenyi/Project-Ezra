@@ -378,13 +378,23 @@ final class AppBrain {
             // that the CATEGORIZATION was the AI's, not that any card was skipped —
             // every task here is human-confirmed by construction, because commit is
             // the confirm.
+            //
+            // **Informational, NOT reversible.** There is nothing for an undo to
+            // restore: commit IS the confirm, so there is no pre-AI category the task
+            // ever held, and the task did not exist a moment ago. `ChangeLogUndo` has no
+            // "filed" arm, so the default arm ran — setting `.todo` on a task born
+            // `.todo`, a visible button that did nothing. Worse, the Inbox renders Undo
+            // on `isReversible && !undone` and `Metrics.acceptanceRate` counts `!undone`
+            // AI entries, so tapping that dead button scored as the user REJECTING the
+            // AI. An entry whose action can't be reversed must say so rather than mint a
+            // false rejection signal. (Re-categorizing is a normal edit in the detail.)
             if draft.autonomy == .silent {
                 let entry = ChangeLogEntry(
                     summary: "Filed “\(draft.title)” under \(draft.category)",
                     detail: draft.reasoning,
                     action: "filed",
                     initiatedBy: .ai,
-                    isReversible: true,
+                    isReversible: false,
                     taskTitle: draft.title,
                     taskUUID: task.uuid, in: context
                 )
