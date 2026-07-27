@@ -56,6 +56,24 @@ struct OnboardingView: View {
         // Success notification on the chaos→clarity reveal — a capstone moment.
         .sensoryFeedback(.success, trigger: phase == .result)
         .preferredColorScheme(.dark)
+        .task { jumpToResultIfRequested() }
+    }
+
+    /// `-OnboardingResult` jumps straight to the reveal with the sample dump parsed.
+    /// The result scene is the product's first impression AND the only screen no
+    /// launch arg could reach — every other surface has one, and synthetic taps are
+    /// blocked on this host, so it was the one redesign that could only be eyeballed
+    /// in code. No effect in a normal run.
+    private func jumpToResultIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("-OnboardingResult"),
+            phase == .welcome
+        else { return }
+        text = sample
+        Task {
+            drafts = await brain.triage(sample)
+            guard !drafts.isEmpty else { return }
+            withAnimation(Motion.onboardReveal) { phase = .result }
+        }
     }
 
     // MARK: - Welcome
@@ -307,7 +325,10 @@ struct OnboardingView: View {
     /// chip, remove. Edits diff against `aiOriginal` at commit exactly like the
     /// composer's card — the corrections loop now starts at minute one.
     private func resultRow(_ draft: Binding<TaskDraft>) -> some View {
-        HStack(spacing: Spacing.sm) {
+        // First-baseline alignment, not top: the chips carry an invisible 44pt touch
+        // region that centers their capsule, so `.top` left the glyph hanging half a
+        // line below the title it belongs to.
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
             Menu {
                 ForEach(TaskCategory.all, id: \.self) { category in
                     Button {
@@ -326,24 +347,31 @@ struct OnboardingView: View {
             }
             .accessibilityLabel("Category, \(draft.wrappedValue.category)")
 
-            TextField(
-                "Task",
-                text: Binding(
-                    get: { draft.wrappedValue.title },
-                    set: {
-                        draft.wrappedValue.title = $0
-                        draft.wrappedValue.markEdited(.title)
-                    }),
-                axis: .vertical
-            )
-            .font(.supporting)
-            .foregroundStyle(Palette.primaryText)
+            // Title takes the full row width; the flag sits UNDER it. Side by side,
+            // the chip squeezed a long title into a narrow three-line column — the
+            // judgment calls are exactly the longest titles ("figure out if the side
+            // project is still worth it"), so the two fought hardest precisely where
+            // legibility mattered most.
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                TextField(
+                    "Task",
+                    text: Binding(
+                        get: { draft.wrappedValue.title },
+                        set: {
+                            draft.wrappedValue.title = $0
+                            draft.wrappedValue.markEdited(.title)
+                        }),
+                    axis: .vertical
+                )
+                .font(.supporting)
+                .foregroundStyle(Palette.primaryText)
 
-            if draft.wrappedValue.isJudgmentCall {
-                AssessmentChip(
-                    assessment: TaskAssessment(
-                        needsDecision: .humanJudgment, isBlocked: false,
-                        isUnowned: false, isStale: false, tier: .ask))
+                if draft.wrappedValue.isJudgmentCall {
+                    AssessmentChip(
+                        assessment: TaskAssessment(
+                            needsDecision: .humanJudgment, isBlocked: false,
+                            isUnowned: false, isStale: false, tier: .ask))
+                }
             }
             Spacer(minLength: 0)
             Button {

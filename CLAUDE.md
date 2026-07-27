@@ -95,6 +95,7 @@ Guarded test seams in `RootTabView` (no effect in normal runs):
 - `-SeedTodayFixtures` — the Today-sequence set (`AI/TodayFixtures.swift`): recent completions (Recap), due/overdue/decisions (Docket), a blocked-and-blocking chain (chain routing), and `CapacityLog` history driving personalized (Steady), divergent (Full → one-shot PCC escalation), and cold-start (Light) baselines. Use this to exercise all four beats.
 - `-InitialTab N` — start on tab N (0 Today, 1 Inbox, 2 My Tasks, 3 Household).
 - `-OpenTaskDetail [N]` — open the full-screen detail pager on the Nth row of My Tasks' visible list (default 0), so the paged surface is reachable without a tap. Pair with `-InitialTab 2`.
+- `-OnboardingResult` — on a **fresh install** (the arg only fires from the `.welcome` phase), parse the built-in sample dump and jump straight to onboarding's editable result scene. That screen is the product's first impression and was the one surface no launch arg could reach — every other screen has a seam, and synthetic taps are blocked on this host, so it could previously only be reviewed in code.
 
 Synthetic UI taps via AppleScript are blocked by macOS Accessibility permissions here — use these launch args to reach a screen state instead of scripting clicks.
 
