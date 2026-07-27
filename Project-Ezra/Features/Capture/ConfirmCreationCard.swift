@@ -139,7 +139,11 @@ struct ConfirmCreationCard: View {
                 duplicateChip
                 childChip
                 // When the card will MERGE, its own fields are moot — recede them so the
-                // merge chip is the clear headline.
+                // merge chip is the clear headline, and DISABLE them so the recede means
+                // what it shows. They were still tappable, so a user could set a due date
+                // on a card that was about to fold into another task and watch the value
+                // vanish at commit. Recede-but-live is a promise the commit can't keep;
+                // one tap on "Keep both" brings them back.
                 Group {
                     kindChip
                     categoryChip
@@ -153,6 +157,7 @@ struct ConfirmCreationCard: View {
                     }
                 }
                 .opacity(mergeAccepted ? 0.4 : 1)
+                .disabled(mergeAccepted)
             }
         }
     }

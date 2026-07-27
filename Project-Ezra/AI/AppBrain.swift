@@ -404,17 +404,10 @@ final class AppBrain {
 
         // Every field the user edited at the confirm glance is a free labeled
         // pair — the local learning signal (write-only for now; consumed later).
+        // The MERGING drafts get the same treatment inside `foldMerges`, against their
+        // merge target: an edit is a labeled pair regardless of where the row lands.
         for (draft, task) in zip(creating, created) {
-            for diff in draft.corrections {
-                context.insert(
-                    Correction(
-                        taskUUID: task.uuid,
-                        captureID: capture.uuid,
-                        fieldCorrected: diff.field,
-                        aiValue: diff.aiValue,
-                        userValue: diff.userValue, in: context
-                    ))
-            }
+            recordCorrections(for: draft, taskUUID: task.uuid, captureID: capture.uuid, in: context)
         }
 
         // Fetch the working set ONCE — managed objects are unique per context, so every
@@ -557,6 +550,26 @@ final class AppBrain {
         }
     }
 
+    /// Write the field diffs a draft accumulated at the confirm glance as `Correction`
+    /// rows. The one seam both the creating and the merging paths use — a card whose
+    /// duplicate-merge was accepted still taught the model something when the user fixed
+    /// its category or owner before merging, and those pairs used to be dropped on the
+    /// floor because the correction loop only zipped over the created tasks.
+    private func recordCorrections(
+        for draft: TaskDraft, taskUUID: UUID?, captureID: UUID?, in context: NSManagedObjectContext
+    ) {
+        for diff in draft.corrections {
+            context.insert(
+                Correction(
+                    taskUUID: taskUUID,
+                    captureID: captureID,
+                    fieldCorrected: diff.field,
+                    aiValue: diff.aiValue,
+                    userValue: diff.userValue, in: context
+                ))
+        }
+    }
+
     /// Record a rejection in the trail. A suppression is a **180-day veto the user cast
     /// in one tap on a chip**, and until now it was written invisibly: no entry, no way
     /// to see it, no way to lift it. That fails "every AI decision is explainable" from
@@ -633,6 +646,13 @@ final class AppBrain {
                     taskUUID: target.uuid, captureID: capture.uuid,
                     fieldCorrected: "duplicate", aiValue: proposal.targetTitle, userValue: "accepted",
                     in: context))
+            // The card's OTHER edits still teach. A user who fixed the category or the
+            // owner and then accepted the merge produced exactly as valid a labeled pair
+            // as one whose card became a task — the merge decides where the work lands,
+            // not whether the correction happened. They attach to the merge TARGET,
+            // which is the row that now carries this capture.
+            recordCorrections(
+                for: draft, taskUUID: target.uuid, captureID: capture.uuid, in: context)
             targets.append(target)
         }
         return targets

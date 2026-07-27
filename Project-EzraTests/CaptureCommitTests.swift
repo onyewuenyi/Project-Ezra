@@ -71,6 +71,38 @@ struct CaptureCommitTests {
         #expect(corrections.contains { $0.fieldCorrected == "duplicate" && $0.userValue == "accepted" })
     }
 
+    @Test("An edited-then-merged card still teaches — its diffs land on the merge target")
+    func mergingDraftStillWritesCorrections() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        let existing = TaskItem(title: "Renew passport", status: .todo, in: context)
+        context.insert(existing)
+        try context.save()
+
+        let dup = EdgeProposal(
+            kind: .duplicateOf, targetID: existing.uuid!, targetTitle: "Renew passport",
+            confidence: 0.95, decision: .accepted)
+        var d = draft("Renew the passport", edges: [dup])
+        d.aiOriginal = AIFieldSnapshot(
+            title: "Renew the passport", category: "Admin", dueDate: nil, isUrgent: false,
+            ownerName: nil, effortMinutes: nil, blocksIDs: [], edgeProposals: [dup])
+        // The user fixed the category and flagged it urgent, THEN let the merge stand.
+        d.category = "Travel"
+        d.isUrgent = true
+
+        _ = brain.commit([d], rawCapture: "", into: context)
+
+        let corrections = try context.fetch(NSFetchRequest<Correction>(entityName: "Correction"))
+        // The merge decides where the work lands, not whether the correction happened.
+        let category = try #require(corrections.first { $0.fieldCorrected == "category" })
+        #expect(category.aiValue == "Admin")
+        #expect(category.userValue == "Travel")
+        #expect(category.taskUUID == existing.uuid)  // attached to the merge TARGET
+        #expect(corrections.contains { $0.fieldCorrected == "urgent" && $0.userValue == "true" })
+        // …alongside the merge's own accepted-duplicate signal, which is unchanged.
+        #expect(corrections.contains { $0.fieldCorrected == "duplicate" && $0.userValue == "accepted" })
+    }
+
     @Test("Rejected duplicate creates the task and writes suppression records, never an edge")
     func rejectedSuppression() throws {
         let context = TestStore.makeContext()
