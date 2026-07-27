@@ -140,6 +140,16 @@ enum EmbeddingStore {
     /// whose task has left the open set are evicted here (retrieval never needs
     /// them). Runs once per process — later captures ride the memo. Callers own
     /// `save()` (the triage seam saves at commit).
+    /// Convenience for call sites that have a context but no snapshot yet (the
+    /// capture prewarm): fetches the open set itself. The `warmedUp` guard makes
+    /// repeat calls free, so this and the composer's snapshot-shaped call coexist —
+    /// whichever runs first does the work.
+    static func warmUp(in context: NSManagedObjectContext) {
+        guard !warmedUp else { return }
+        let open = TaskItem.fetchAll(in: context).filter { !$0.status.isResolved }
+        warmUp(openTaskIDs: Set(open.compactMap(\.uuid)), in: context)
+    }
+
     static func warmUp(openTaskIDs: Set<UUID>, in context: NSManagedObjectContext) {
         guard !warmedUp else { return }
         warmedUp = true

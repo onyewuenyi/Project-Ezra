@@ -95,6 +95,19 @@ final class AppBrain {
 
     // MARK: - Triage
 
+    /// Warm everything the first capture parse of a session pays for: the shared
+    /// on-device model (a no-op off-device / under tests), the `NLEmbedding`
+    /// first-touch, and the persisted-vector warm-up — all currently costs that
+    /// otherwise land inside the first debounce, on the thread the keyboard needs.
+    /// Fire at the moment intent-to-capture is declared (the FAB, `openCapture`,
+    /// `resumeCapture`), so the sheet-presentation animation absorbs the cost —
+    /// the same trick the Today sequence plays behind its Recap cover.
+    static func prewarmCapture(in context: NSManagedObjectContext) {
+        ModelWarmup.prewarmSharedSession()
+        _ = EmbeddingStore.sentenceEmbedding
+        EmbeddingStore.warmUp(in: context)
+    }
+
     /// Run the raw capture through the active engine, then the deterministic
     /// resolver (dates, learned rules, needs-decision, always-inbox). Never throws
     /// to the caller; on failure it degrades to the heuristic engine so capture

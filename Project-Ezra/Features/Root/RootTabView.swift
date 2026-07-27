@@ -91,6 +91,7 @@ struct RootTabView: View {
         .environment(
             \.openCapture,
             {
+                AppBrain.prewarmCapture(in: context)
                 resumingCapture = nil
                 showComposer = true
             }
@@ -98,6 +99,7 @@ struct RootTabView: View {
         .environment(
             \.resumeCapture,
             { capture in
+                AppBrain.prewarmCapture(in: context)
                 resumingCapture = capture
                 showComposer = true
             }
@@ -153,6 +155,10 @@ struct RootTabView: View {
     /// public), not a pixel-lock.
     private var captureButton: some View {
         Button {
+            // Warm the model + retrieval substrate NOW — the sheet-presentation
+            // animation absorbs the cost, so the first parse doesn't pay it against
+            // the user's first pause.
+            AppBrain.prewarmCapture(in: context)
             // Opening the composer from here always starts a NEW capture — a stale
             // resume target from an earlier \.resumeCapture must not leak into it
             // (it could be committed or deleted by now).
