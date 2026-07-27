@@ -258,6 +258,13 @@ struct OnboardingView: View {
             }
             .padding(Spacing.lg)
 
+            // The first-ever confirm is a CONFIRM now, not a reveal: every row's title
+            // is editable in place, its category is one menu away, and a mis-parse is
+            // one ✕ from gone — the minimum viable version of the composer's card
+            // contract ("inferred values become visible and editable"). It used to be
+            // read-only Text, which meant the single highest-signal batch the learning
+            // loop will ever see produced zero Corrections, and the user's first
+            // impression of the AI was that it couldn't be corrected at all.
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
                     ForEach(groupedDrafts, id: \.0) { category, items in
@@ -268,20 +275,8 @@ struct OnboardingView: View {
                                 Text(category).sectionHeaderStyle()
                             }
                             ForEach(items) { draft in
-                                HStack(spacing: Spacing.sm) {
-                                    Circle()
-                                        .stroke(Palette.border, lineWidth: 1.5)
-                                        .frame(width: 8, height: 8)
-                                    Text(draft.title)
-                                        .font(.supporting)
-                                        .foregroundStyle(Palette.primaryText)
-                                    if draft.isJudgmentCall {
-                                        AssessmentChip(
-                                            assessment: TaskAssessment(
-                                                needsDecision: .humanJudgment, isBlocked: false,
-                                                isUnowned: false, isStale: false, tier: .ask))
-                                    }
-                                    Spacer()
+                                if let binding = binding(for: draft) {
+                                    resultRow(binding)
                                 }
                             }
                         }
@@ -302,9 +297,74 @@ struct OnboardingView: View {
                         .background(Palette.accentGradient, in: Capsule())
                 }
                 .buttonStyle(.pressableProminent)
+                .disabled(drafts.isEmpty)
             }
             .padding(Spacing.lg)
         }
+    }
+
+    /// One editable result row: category menu (the chip), inline title, judgment
+    /// chip, remove. Edits diff against `aiOriginal` at commit exactly like the
+    /// composer's card — the corrections loop now starts at minute one.
+    private func resultRow(_ draft: Binding<TaskDraft>) -> some View {
+        HStack(spacing: Spacing.sm) {
+            Menu {
+                ForEach(TaskCategory.all, id: \.self) { category in
+                    Button {
+                        draft.wrappedValue.category = category
+                        draft.wrappedValue.markEdited(.category)
+                    } label: {
+                        Label(category, systemImage: TaskCategory.symbol(for: category))
+                    }
+                }
+            } label: {
+                MetadataChip(density: .compact) {
+                    Image(systemName: TaskCategory.symbol(for: draft.wrappedValue.category))
+                        .font(.system(size: IconSize.caption))
+                }
+                .foregroundStyle(Palette.secondaryText)
+            }
+            .accessibilityLabel("Category, \(draft.wrappedValue.category)")
+
+            TextField(
+                "Task",
+                text: Binding(
+                    get: { draft.wrappedValue.title },
+                    set: {
+                        draft.wrappedValue.title = $0
+                        draft.wrappedValue.markEdited(.title)
+                    }),
+                axis: .vertical
+            )
+            .font(.supporting)
+            .foregroundStyle(Palette.primaryText)
+
+            if draft.wrappedValue.isJudgmentCall {
+                AssessmentChip(
+                    assessment: TaskAssessment(
+                        needsDecision: .humanJudgment, isBlocked: false,
+                        isUnowned: false, isStale: false, tier: .ask))
+            }
+            Spacer(minLength: 0)
+            Button {
+                withAnimation(Motion.respecting(Motion.decide)) {
+                    drafts.removeAll { $0.id == draft.wrappedValue.id }
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: IconSize.caption, weight: .semibold))
+                    .foregroundStyle(Palette.mutedText)
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressableIcon)
+            .accessibilityLabel("Remove \(draft.wrappedValue.title)")
+        }
+    }
+
+    private func binding(for draft: TaskDraft) -> Binding<TaskDraft>? {
+        guard let index = drafts.firstIndex(where: { $0.id == draft.id }) else { return nil }
+        return $drafts[index]
     }
 
     private var groupedDrafts: [(String, [TaskDraft])] {

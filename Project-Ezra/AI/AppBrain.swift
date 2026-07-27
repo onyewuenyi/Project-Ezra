@@ -47,6 +47,10 @@ final class AppBrain {
     /// True while a triage call is in flight — drives the soft-glow processing UI.
     var isProcessing = false
 
+    /// Minimum spacing between APPLIED streaming partials (the UI-facing cadence;
+    /// the salvage box still records every raw snapshot).
+    static let partialCoalesceSeconds: Double = 0.1
+
     /// What the last confirm produced, for the transient notice the PRESENTING surface
     /// shows once the composer has closed. Parked on the brain rather than returned,
     /// because the notice has to outlive the sheet that earned it — the composer is gone
@@ -164,8 +168,22 @@ final class AppBrain {
             Self.proposeOwners(to: &drafts, ownership: ownership)
             return drafts
         }
+        // Coalesced: Foundation Models emits snapshots at token-ish cadence, and every
+        // applied snapshot pays the full resolver + owner-proposal + merge + spring on
+        // the main thread. The eye can't use more than ~10 updates/s, so intermediate
+        // snapshots inside the window are skipped — the SALVAGE box still sees every
+        // raw snapshot (the race tees before this handler), and the final result never
+        // routes through here, so nothing is ever lost to the throttle.
         let partialHandler: (@MainActor ([TaskIntent]) -> Void)? = onPartial.map { handler in
-            { intents in handler(resolveAndGate(intents)) }
+            var lastApplied = Date.distantPast
+            return { intents in
+                let now = Date()
+                guard now.timeIntervalSince(lastApplied) >= Self.partialCoalesceSeconds else {
+                    return
+                }
+                lastApplied = now
+                handler(resolveAndGate(intents))
+            }
         }
         var intents: [TaskIntent]
         if status.isOnDevice {
