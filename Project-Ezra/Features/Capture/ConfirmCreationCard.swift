@@ -19,6 +19,10 @@ import SwiftUI
 /// The editable list of candidates awaiting the user's confirm.
 struct ConfirmCreationList: View {
     @Binding var drafts: [TaskDraft]
+    /// Called with the removed draft BEFORE it leaves the array, so the composer can
+    /// record it — a removed card must stay removed across re-parses (`DraftMerge`
+    /// filters re-proposals against the session's `RemovedDraftSet`).
+    var onRemove: ((TaskDraft) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: Spacing.sm) {
@@ -31,6 +35,7 @@ struct ConfirmCreationList: View {
     }
 
     private func remove(_ draft: TaskDraft) {
+        onRemove?(draft)
         Motion.withMotion(Motion.decide) {
             drafts.removeAll { $0.id == draft.id }
         }
@@ -72,7 +77,7 @@ struct ConfirmCreationCard: View {
                         .padding(.top, 3)
                         .transition(.opacity)
                 }
-                TextField("Task", text: $draft.title, axis: .vertical)
+                TextField("Task", text: titleBinding, axis: .vertical)
                     .font(.taskTitle)
                     .foregroundStyle(Palette.primaryText)
                     .textInputAutocapitalization(.sentences)
@@ -161,6 +166,18 @@ struct ConfirmCreationCard: View {
         }
     }
 
+    /// Every user edit marks its field, so `DraftMerge` knows to re-apply it over a
+    /// fresh AI reading — an edit a re-parse can silently discard isn't an edit.
+    private var titleBinding: Binding<String> {
+        Binding(
+            get: { draft.title },
+            set: {
+                draft.title = $0
+                draft.markEdited(.title)
+            }
+        )
+    }
+
     /// Non-optional for the picker's sake; only ever bound while a date exists (the
     /// "Pick a date…" arm seeds today first), so the fallback is never read.
     private var dueBinding: Binding<Date> {
@@ -169,6 +186,7 @@ struct ConfirmCreationCard: View {
             set: {
                 draft.dueDate = $0
                 draft.dueReason = nil
+                draft.markEdited(.dueDate)
             }
         )
     }
@@ -248,6 +266,7 @@ struct ConfirmCreationCard: View {
             ForEach(TaskCategory.all, id: \.self) { cat in
                 Button {
                     draft.category = cat
+                    draft.markEdited(.category)
                 } label: {
                     Label(cat, systemImage: TaskCategory.symbol(for: cat))
                 }
@@ -275,11 +294,17 @@ struct ConfirmCreationCard: View {
     private var kindChip: some View {
         Menu {
             ForEach(WorkIntent.allCases) { intent in
-                Button(intent.label) { draft.workIntent = intent }
+                Button(intent.label) {
+                    draft.workIntent = intent
+                    draft.markEdited(.workIntent)
+                }
             }
             if draft.workIntent != nil {
                 Divider()
-                Button("Clear", role: .destructive) { draft.workIntent = nil }
+                Button("Clear", role: .destructive) {
+                    draft.workIntent = nil
+                    draft.markEdited(.workIntent)
+                }
             }
         } label: {
             if let intent = draft.workIntent {
@@ -317,6 +342,7 @@ struct ConfirmCreationCard: View {
                 Button("Clear", role: .destructive) {
                     draft.dueDate = nil
                     draft.dueReason = nil
+                    draft.markEdited(.dueDate)
                     showDatePicker = false
                 }
             }
@@ -356,11 +382,17 @@ struct ConfirmCreationCard: View {
     // transmitted until sync — it ships with delivery, not before.
     private var ownerChip: some View {
         Menu {
-            Button("You") { draft.ownerName = nil }
+            Button("You") {
+                draft.ownerName = nil
+                draft.markEdited(.ownerName)
+            }
             if !otherMembers.isEmpty {
                 Divider()
                 ForEach(otherMembers) { member in
-                    Button(member.name) { draft.ownerName = member.name }
+                    Button(member.name) {
+                        draft.ownerName = member.name
+                        draft.markEdited(.ownerName)
+                    }
                 }
             }
         } label: {
@@ -417,6 +449,7 @@ struct ConfirmCreationCard: View {
         Menu {
             Button("Don't link these", role: .destructive) {
                 draft.blocks.removeAll { $0.id == dependent.id }
+                draft.markEdited(.blocks)
             }
         } label: {
             pill {
@@ -435,7 +468,10 @@ struct ConfirmCreationCard: View {
     // at commit (a matching task, or an external note in the user's words).
     private var blockerChip: some View {
         Menu {
-            Button("Not waiting on this", role: .destructive) { draft.blockedBy = nil }
+            Button("Not waiting on this", role: .destructive) {
+                draft.blockedBy = nil
+                draft.markEdited(.blockedBy)
+            }
         } label: {
             pill {
                 assumedMark
@@ -455,6 +491,7 @@ struct ConfirmCreationCard: View {
     private var urgentChip: some View {
         Button {
             draft.isUrgent.toggle()
+            draft.markEdited(.isUrgent)
         } label: {
             if draft.isUrgent {
                 pill {
@@ -477,12 +514,12 @@ struct ConfirmCreationCard: View {
 
     private var effortChip: some View {
         Menu {
-            Button("15 min") { draft.effortMinutes = 15 }
-            Button("30 min") { draft.effortMinutes = 30 }
-            Button("1 hour") { draft.effortMinutes = 60 }
-            Button("2 hours") { draft.effortMinutes = 120 }
+            Button("15 min") { setEffort(15) }
+            Button("30 min") { setEffort(30) }
+            Button("1 hour") { setEffort(60) }
+            Button("2 hours") { setEffort(120) }
             Divider()
-            Button("Clear", role: .destructive) { draft.effortMinutes = nil }
+            Button("Clear", role: .destructive) { setEffort(nil) }
         } label: {
             if draft.effortMinutes != nil {
                 pill {
@@ -506,6 +543,11 @@ struct ConfirmCreationCard: View {
 
     private var effortLabel: String { TaskItem.effortLabel(draft.effortMinutes) ?? "" }
 
+    private func setEffort(_ minutes: Int?) {
+        draft.effortMinutes = minutes
+        draft.markEdited(.effortMinutes)
+    }
+
     /// The quiet "assumed" marker — `accentFlat`, NOT the sanctioned gradient
     /// AITag; that stays within its budget.
     private var assumedMark: some View {
@@ -524,6 +566,7 @@ struct ConfirmCreationCard: View {
         let cal = Calendar.current
         draft.dueDate = cal.date(byAdding: .day, value: dayOffset, to: cal.startOfDay(for: Date()))
         draft.dueReason = nil
+        draft.markEdited(.dueDate)
     }
 
     private func dueText(_ date: Date) -> String {

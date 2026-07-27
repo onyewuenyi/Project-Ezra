@@ -45,6 +45,9 @@ struct ComposerView: View {
 
     @State private var text = ""
     @State private var drafts: [TaskDraft] = []
+    /// The cards the user deleted this session. The merge filters re-proposals of
+    /// them, so a removal can't be undone by the next keystroke's re-parse.
+    @State private var removedDrafts = RemovedDraftSet()
     @State private var committed = 0
     @State private var speech = SpeechCaptureService()
     /// True once dictation contributed to this capture — recorded on the Capture row.
@@ -98,8 +101,11 @@ struct ComposerView: View {
                     Spacer(minLength: 0)
                 } else {
                     ScrollView {
-                        ConfirmCreationList(drafts: $drafts)
-                            .padding(.top, Spacing.xxs)
+                        ConfirmCreationList(
+                            drafts: $drafts,
+                            onRemove: { removedDrafts.record($0) }
+                        )
+                        .padding(.top, Spacing.xxs)
                     }
                     .scrollDismissesKeyboard(.interactively)
                 }
@@ -336,16 +342,11 @@ struct ComposerView: View {
             candidates: candidates, history: history, ownersByTaskID: ownersByTaskID)
     }
 
-    /// Keep an edited card stable across re-parses: match fresh candidates to
-    /// existing ones by their AI snapshot; keep the edited version when the AI's
-    /// own reading didn't change, adopt the fresh one when it did.
+    /// Keep cards stable across re-parses and streaming partials: `DraftMerge`
+    /// matches by the AI's reading of the line, transplants identity, re-applies
+    /// the user's edits over the fresh values, and honors the session's removals.
     private func merge(fresh: [TaskDraft], into current: [TaskDraft]) -> [TaskDraft] {
-        fresh.map { candidate in
-            if let kept = current.first(where: { $0.aiOriginal == candidate.aiOriginal }) {
-                return kept
-            }
-            return candidate
-        }
+        DraftMerge.merge(fresh: fresh, into: current, removed: removedDrafts)
     }
 
     // MARK: - Footer (the Confirm-Creation moment)
@@ -424,6 +425,7 @@ struct ComposerView: View {
         if let parked { AppBrain.discard(parked, in: context) }
         parked = nil
         drafts = []
+        removedDrafts = RemovedDraftSet()
         text = ""
         dismiss()
     }
@@ -449,6 +451,7 @@ struct ComposerView: View {
         // Today would read "1 capture waiting" after every successful add.
         parked = nil
         drafts = []
+        removedDrafts = RemovedDraftSet()
         text = ""
         context.saveChanges()
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale

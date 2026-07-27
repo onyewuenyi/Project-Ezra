@@ -135,6 +135,24 @@ struct CaptureDurabilityTests {
         #expect(restored.effortMinutes == 15)
     }
 
+    @Test("editedFields survives the round trip — the merge's authority must not reset on resume")
+    func editedFieldsSurviveRoundTrip() throws {
+        let context = context()
+        let brain = AppBrain()
+        var edited = draft("call vet")
+        edited.title = "Call the vet about Maple"
+        edited.markEdited(.title)
+        edited.markEdited(.isUrgent)
+
+        let capture = try #require(
+            brain.park([edited], rawCapture: "call vet", source: .text, into: nil, in: context))
+        let restored = try #require(capture.parkedDrafts?.first)
+
+        #expect(restored.editedFields == [.title, .isUrgent])
+        #expect(restored.userEdited(.title))
+        #expect(!restored.userEdited(.category))
+    }
+
     @Test("An unreadable payload degrades to nil so the caller re-parses from rawText")
     func corruptPayloadDegradesGracefully() throws {
         let context = context()

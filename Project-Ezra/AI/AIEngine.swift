@@ -115,6 +115,22 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     /// write `Correction` rows — every edit is a free labeled pair.
     var aiOriginal: AIFieldSnapshot? = nil
 
+    /// The fields the user has touched on this card this composer session — the
+    /// merge's authority for which values survive a re-parse (`DraftMerge.adopt`
+    /// re-applies exactly these over the fresh AI reading). Tracked explicitly
+    /// rather than diffed against `aiOriginal`, because `ownerName` is mutated by
+    /// the proposer AFTER the snapshot freezes — a diff would read every proposed
+    /// owner as a human edit. Optional so a pre-existing parked payload (no key)
+    /// still decodes; nil means "nothing edited". `var` with a default per the
+    /// Codable trap at the top of this struct.
+    var editedFields: Set<DraftField>? = nil
+
+    mutating func markEdited(_ field: DraftField) {
+        editedFields = (editedFields ?? []).union([field])
+    }
+
+    func userEdited(_ field: DraftField) -> Bool { editedFields?.contains(field) ?? false }
+
     /// The Needs Decision flag this draft will carry at birth: the judgment-category
     /// rule (a values-laden call is always the user's) or plain low confidence.
     var needsDecision: Bool {
@@ -229,6 +245,15 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     }
 }
 
+/// The user-editable fields of a confirm card, as a stable vocabulary for
+/// `TaskDraft.editedFields`. Edge-proposal decisions are deliberately absent —
+/// those carry across re-parses by per-proposal value diff (`DraftMerge.adopt`),
+/// which IS reliable because `aiOriginal.edgeProposals` is frozen at resolve.
+enum DraftField: String, Hashable, Codable {
+    case title, category, dueDate, isUrgent, workIntent, ownerName, effortMinutes,
+        blockedBy, blocks
+}
+
 /// The AI-inferred field values at resolution time, frozen. What the Correction
 /// diff compares against — never mutated by the review UI.
 struct AIFieldSnapshot: Hashable, Codable {
@@ -236,9 +261,9 @@ struct AIFieldSnapshot: Hashable, Codable {
     var category: String
     var dueDate: Date?
     var isUrgent: Bool
-    /// Frozen so a kind corrected at confirm is diffable — and so a re-parse that
-    /// changes only the classification isn't mistaken for an unchanged candidate by
-    /// `ComposerView.merge(fresh:into:)`, which compares whole snapshots.
+    /// Frozen so a kind corrected at confirm is diffable against what the AI
+    /// actually proposed. (Re-parse matching no longer compares whole snapshots —
+    /// `DraftMerge` matches on the normalized AI title.)
     var workIntent: WorkIntent? = nil
     var ownerName: String?
     var effortMinutes: Int?
