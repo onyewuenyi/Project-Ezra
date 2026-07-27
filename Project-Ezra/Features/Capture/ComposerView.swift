@@ -43,6 +43,18 @@ struct ComposerView: View {
     private var corrections: [Correction] { Array(correctionsResults) }
     private var allTasks: [TaskItem] { Array(allTasksResults) }
 
+    /// The delegatable roster for the confirm cards' owner chips — everyone but the
+    /// current user, who is the chip's explicit "You" entry. Computed once here and
+    /// passed down as values, so cards don't each own live fetch controllers.
+    private var ownerOptions: [String] {
+        let me = profiles.first?.linkedMemberID
+        return
+            familyMembers
+            .filter { !$0.isRemoved && $0.uuid != me }
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     @State private var text = ""
     @State private var drafts: [TaskDraft] = []
     /// The cards the user deleted this session. The merge filters re-proposals of
@@ -103,6 +115,7 @@ struct ComposerView: View {
                     ScrollView {
                         ConfirmCreationList(
                             drafts: $drafts,
+                            ownerOptions: ownerOptions,
                             onRemove: { removedDrafts.record($0) }
                         )
                         .padding(.top, Spacing.xxs)

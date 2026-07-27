@@ -19,16 +19,27 @@ import SwiftUI
 /// The editable list of candidates awaiting the user's confirm.
 struct ConfirmCreationList: View {
     @Binding var drafts: [TaskDraft]
+    /// The delegatable roster — everyone but the current user — computed ONCE by the
+    /// composer from fetches it already holds. A value list, deliberately: each card
+    /// used to own two live NSFetchedResultsControllers for data that never varies
+    /// card-to-card, which at N cards meant 2N context observers torn down and
+    /// rebuilt with every identity change.
+    var ownerOptions: [String] = []
     /// Called with the removed draft BEFORE it leaves the array, so the composer can
     /// record it — a removed card must stay removed across re-parses (`DraftMerge`
     /// filters re-proposals against the session's `RemovedDraftSet`).
     var onRemove: ((TaskDraft) -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: Spacing.sm) {
+        // Lazy on purpose: a big paste renders only what's visible. Safe now that
+        // `DraftMerge` keeps ids stable — under the old merge, per-partial identity
+        // churn would have made laziness thrash instead of save.
+        LazyVStack(spacing: Spacing.sm) {
             ForEach($drafts) { $draft in
-                ConfirmCreationCard(draft: $draft, onRemove: { remove(draft) })
-                    .transition(Motion.cardEntry)
+                ConfirmCreationCard(
+                    draft: $draft, ownerOptions: ownerOptions, onRemove: { remove(draft) }
+                )
+                .transition(Motion.cardEntry)
             }
         }
         .animation(Motion.settle, value: drafts.map(\.id))
@@ -46,13 +57,10 @@ struct ConfirmCreationList: View {
 
 struct ConfirmCreationCard: View {
     @Binding var draft: TaskDraft
+    /// Names the owner chip may delegate to (never includes "You" — that's the
+    /// explicit first entry). Passed as values from the composer's own fetches.
+    var ownerOptions: [String] = []
     let onRemove: () -> Void
-
-    /// Roster for the owner picker — every field on this card is editable, and
-    /// "who does this belong to" needs real people to pick from.
-    @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
-    private var familyMembers: [FamilyMember] { Array(familyMembersResults) }
-    @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
 
     /// The due chip's three shortcuts cover the common cases; anything else needs a real
     /// calendar, and making the user commit first and fix it in the detail is the kind of
@@ -386,11 +394,11 @@ struct ConfirmCreationCard: View {
                 draft.ownerName = nil
                 draft.markEdited(.ownerName)
             }
-            if !otherMembers.isEmpty {
+            if !ownerOptions.isEmpty {
                 Divider()
-                ForEach(otherMembers) { member in
-                    Button(member.name) {
-                        draft.ownerName = member.name
+                ForEach(ownerOptions, id: \.self) { name in
+                    Button(name) {
+                        draft.ownerName = name
                         draft.markEdited(.ownerName)
                     }
                 }
@@ -407,17 +415,6 @@ struct ConfirmCreationCard: View {
         }
         .accessibilityLabel(
             "Owner, \(draft.ownerName ?? "you")\(draft.ownerReason != nil ? ", assumed" : "")")
-    }
-
-    /// The delegatable roster — everyone but the current user, who is already the
-    /// explicit "You" entry above. (This used to list the whole roster, so on an
-    /// install where the user is a named member they appeared twice.)
-    private var otherMembers: [FamilyMember] {
-        let me = profiles.first?.linkedMemberID
-        return
-            familyMembers
-            .filter { !$0.isRemoved && $0.uuid != me }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// Why the AI chose this owner, in one line. Only ever present for a real
