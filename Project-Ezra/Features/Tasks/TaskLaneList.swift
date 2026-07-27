@@ -134,15 +134,21 @@ struct AssignedSectionsView: View {
     let searchIsActive: Bool
     @Binding var selectedTask: TaskItem?
     @Binding var notice: UndoNotice?
+    @Environment(\.openCapture) private var openCapture
 
     var body: some View {
         if sections.isEmpty {
+            // An empty list gets the way OUT of empty. Only when the emptiness is real,
+            // though: a search that matched nothing needs a different filter, not a new
+            // task, and offering capture there would answer a question nobody asked.
             EmptyStateView(
                 symbol: "square.stack.3d.up",
                 title: searchIsActive ? "No matches" : "Nothing assigned to you",
                 message: searchIsActive
                     ? "Nothing here matches. Try a different filter."
-                    : "Work assigned to you shows up here, grouped by state — ordered by what deserves attention, never by folder."
+                    : "Work assigned to you shows up here, grouped by state — ordered by what deserves attention, never by folder.",
+                actionTitle: searchIsActive ? nil : "Capture something",
+                action: searchIsActive ? nil : { openCapture() }
             )
         } else {
             ScrollView {
@@ -190,15 +196,20 @@ struct CreatedFlatView: View {
     let searchIsActive: Bool
     @Binding var selectedTask: TaskItem?
     @Binding var notice: UndoNotice?
+    @Environment(\.openCapture) private var openCapture
 
     var body: some View {
         if entries.isEmpty {
+            // This screen said "everything you capture shows up here" and then gave the
+            // user no way to capture — the most literal dead end in the product.
             EmptyStateView(
                 symbol: "square.and.pencil",
                 title: searchIsActive ? "No matches" : "Nothing created yet",
                 message: searchIsActive
                     ? "Nothing you created matches. Try a different filter."
-                    : "Everything you capture shows up here, newest first — a record of what you've added."
+                    : "Everything you capture shows up here, newest first — a record of what you've added.",
+                actionTitle: searchIsActive ? nil : "Capture something",
+                action: searchIsActive ? nil : { openCapture() }
             )
         } else {
             ScrollView {

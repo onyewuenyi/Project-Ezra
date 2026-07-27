@@ -17,6 +17,7 @@ import SwiftUI
 struct InboxView: View {
     @Environment(\.managedObjectContext) private var context
     @Environment(AppBrain.self) private var brain
+    @Environment(\.openCapture) private var openCapture
     // Manual per-task field edits ("edited") live only in the task's Activity timeline,
     // never this feed — excluded via the shared visibility seam (kept in sync with the tab
     // badge in `RootTabView`).
@@ -44,7 +45,9 @@ struct InboxView: View {
                         symbol: "tray",
                         title: "Nothing here yet",
                         message:
-                            "As you and Ezra move work along — completing, assigning, filing — it shows up here so you can glance and undo."
+                            "As you and Ezra move work along — completing, assigning, filing — it shows up here so you can glance and undo.",
+                        actionTitle: "Capture something",
+                        action: { openCapture() }
                     )
                     .transition(.opacity)
                 } else {

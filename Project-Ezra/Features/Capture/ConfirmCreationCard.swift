@@ -53,6 +53,11 @@ struct ConfirmCreationList: View {
             }
         }
         .animation(Motion.settle, value: drafts.map(\.id))
+        // Container semantics so VoiceOver announces the list as a group with its
+        // size, rather than dropping the user into an unlabeled run of cards.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            drafts.count == 1 ? "1 task to review" : "\(drafts.count) tasks to review")
     }
 
     private func remove(_ draft: TaskDraft) {

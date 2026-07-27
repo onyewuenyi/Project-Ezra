@@ -112,6 +112,9 @@ struct ComposerView: View {
     /// field do we know an empty `drafts` means "the engine found nothing here" rather than
     /// "it hasn't looked yet" — the difference between an honest message and a lie.
     @State private var lastParsedText: String?
+    /// Whether the last completed parse returned any candidates at all, before the
+    /// session's removals filtered them. The honest input to `foundNothing`.
+    @State private var lastParseYieldedCandidates = false
     @FocusState private var focused: Bool
 
     init(resuming: Capture? = nil) {
@@ -127,6 +130,11 @@ struct ComposerView: View {
 
                 composerField
                     .frame(minHeight: 120, maxHeight: drafts.isEmpty ? 240 : 160)
+                    // The field yields room to the cards it produced — but it EASES
+                    // instead of snapping. It used to lose 80pt in one frame the
+                    // instant the first candidate landed, resizing under the cursor
+                    // of someone still mid-sentence.
+                    .animation(reduceMotion ? nil : Motion.settle, value: drafts.isEmpty)
 
                 dictationHint
                 engineDisclosure
@@ -154,6 +162,14 @@ struct ComposerView: View {
             }
             .padding(Spacing.lg)
             .background(Palette.background)
+            // Tap the empty space to put the keyboard away. Without this there was no
+            // way out of it at all when a parse produced no cards: the only
+            // keyboard-dismissing scroll view is the draft list, which doesn't exist
+            // then, and dragging the sheet dismisses the whole composer. Children
+            // (field, chips, buttons) take their own taps first, so this only ever
+            // catches the space between them.
+            .contentShape(Rectangle())
+            .onTapGesture { focused = false }
             // Success notification — capture committed is a capstone moment.
             .sensoryFeedback(.success, trigger: committed)
             .navigationBarTitleDisplayMode(.inline)
@@ -175,7 +191,12 @@ struct ComposerView: View {
             }
             // Live transcript flows into the field: base text + everything heard so far.
             .onChange(of: speech.transcript) { _, transcript in
-                text = dictationBase + transcript
+                // Only write when the value actually moves: starting the mic resets
+                // the transcript to empty, which used to re-assign the same text
+                // (minus trailing whitespace) and kick off a full re-parse before a
+                // single word had been spoken.
+                let next = dictationBase + transcript
+                if next != text { text = next }
                 if !transcript.isEmpty { usedDictation = true }
                 scheduleSilenceStop()
             }
@@ -226,8 +247,16 @@ struct ComposerView: View {
     /// A finished parse that produced no candidates. Without this the composer's only
     /// answer to "why is the button dead?" was the same encouraging hint as an empty
     /// field, which reads as the app having quietly failed.
+    ///
+    /// Keyed on what the ENGINE returned, not on whether cards are on screen: a user
+    /// who read three good candidates and deleted all three would otherwise be told
+    /// "nothing actionable in that yet" about text the parser understood perfectly —
+    /// the message exists to stop the app reading as quietly broken, so it must not
+    /// become the lie it was added to prevent.
     private var foundNothing: Bool {
-        guard drafts.isEmpty, !brain.isProcessing, let lastParsedText else { return false }
+        guard drafts.isEmpty, !brain.isProcessing, !lastParseYieldedCandidates,
+            let lastParsedText
+        else { return false }
         return lastParsedText == text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -245,6 +274,10 @@ struct ComposerView: View {
         guard !captured.isEmpty else {
             drafts = []
             lastParsedText = nil
+            lastParseYieldedCandidates = false
+            // Nothing dictated survives an emptied field, so the Capture row must not
+            // keep claiming this was a voice capture.
+            usedDictation = false
             // The user emptied the field. Parking exists so an INTERRUPTION can't destroy a
             // thought — it must not resurrect one that was deliberately erased. Left alone,
             // the parked row keeps the deleted text and Today goes on advertising it as a
@@ -291,12 +324,14 @@ struct ComposerView: View {
             // on the app's write context, post-debounce (never per keystroke). The
             // save rides the next commit; an abandoned capture just re-memoizes later.
             EmbeddingStore.persistFresh(openTasks: openTasks, in: context)
+            lastParseYieldedCandidates = !result.isEmpty
             // Preserve the user's in-place edits: a re-parse only replaces
             // candidates whose AI reading actually changed.
             Motion.withMotion(Motion.settle) {
                 drafts = merge(fresh: result, into: drafts)
             }
             lastParsedText = captured
+            announceParseResult()
             // Park as soon as there is something worth keeping, not only on dismiss —
             // it shrinks the window in which the thought lives only in memory to a
             // single debounce.
@@ -435,6 +470,9 @@ struct ComposerView: View {
             }
             .buttonStyle(.pressableProminent)
             .disabled(drafts.isEmpty)
+            // Sighted users learn "more may still arrive" from the pulsing sparkle;
+            // without this, VoiceOver announced a bare count and nothing else.
+            .accessibilityValue(brain.isProcessing ? "still reading, the count may change" : "")
 
             micRow
         }
@@ -443,6 +481,22 @@ struct ComposerView: View {
     private var ctaTitle: String {
         guard !drafts.isEmpty else { return "Add tasks" }
         return "Add \(drafts.count) task\(drafts.count == 1 ? "" : "s")"
+    }
+
+    /// Speak the outcome of a completed parse. The composer's whole promise is that
+    /// candidates appear as you talk — visible motion a screen-reader user got no
+    /// version of, so the live surface was silent to them. Announced on COMPLETED
+    /// parses only (never per streamed partial), so it informs instead of chattering.
+    /// A no-op when VoiceOver is off.
+    private func announceParseResult() {
+        let message: String
+        if drafts.isEmpty {
+            guard lastParseYieldedCandidates == false else { return }
+            message = "Nothing actionable found yet."
+        } else {
+            message = "\(drafts.count) task\(drafts.count == 1 ? "" : "s") ready to review."
+        }
+        AccessibilityNotification.Announcement(message).post()
     }
 
     /// Persist the in-flight capture. Called on dismiss and after each parse, so the
@@ -561,6 +615,11 @@ struct ComposerView: View {
                 // The field must not LOOK editable while it isn't — hit-testing off,
                 // and the state change below drops keyboard focus.
                 .allowsHitTesting(!speech.isActive)
+                // The field is the product's front door and it was unlabeled —
+                // VoiceOver read only the (long, example-laden) placeholder.
+                .accessibilityLabel("What's on your mind")
+                .accessibilityHint(
+                    "Type or dictate anything. Tasks take shape below as you go.")
         }
     }
 
