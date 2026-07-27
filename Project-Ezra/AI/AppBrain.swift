@@ -169,8 +169,17 @@ final class AppBrain {
     ) -> Capture? {
         let trimmed = rawCapture.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return existing }
-        let capture = existing ?? Capture(rawText: trimmed, source: source, in: context)
-        if existing == nil { context.insert(capture) }
+        // Defense in depth for the one-row-per-event invariant: a deleted row can't be
+        // updated (fall through and mint a fresh one — the thought still survives), and
+        // a committed row is spent history (re-parking it would rewrite the verbatim
+        // record of an event that already produced tasks — refuse, unchanged).
+        let live: Capture? = existing.flatMap { row in
+            guard row.managedObjectContext != nil, !row.isDeleted else { return nil }
+            return row
+        }
+        if let live, live.committedAt != nil { return live }
+        let capture = live ?? Capture(rawText: trimmed, source: source, in: context)
+        if live == nil { context.insert(capture) }
         capture.rawText = trimmed
         capture.source = source
         capture.parkedDrafts = drafts

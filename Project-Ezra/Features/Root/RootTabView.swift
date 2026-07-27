@@ -109,7 +109,11 @@ struct RootTabView: View {
             selection = 0
             briefing.pendingOpenBriefing = false
         }
-        .sheet(isPresented: $showComposer) { ComposerView(resuming: resumingCapture) }
+        // onDismiss is the invariant's backstop: however the sheet closed (commit,
+        // discard, swipe), the next open starts fresh unless \.resumeCapture re-arms it.
+        .sheet(isPresented: $showComposer, onDismiss: { resumingCapture = nil }) {
+            ComposerView(resuming: resumingCapture)
+        }
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView {
                 hasOnboarded = true
@@ -149,6 +153,10 @@ struct RootTabView: View {
     /// public), not a pixel-lock.
     private var captureButton: some View {
         Button {
+            // Opening the composer from here always starts a NEW capture — a stale
+            // resume target from an earlier \.resumeCapture must not leak into it
+            // (it could be committed or deleted by now).
+            resumingCapture = nil
             showComposer = true
         } label: {
             Image(systemName: "plus")

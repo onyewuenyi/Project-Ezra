@@ -188,6 +188,46 @@ struct CaptureDurabilityTests {
         #expect(AppBrain.parkedCaptures(in: context).isEmpty)
     }
 
+    @Test("Parking into a committed row is a no-op — spent history is never rewritten")
+    func parkIntoCommittedRowIsANoOp() throws {
+        let context = context()
+        let brain = AppBrain()
+        let parked = brain.park(
+            [draft("call vet")], rawCapture: "call vet", source: .text, into: nil, in: context)
+        brain.commit([draft("call vet")], rawCapture: "call vet", parked: parked, into: context)
+        let committed = try #require(parked)
+
+        // The FAB-after-resume bug handed a committed row back to a new session.
+        // Parking into it must refuse: no re-park, no rawText rewrite, no second row.
+        let result = brain.park(
+            [draft("something new")], rawCapture: "something entirely new",
+            source: .text, into: committed, in: context)
+
+        #expect(result === committed)
+        #expect(committed.rawText == "call vet")
+        #expect(!committed.isParked)
+        #expect(committed.committedAt != nil)
+        #expect(try captures(in: context).count == 1)
+    }
+
+    @Test("Parking into a deleted row mints a fresh one — the thought survives")
+    func parkIntoDeletedRowMintsAFreshOne() throws {
+        let context = context()
+        let brain = AppBrain()
+        let parked = try #require(
+            brain.park([draft("x")], rawCapture: "doomed", source: .text, into: nil, in: context))
+        AppBrain.discard(parked, in: context)
+
+        let result = brain.park(
+            [draft("y")], rawCapture: "a new thought", source: .text, into: parked, in: context)
+
+        let fresh = try #require(result)
+        #expect(fresh !== parked)
+        #expect(fresh.rawText == "a new thought")
+        #expect(fresh.isParked)
+        #expect(try captures(in: context).count == 1)
+    }
+
     @Test("Discard is the only destructive path")
     func discardDeletes() throws {
         let context = context()

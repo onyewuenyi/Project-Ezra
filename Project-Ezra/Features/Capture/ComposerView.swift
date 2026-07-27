@@ -398,7 +398,13 @@ struct ComposerView: View {
     /// change) falls back to re-parsing from `rawText` — the raw text is irreplaceable,
     /// the drafts are derived.
     private func restoreIfResuming() {
-        guard let resuming, parked == nil else { return }
+        // A resume target must be a LIVE, still-parked row. A committed row is spent
+        // (resuming it would re-parse text that already became tasks) and a deleted
+        // row is a fault waiting to crash — either way the honest degrade is a fresh
+        // capture, which is what the presenting button intended.
+        guard let resuming, parked == nil,
+            resuming.managedObjectContext != nil, !resuming.isDeleted, resuming.isParked
+        else { return }
         parked = resuming
         text = resuming.rawText
         if let restored = resuming.parkedDrafts, !restored.isEmpty {
