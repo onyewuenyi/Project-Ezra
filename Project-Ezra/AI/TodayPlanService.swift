@@ -28,12 +28,9 @@ enum PlanGenerationError: Error {
     case timedOut
 }
 
-/// Holds the latest streamed partial briefing so a deadline hit can salvage it. MainActor
-/// because the stream's `onPartial` is MainActor; the timeout task reads it via `await`.
-@MainActor
-final class PartialBox {
-    var latest: GeneratedPlan?
-
+/// Plan-shaped viability for the shared salvage box (`ModelDeadline.PartialBox`,
+/// where the type itself now lives).
+extension PartialBox where Value == GeneratedPlan {
     /// The last partial that's worth showing: a headline AND at least one action.
     func viablePartial() -> GeneratedPlan? {
         guard let latest, latest.headline != nil, !latest.actions.isEmpty else { return nil }
@@ -286,7 +283,7 @@ extension AppBrain {
         case .onDevice:
             // Tee the streamed partials into a box so a deadline hit can SALVAGE the
             // last viable partial (a 90%-streamed briefing) instead of discarding it.
-            let box = PartialBox()
+            let box = PartialBox<GeneratedPlan>()
             let forward = onPartial
             return try await race(timeout: onDeviceTimeoutSeconds, salvage: box) {
                 try await OnDevicePlanGenerator().generate(
@@ -308,7 +305,7 @@ extension AppBrain {
     /// is returned instead of throwing — a partially-voiced briefing beats the voiceless
     /// fact-line fallback. Only a timeout with nothing viable throws `.timedOut`.
     private static func race(
-        timeout seconds: Double, salvage box: PartialBox? = nil,
+        timeout seconds: Double, salvage box: PartialBox<GeneratedPlan>? = nil,
         _ operation: @escaping @Sendable () async throws -> GeneratedPlan
     ) async throws -> GeneratedPlan {
         // The race itself now lives in `ModelDeadline` so every model call in the app

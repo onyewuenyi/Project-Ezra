@@ -25,6 +25,10 @@ enum ModelFeature: String, CaseIterable, Sendable {
     case breakdown
     case decisionFraming
     case workIntent
+    /// The composer's live parse — the most-executed model call in the product, and
+    /// (until this) the only one generating no evidence to tune its deadline with.
+    /// Recorded at the `AppBrain.triage` seam, never per debounce cancellation.
+    case captureTriage
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -32,6 +36,7 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .breakdown: return "breakdown"
         case .decisionFraming: return "framing"
         case .workIntent: return "workIntent"
+        case .captureTriage: return "capture"
         }
     }
 }

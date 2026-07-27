@@ -142,13 +142,55 @@ final class AppBrain {
             { intents in handler(resolveAndGate(intents)) }
         }
         var intents: [TaskIntent]
-        do {
-            intents = try await engine.triage(
-                rawText: rawText, context: context, onPartial: partialHandler)
-            if intents.isEmpty { intents = try await HeuristicEngine().triage(rawText: rawText) }
-        } catch {
-            // On-device failure (e.g. guardrail, resource) → deterministic fallback.
-            intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
+        if status.isOnDevice {
+            // The on-device parse is bounded (`cardSeconds` — the user is watching the
+            // composer) with streamed-partial salvage, and it is the one place capture
+            // metrics are recorded: completed calls only, so debounce cancellations
+            // can't pollute the deadline-tuning evidence.
+            let started = Date()
+            let outcome = await CaptureTriageRace.run(
+                deadline: ModelDeadline.cardSeconds, onPartial: partialHandler
+            ) { tee in
+                try await self.engine.triage(rawText: rawText, context: context, onPartial: tee)
+            }
+            let latency = Int(Date().timeIntervalSince(started) * 1000)
+            switch outcome {
+            case .finished(let value):
+                ModelMetrics.shared.record(.captureTriage, .success, latencyMs: latency)
+                intents = value
+            case .salvaged(let value):
+                // The deadline DID fire — record it (that's the tuning evidence) but
+                // keep the streamed work instead of discarding it for a heuristic wipe.
+                ModelMetrics.shared.record(.captureTriage, .timedOut, latencyMs: latency)
+                intents = value
+            case .timedOutEmpty:
+                ModelMetrics.shared.record(.captureTriage, .timedOut, latencyMs: latency)
+                intents = []
+            case .cancelled:
+                // Debounce supersession — the caller already dropped this generation.
+                return []
+            case .failed(let error):
+                ModelMetrics.shared.record(
+                    .captureTriage, .failed(Self.errorLabel(error)), latencyMs: latency)
+                intents = []
+            }
+            // Model found nothing / timed out empty / failed → deterministic fallback,
+            // exactly the degrade the old unbounded path promised.
+            if intents.isEmpty {
+                intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
+            }
+        } else {
+            // Heuristic path: synchronous string work, no deadline needed, zero overhead
+            // — and the branch every capture test exercises (XCTest forces this engine).
+            do {
+                intents = try await engine.triage(
+                    rawText: rawText, context: context, onPartial: partialHandler)
+                if intents.isEmpty {
+                    intents = try await HeuristicEngine().triage(rawText: rawText)
+                }
+            } catch {
+                intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
+            }
         }
         return resolveAndGate(intents)
     }

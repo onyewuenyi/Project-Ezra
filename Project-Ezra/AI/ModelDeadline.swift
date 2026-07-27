@@ -17,6 +17,15 @@
 
 import Foundation
 
+/// Holds the latest streamed partial so a deadline hit can SALVAGE it instead of
+/// discarding work the user was already watching. Grew up in `TodayPlanService`
+/// (plan-shaped); generalized here because capture streams too. MainActor because
+/// every `onPartial` in the app is MainActor; timeout-side readers cross via `await`.
+@MainActor
+final class PartialBox<Value> {
+    var latest: Value?
+}
+
 enum ModelDeadline {
 
     /// A user-facing detail card: the person tapped a button and is watching a spinner,
