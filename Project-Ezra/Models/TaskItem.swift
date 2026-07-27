@@ -497,7 +497,7 @@ final class TaskItem: NSManagedObject {
     /// derivation — retrieval fact lines, plan snapshots, ranking due-proximity,
     /// and importance backfill all read this instead of re-deriving the calendar
     /// math (four independent copies once drifted here).
-    static func daysUntil(_ due: Date, now: Date, calendar: Calendar = .current) -> Int? {
+    nonisolated static func daysUntil(_ due: Date, now: Date, calendar: Calendar = .current) -> Int? {
         calendar.dateComponents(
             [.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: due)
         ).day

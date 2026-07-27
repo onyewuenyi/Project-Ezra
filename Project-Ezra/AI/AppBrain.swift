@@ -134,7 +134,12 @@ final class AppBrain {
         defer { isProcessing = false }
         // Retrieve the slice of the graph most relevant to this capture — the candidate
         // package the model uses for duplicate/child/blocks detection (the only valid ids).
-        let candidates = ContextRetrieval.candidates(matching: rawText, among: openTasks)
+        // Detached: the ranking runs up to 21 sentence-embedding inferences, and they
+        // used to land on the main actor in the window right after the user's pause —
+        // exactly when typing resumes. Pure over value snapshots; results come back here.
+        let candidates = await Task.detached(priority: .userInitiated) {
+            ContextRetrieval.candidates(matching: rawText, among: openTasks)
+        }.value
         let context = TriageContext(
             personalization: CorrectionProfile.instructionLines(learned),
             roster: roster,

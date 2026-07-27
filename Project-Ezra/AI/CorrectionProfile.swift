@@ -123,7 +123,7 @@ enum CorrectionProfile {
 
     /// The same significant-word idiom the blocker matcher uses: lowercase,
     /// alphanumeric word split, stop-words and single characters dropped.
-    static func significantWords(_ text: String) -> Set<String> {
+    nonisolated static func significantWords(_ text: String) -> Set<String> {
         Set(
             text.lowercased()
                 .components(separatedBy: CharacterSet.alphanumerics.inverted)

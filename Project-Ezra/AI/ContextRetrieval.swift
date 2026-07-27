@@ -51,7 +51,11 @@ enum ContextRetrieval {
     /// capped at `maxCandidates`. Rejected pairings are NOT filtered here — retrieval
     /// stays a pure relevance ranking; suppression is the resolver's job
     /// (`IntentResolver.edgeProposals` + `SuppressionStore`), keyed per-proposal.
-    static func candidates(
+    /// `nonisolated` so the whole ranking — including up to 21 sentence-embedding
+    /// inferences — can run off the main actor (`AppBrain.triage` detaches it). The
+    /// function is pure over value snapshots; the only shared state it touches is
+    /// `EmbeddingStore`'s memo, which is lock-guarded for exactly this reason.
+    nonisolated static func candidates(
         matching text: String,
         category: String? = nil,
         among tasks: [OpenTaskSnapshot],
@@ -140,7 +144,7 @@ enum ContextRetrieval {
 
     // MARK: - Components
 
-    private static func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
+    nonisolated private static func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
         guard !a.isEmpty || !b.isEmpty else { return 0 }
         let intersection = a.intersection(b).count
         let union = a.union(b).count
@@ -149,13 +153,13 @@ enum ContextRetrieval {
 
     /// Newer tasks read as more relevant context — a gentle decay so a month-old task
     /// still scores something, but today's work wins ties.
-    private static func recencyScore(_ updatedAt: Date, now: Date) -> Double {
+    nonisolated private static func recencyScore(_ updatedAt: Date, now: Date) -> Double {
         let days = max(0, now.timeIntervalSince(updatedAt) / 86_400)
         return 1.0 / (1.0 + days / 30.0)
     }
 
     /// The compact fact line shown to the model alongside the candidate id.
-    private static func factLine(_ snap: OpenTaskSnapshot, now: Date) -> String {
+    nonisolated private static func factLine(_ snap: OpenTaskSnapshot, now: Date) -> String {
         var parts = [snap.category]
         if let due = snap.dueDate {
             let days = TaskItem.daysUntil(due, now: now) ?? 0

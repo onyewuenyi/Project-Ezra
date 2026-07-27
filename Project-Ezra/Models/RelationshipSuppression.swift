@@ -63,7 +63,7 @@ struct RelationshipSuppression: Hashable, Sendable {
     /// check at the next capture): lowercase, significant characters only, single
     /// spaces. Exact-match after normalization; an embedding-similarity threshold
     /// can be layered later if exact match proves too brittle.
-    static func normalizeTitle(_ text: String) -> String {
+    nonisolated static func normalizeTitle(_ text: String) -> String {
         text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }

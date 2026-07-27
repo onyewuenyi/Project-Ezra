@@ -24,6 +24,23 @@ struct ContextRetrievalTests {
             updatedAt: Date(timeIntervalSince1970: 1_700_000_000 - daysAgo * 86_400))
     }
 
+    @Test("Detached execution produces byte-identical output to the synchronous call")
+    func detachedEqualsSynchronous() async {
+        // The ranking went `nonisolated` so `AppBrain.triage` can run it off the main
+        // actor. The move must be invisible: same input → same output, on any executor.
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tasks = [
+            snap(UUID(), "Renew my passport before the trip", category: "Travel"),
+            snap(UUID(), "Buy groceries for the week"),
+            snap(UUID(), "Call the dentist about the crown"),
+        ]
+        let onMain = ContextRetrieval.candidates(matching: "renew passport", among: tasks, now: now)
+        let detached = await Task.detached {
+            ContextRetrieval.candidates(matching: "renew passport", among: tasks, now: now)
+        }.value
+        #expect(onMain == detached)
+    }
+
     @Test("Ranks a near-duplicate above unrelated tasks")
     func nearDupeRanksTop() {
         let dupID = UUID()

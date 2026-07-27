@@ -64,26 +64,35 @@ final class EmbeddingCache: NSManagedObject {
 
 enum EmbeddingStore {
     /// The current `NLEmbedding` model revision — rows from any other revision are stale.
-    static let revision: Int = NLEmbedding.currentRevision(for: .english)
+    nonisolated static let revision: Int = NLEmbedding.currentRevision(for: .english)
 
     /// The sentence-embedding model, loaded once per process. Nil when unavailable
-    /// (the simulator) → retrieval degrades to lexical scoring.
-    static let sentenceEmbedding = NLEmbedding.sentenceEmbedding(for: .english)
+    /// (the simulator) → retrieval degrades to lexical scoring. `nonisolated(unsafe)`
+    /// because NLEmbedding is not marked Sendable and not documented thread-safe —
+    /// which is exactly why `lock` is held across every `vector(for:)` call.
+    nonisolated(unsafe) static let sentenceEmbedding = NLEmbedding.sentenceEmbedding(for: .english)
+
+    /// One lock for every touch of the mutable statics AND the shared NLEmbedding
+    /// instance. The compute surface went `nonisolated` so retrieval can run off the
+    /// main actor (`AppBrain.triage` detaches it), which makes overlapping calls
+    /// possible — the debounce cancels stale *tasks*, not in-flight computations.
+    nonisolated private static let lock = NSLock()
 
     /// In-process memo: sourceHash → vector. The read-through layer that keeps
     /// `ContextRetrieval` synchronous. Bounded (reset at the cap) so a long session
-    /// can't grow it without limit.
-    private static var memo: [String: [Double]] = [:]
-    private static let memoCap = 2048
+    /// can't grow it without limit. Guarded by `lock`.
+    nonisolated(unsafe) private static var memo: [String: [Double]] = [:]
+    nonisolated private static let memoCap = 2048
     /// Hashes already persisted as rows, so `persistFresh` never re-fetches to check.
-    private static var persistedHashes: Set<String> = []
-    private static var warmedUp = false
+    /// Guarded by `lock`.
+    nonisolated(unsafe) private static var persistedHashes: Set<String> = []
+    nonisolated(unsafe) private static var warmedUp = false
 
     /// The hash of what we'd embed for this text — normalization shared with the
     /// suppression store keeps "what was embedded" stable across punctuation noise.
     /// FNV-1a, NOT `Hasher`: `Hasher` is randomly seeded per process, and this hash
     /// is persisted — it must match across launches or every row reads as stale.
-    static func sourceHash(_ text: String) -> String {
+    nonisolated static func sourceHash(_ text: String) -> String {
         let normalized = RelationshipSuppression.normalizeTitle(text)
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in normalized.utf8 {
@@ -95,16 +104,19 @@ enum EmbeddingStore {
 
     /// Memo-only lookup — never computes. The retrieval budget uses this to tell a
     /// cache hit from a fresh embed.
-    static func cachedVector(for text: String) -> [Double]? {
-        memo[sourceHash(text)]
+    nonisolated static func cachedVector(for text: String) -> [Double]? {
+        lock.withLock { memo[sourceHash(text)] }
     }
 
     /// Compute (and memoize) the vector for `text`. Nil when the model is unavailable
-    /// or declines the string.
-    static func computeVector(for text: String) -> [Double]? {
-        guard let embedding = sentenceEmbedding, let vector = embedding.vector(for: text) else {
-            return nil
-        }
+    /// or declines the string. The lock is deliberately held ACROSS the inference —
+    /// serializing the not-documented-thread-safe NLEmbedding instance is the whole
+    /// point; a main-thread `cachedVector` waits at most one `vector(for:)`.
+    nonisolated static func computeVector(for text: String) -> [Double]? {
+        guard let embedding = sentenceEmbedding else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        guard let vector = embedding.vector(for: text) else { return nil }
         if memo.count >= memoCap { memo.removeAll(keepingCapacity: true) }
         memo[sourceHash(text)] = vector
         return vector
@@ -117,7 +129,7 @@ enum EmbeddingStore {
     /// 0.5 and would have silently pushed unrelated pairs over the relevance floor
     /// while every test stayed green). Do NOT "fix" this to plain cosine without
     /// re-tuning the retrieval blend weights and `relevanceFloor` together.
-    static func similarity(_ a: [Double], _ b: [Double]) -> Double {
+    nonisolated static func similarity(_ a: [Double], _ b: [Double]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return 0 }
         var dot = 0.0
         var magA = 0.0
@@ -145,14 +157,17 @@ enum EmbeddingStore {
     /// repeat calls free, so this and the composer's snapshot-shaped call coexist —
     /// whichever runs first does the work.
     static func warmUp(in context: NSManagedObjectContext) {
-        guard !warmedUp else { return }
+        guard !lock.withLock({ warmedUp }) else { return }
         let open = TaskItem.fetchAll(in: context).filter { !$0.status.isResolved }
         warmUp(openTaskIDs: Set(open.compactMap(\.uuid)), in: context)
     }
 
     static func warmUp(openTaskIDs: Set<UUID>, in context: NSManagedObjectContext) {
-        guard !warmedUp else { return }
-        warmedUp = true
+        guard
+            lock.withLock({
+                if warmedUp { return false }; warmedUp = true; return true
+            })
+        else { return }
         let request = NSFetchRequest<EmbeddingCache>(entityName: "EmbeddingCache")
         let rows = (try? context.fetch(request)) ?? []
         for row in rows {
@@ -161,8 +176,12 @@ enum EmbeddingStore {
                 context.delete(row)
                 continue
             }
-            memo[row.sourceHash] = decode(data)
-            persistedHashes.insert(row.sourceHash)
+            let hash = row.sourceHash
+            let vector = decode(data)
+            lock.withLock {
+                memo[hash] = vector
+                persistedHashes.insert(hash)
+            }
         }
     }
 
@@ -173,22 +192,26 @@ enum EmbeddingStore {
     static func persistFresh(openTasks: [OpenTaskSnapshot], in context: NSManagedObjectContext) {
         for snap in openTasks {
             let hash = sourceHash(snap.title)
-            guard let vector = memo[hash], !persistedHashes.contains(hash) else { continue }
+            let fresh: [Double]? = lock.withLock {
+                guard let vector = memo[hash], !persistedHashes.contains(hash) else { return nil }
+                persistedHashes.insert(hash)
+                return vector
+            }
+            guard let fresh else { continue }
             context.insert(
                 EmbeddingCache(
-                    taskID: snap.id, vector: vector, sourceHash: hash, revision: revision,
+                    taskID: snap.id, vector: fresh, sourceHash: hash, revision: revision,
                     in: context))
-            persistedHashes.insert(hash)
         }
     }
 
     // MARK: - Float32 codec (vectors stored compactly, computed as Double)
 
-    static func encode(_ vector: [Double]) -> Data {
+    nonisolated static func encode(_ vector: [Double]) -> Data {
         vector.map(Float.init).withUnsafeBufferPointer { Data(buffer: $0) }
     }
 
-    static func decode(_ data: Data) -> [Double] {
+    nonisolated static func decode(_ data: Data) -> [Double] {
         data.withUnsafeBytes { raw in
             raw.bindMemory(to: Float.self).map(Double.init)
         }
@@ -196,8 +219,10 @@ enum EmbeddingStore {
 
     /// Test seam: drop all in-process state (memo + warm-up flag).
     static func resetForTesting() {
-        memo.removeAll()
-        persistedHashes.removeAll()
-        warmedUp = false
+        lock.withLock {
+            memo.removeAll()
+            persistedHashes.removeAll()
+            warmedUp = false
+        }
     }
 }
