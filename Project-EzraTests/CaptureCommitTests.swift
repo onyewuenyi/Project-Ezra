@@ -219,6 +219,111 @@ struct CaptureCommitTests {
         #expect(rows.count == 1)
     }
 
+    @Test("A rejected duplicate is logged, and its undo lifts BOTH suppression forms")
+    func rejectionIsLoggedAndReversible() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        let existing = TaskItem(title: "Renew passport", status: .todo, in: context)
+        context.insert(existing)
+        try context.save()
+
+        let dup = EdgeProposal(
+            kind: .duplicateOf, targetID: existing.uuid!, targetTitle: "Renew passport",
+            confidence: 0.9, decision: .rejected)
+        let created = brain.commit(
+            [draft("Renew passport again", edges: [dup])], rawCapture: "", into: context)
+
+        // The 180-day veto is now visible: one entry, the human's (not the AI's, or one
+        // tap would score twice in acceptanceRate), naming the task it was kept apart from.
+        let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
+        let suppressed = try #require(entries.first { $0.action == "suppressed" })
+        #expect(suppressed.initiatedBy == .human)
+        #expect(suppressed.isReversible)
+        #expect(suppressed.summary.contains("Renew passport"))
+        // …and it stays out of the AI trust number entirely — not in the numerator when
+        // kept, not in the denominator when undone. One tap must not score twice.
+        #expect(Metrics.acceptanceRate(entries: entries) == 1.0)
+
+        let ids = Set([existing.uuid!, created[0].uuid!])
+        #expect(!SuppressionStore.load(in: context, existingTaskIDs: ids).isEmpty)
+
+        ChangeLogUndo.revert(suppressed, in: context)
+        suppressed.undone = true
+        // Undo-completeness: the capture form AND the pair form are both gone, so the
+        // next capture can propose the merge again from either direction.
+        let after = SuppressionStore.load(in: context, existingTaskIDs: ids)
+        #expect(
+            !after.contains {
+                $0.suppresses(
+                    kind: .duplicateMerge, targetID: existing.uuid!,
+                    normalizedTitle: RelationshipSuppression.normalizeTitle("Renew passport again"))
+            })
+        #expect(
+            !after.contains { $0.suppressesPair(kind: .duplicateMerge, created[0].uuid!, existing.uuid!) })
+        #expect(
+            !after.contains { $0.suppressesPair(kind: .duplicateMerge, existing.uuid!, created[0].uuid!) })
+        // Undoing a HUMAN rejection must not read as rejecting the AI: the rate is
+        // unmoved because the entry was never in the AI set to begin with.
+        #expect(Metrics.acceptanceRate(entries: entries) == 1.0)
+    }
+
+    @Test("A rejected parent link is logged and reversible the same way")
+    func rejectedParentIsLoggedAndReversible() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        let parent = TaskItem(title: "Plan the trip", status: .todo, in: context)
+        context.insert(parent)
+        try context.save()
+
+        let child = EdgeProposal(
+            kind: .childOf, targetID: parent.uuid!, targetTitle: "Plan the trip",
+            confidence: 0.9, decision: .rejected)
+        let created = brain.commit([draft("Book flights", edges: [child])], rawCapture: "", into: context)
+        #expect(created.first?.parentTaskID == nil)
+
+        let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
+        let suppressed = try #require(entries.first { $0.action == "suppressed" })
+        #expect(suppressed.fieldChanged == RelationshipSuppression.SuppressionKind.parentLink.rawValue)
+
+        let ids = Set([parent.uuid!, created[0].uuid!])
+        #expect(!SuppressionStore.load(in: context, existingTaskIDs: ids).isEmpty)
+        ChangeLogUndo.revert(suppressed, in: context)
+        // Parent suppression is directional, so both forms are keyed child→parent.
+        let after = SuppressionStore.load(in: context, existingTaskIDs: ids)
+        #expect(
+            !after.contains {
+                $0.suppresses(
+                    kind: .parentLink, targetID: parent.uuid!,
+                    normalizedTitle: RelationshipSuppression.normalizeTitle("Book flights"))
+            })
+        #expect(!after.contains { $0.suppressesPair(kind: .parentLink, created[0].uuid!, parent.uuid!) })
+    }
+
+    @Test("Undoing one rejection leaves an unrelated rejection's rows standing")
+    func undoRejectionIsScopedToItsOwnRows() throws {
+        let context = TestStore.makeContext()
+        let keep = TaskItem(title: "Keep me", status: .todo, in: context)
+        context.insert(keep)
+        try context.save()
+
+        SuppressionStore.recordRejectedDuplicate(
+            draftTitle: "lifted", createdID: nil, targetID: keep.uuid!, in: context)
+        SuppressionStore.recordRejectedDuplicate(
+            draftTitle: "untouched", createdID: nil, targetID: keep.uuid!, in: context)
+
+        SuppressionStore.undoRejection(
+            SuppressionUndoPayload(
+                kind: RelationshipSuppression.SuppressionKind.duplicateMerge.rawValue,
+                targetID: keep.uuid!,
+                normalizedTitle: RelationshipSuppression.normalizeTitle("lifted"),
+                createdID: nil),
+            in: context)
+
+        let after = SuppressionStore.load(in: context, existingTaskIDs: [keep.uuid!])
+        #expect(after.count == 1)
+        #expect(after.first?.normalizedTitle == RelationshipSuppression.normalizeTitle("untouched"))
+    }
+
     @Test("Confirm clears the low-confidence Needs Decision; a judgment call keeps its flag")
     func confirmClearsLowConfidenceDecisionFlag() throws {
         let context = TestStore.makeContext()

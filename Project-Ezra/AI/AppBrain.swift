@@ -536,15 +536,60 @@ final class AppBrain {
                     SuppressionStore.recordRejectedDuplicate(
                         draftTitle: suppressionKeyTitle(for: draft), createdID: task.uuid,
                         targetID: proposal.targetID, in: context)
+                    logSuppression(
+                        kind: .duplicateMerge, draft: draft, task: task, proposal: proposal,
+                        summary:
+                            "Won't suggest merging “\(task.title)” into “\(proposal.targetTitle)” again",
+                        in: context)
                 case (.childOf, .rejected):
                     SuppressionStore.recordRejectedParent(
                         draftTitle: suppressionKeyTitle(for: draft), createdID: task.uuid,
                         parentID: proposal.targetID, in: context)
+                    logSuppression(
+                        kind: .parentLink, draft: draft, task: task, proposal: proposal,
+                        summary:
+                            "Won't suggest “\(task.title)” as a step of “\(proposal.targetTitle)” again",
+                        in: context)
                 default:
                     continue  // undecided / non-open → nothing
                 }
             }
         }
+    }
+
+    /// Record a rejection in the trail. A suppression is a **180-day veto the user cast
+    /// in one tap on a chip**, and until now it was written invisibly: no entry, no way
+    /// to see it, no way to lift it. That fails "every AI decision is explainable" from
+    /// the wrong side — it's the HUMAN's decision that was unexplainable, and the AI's
+    /// silence about it looked like the suggestion simply never recurring.
+    ///
+    /// `initiatedBy` is `.human` deliberately: the rejection is the user's, so it must
+    /// not land in the AI-only "AI handled N" count or `Metrics.acceptanceRate` (where
+    /// it would score as the AI acting and the user consenting — a doubled signal from
+    /// one tap). The payload freezes exactly which rows were written so the arm can
+    /// delete all of them.
+    private func logSuppression(
+        kind: RelationshipSuppression.SuppressionKind, draft: TaskDraft, task: TaskItem,
+        proposal: EdgeProposal, summary: String, in context: NSManagedObjectContext
+    ) {
+        let payload = SuppressionUndoPayload(
+            kind: kind.rawValue,
+            targetID: proposal.targetID,
+            normalizedTitle: RelationshipSuppression.normalizeTitle(suppressionKeyTitle(for: draft)),
+            createdID: task.uuid)
+        context.insert(
+            ChangeLogEntry(
+                summary: summary,
+                detail: "You said no at capture. Undo lets the suggestion come back.",
+                action: "suppressed",
+                fieldChanged: kind.rawValue,
+                oldValue: payload.encoded,
+                newValue: proposal.targetID.uuidString,
+                initiatedBy: .human,
+                isReversible: true,
+                taskTitle: task.title,
+                taskUUID: task.uuid,
+                actorID: UserProfile.currentMemberID(in: context), in: context))
     }
 
     /// The stable title a rejection is keyed on: the resolver builds its capture-form

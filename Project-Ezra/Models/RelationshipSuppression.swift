@@ -209,7 +209,57 @@ enum SuppressionStore {
         }
     }
 
+    /// Delete every row a single rejection wrote — the capture form AND, when the
+    /// rejection also created a task, the pair form. This is the undo-completeness rule
+    /// applied to suppression: the "suppressed" change-log entry's arm must remove ALL
+    /// of it, or undoing a rejection would leave the pair form standing and the
+    /// suggestion would still never come back (a veto the user believes they lifted).
+    static func undoRejection(_ payload: SuppressionUndoPayload, in context: NSManagedObjectContext) {
+        guard let kind = RelationshipSuppression.SuppressionKind(rawValue: payload.kind) else { return }
+        let pairKey = payload.createdID.map { createdID in
+            switch kind {
+            case .duplicateMerge: RelationshipSuppression.symmetricKey(createdID, payload.targetID)
+            case .parentLink:
+                RelationshipSuppression.directionalKey(child: createdID, parent: payload.targetID)
+            }
+        }
+        let request = NSFetchRequest<SuppressionRecord>(entityName: "SuppressionRecord")
+        for row in (try? context.fetch(request)) ?? [] where row.kindRaw == payload.kind {
+            let isCaptureForm =
+                row.targetID == payload.targetID && row.normalizedTitle == payload.normalizedTitle
+            let isPairForm = pairKey != nil && row.pairKey == pairKey
+            if isCaptureForm || isPairForm { context.delete(row) }
+        }
+    }
+
     private static func pairMembers(of key: String) -> [UUID] {
         key.split(separator: ":").compactMap { UUID(uuidString: String($0)) }
+    }
+}
+
+// MARK: - Undo payload (the trail entry's memory of what it wrote)
+
+/// The frozen description of the suppression rows ONE rejection wrote, carried in the
+/// `oldValue` of its "suppressed" change-log entry so Undo can find and delete exactly
+/// those rows. Mirrors `MergedTaskSnapshot`'s shape — a small `Codable` blob rather than
+/// a pile of stringly-typed fields spread across `fieldChanged`/`oldValue`/`newValue`.
+struct SuppressionUndoPayload: Codable {
+    /// `RelationshipSuppression.SuppressionKind.rawValue`.
+    var kind: String
+    var targetID: UUID
+    /// The normalized DRAFT title the capture-form row is keyed on (see the file header
+    /// for why the key is the title and not the draft id).
+    var normalizedTitle: String
+    /// The task the rejected draft became — present iff a pair-form row was also
+    /// written. Nil when the draft produced no task.
+    var createdID: UUID?
+
+    var encoded: String? {
+        (try? JSONEncoder().encode(self)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    static func decode(_ raw: String?) -> SuppressionUndoPayload? {
+        guard let raw, let data = raw.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SuppressionUndoPayload.self, from: data)
     }
 }

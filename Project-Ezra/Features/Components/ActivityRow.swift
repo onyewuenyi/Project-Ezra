@@ -25,6 +25,7 @@ enum ActivityVocab {
         case "unblocked": return "lock.open.fill"
         case "killed": return "xmark"
         case "edited": return "pencil"
+        case "suppressed": return "hand.raised.slash"
         default: return "sparkle"
         }
     }
@@ -32,7 +33,8 @@ enum ActivityVocab {
     static func tint(_ action: String?) -> Color {
         switch action {
         case "completed": return Palette.success
-        case "killed", "archived": return Palette.mutedText
+        // A rejection is a quiet "no", not an event — it reads with the receding verbs.
+        case "killed", "archived", "suppressed": return Palette.mutedText
         case "assigned", "linked", "decided", "unblocked": return Palette.accentFlat
         default: return Palette.secondaryText
         }
@@ -50,6 +52,7 @@ enum ActivityVocab {
         case "unblocked": return "Unblocked"
         case "killed": return "Canceled"
         case "edited": return "Updated"
+        case "suppressed": return "Kept apart"
         default: return "Updated"
         }
     }

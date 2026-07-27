@@ -373,7 +373,10 @@ enum HouseholdEngine {
     private static func isCoordination(action: String?, initiatedBy: ChangeInitiator) -> Bool {
         switch action {
         case "assigned", "completed", "unblocked": return true
-        case "filed", "confirmed": return false
+        // "suppressed" is human-initiated but solo: rejecting a merge suggestion at your
+        // own capture coordinates nothing with anybody, and the default arm below would
+        // otherwise sweep it into the household feed on the strength of `.human` alone.
+        case "filed", "confirmed", "suppressed": return false
         default: return initiatedBy == .human
         }
     }

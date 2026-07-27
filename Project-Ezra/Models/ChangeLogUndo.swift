@@ -33,6 +33,16 @@ enum ChangeLogUndo {
             revertCapturePrune(entry, in: context)
             return
         }
+        // A rejected merge/parent suggestion. Resolved before the task guard because the
+        // suppression lives in its OWN store, not on either task — undoing it must work
+        // even if the created task has since been deleted, and there is no task field to
+        // restore. Undo-completeness: `undoRejection` removes the capture form AND the
+        // pair form, or the suggestion would stay vetoed from the other direction.
+        if entry.action == "suppressed" {
+            guard let payload = SuppressionUndoPayload.decode(entry.oldValue) else { return }
+            SuppressionStore.undoRejection(payload, in: context)
+            return
+        }
         guard let task = linkedTask(for: entry, in: context) else { return }
         switch entry.action {
         case "linked":
