@@ -356,6 +356,40 @@ struct CaptureCommitTests {
         #expect(after.first?.normalizedTitle == RelationshipSuppression.normalizeTitle("untouched"))
     }
 
+    // MARK: - Owner resolution (the chip must not promise what commit can't deliver)
+
+    @Test("An owner name absent from the roster commits UNOWNED — the no-mint policy")
+    func unmatchedOwnerNameCommitsUnowned() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        var d = draft("Book the venue")
+        d.ownerName = "Maya"  // nobody by that name exists
+        let created = brain.commit([d], rawCapture: "", into: context)
+
+        // No phantom member is conjured — a misheard name must never become a person
+        // who can accrue category ownership and be proposed for future work.
+        let members = try context.fetch(NSFetchRequest<FamilyMember>(entityName: "FamilyMember"))
+        #expect(!members.contains { $0.name.caseInsensitiveCompare("Maya") == .orderedSame })
+        // …so the task lands shared. This is correct, and it is exactly why the confirm
+        // card must say "not in household" rather than show a confident owner chip.
+        #expect(created[0].ownerID == nil)
+    }
+
+    @Test("Adding the name to the roster first makes commit resolve it — the card's escape hatch")
+    func addedOwnerNameResolvesAtCommit() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        // What the chip's "Add Maya to household…" does before the user taps Add tasks.
+        let maya = FamilyMember(name: "Maya", in: context)
+        context.insert(maya)
+        try context.save()
+
+        var d = draft("Book the venue")
+        d.ownerName = "maya"  // case-insensitive, as `resolveOwners` matches
+        let created = brain.commit([d], rawCapture: "", into: context)
+        #expect(created[0].ownerID == maya.uuid)
+    }
+
     @Test("Confirm clears the low-confidence Needs Decision; a judgment call keeps its flag")
     func confirmClearsLowConfidenceDecisionFlag() throws {
         let context = TestStore.makeContext()

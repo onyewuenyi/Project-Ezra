@@ -55,6 +55,31 @@ struct ComposerView: View {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    /// Every live roster name, YOU included — what `AppBrain.resolveOwners` matches a
+    /// draft's `ownerName` against at commit. `ownerOptions` can't serve here: it drops
+    /// the current user, so a draft owned by your own named member would render as
+    /// "not in household" on a card that commit resolves perfectly well.
+    private var rosterNames: [String] {
+        familyMembers.filter { !$0.isRemoved }.map(\.name)
+    }
+
+    /// Grow the roster from an unresolvable owner chip, so commit can then resolve the
+    /// name the card is already showing. This is the "explicit human step" the no-mint
+    /// policy in `AppBrain.resolveOwners` points at — a real tap, on a name the user is
+    /// looking at, never an inference. Deliberately no sheet: the name is already known,
+    /// and everything else about a member (relationship, photo) is editable in Household.
+    private func addToRoster(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+            !familyMembers.contains(where: {
+                !$0.isRemoved && $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+            })
+        else { return }
+        let member = FamilyMember(name: trimmed, in: context)
+        member.household = Household.current(in: context)
+        context.saveChanges()
+    }
+
     @State private var text = ""
     @State private var drafts: [TaskDraft] = []
     /// The cards the user deleted this session. The merge filters re-proposals of
@@ -116,6 +141,8 @@ struct ComposerView: View {
                         ConfirmCreationList(
                             drafts: $drafts,
                             ownerOptions: ownerOptions,
+                            rosterNames: rosterNames,
+                            onAddToRoster: { addToRoster($0) },
                             onRemove: { removedDrafts.record($0) }
                         )
                         .padding(.top, Spacing.xxs)

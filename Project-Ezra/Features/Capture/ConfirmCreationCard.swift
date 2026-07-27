@@ -25,6 +25,15 @@ struct ConfirmCreationList: View {
     /// card-to-card, which at N cards meant 2N context observers torn down and
     /// rebuilt with every identity change.
     var ownerOptions: [String] = []
+    /// EVERY live roster name, the current user included — the set `resolveOwners`
+    /// actually matches against at commit. Distinct from `ownerOptions` (which excludes
+    /// you, because "You" is its own menu entry): resolvability must be judged against
+    /// the real roster, or a task owned by your own named member would read unresolvable.
+    var rosterNames: [String] = []
+    /// Add a name to the household roster. The card can't do it itself — the composer
+    /// owns the context and the household — and this is deliberately the ONLY way a
+    /// name becomes a member from here: an explicit human tap, never a silent mint.
+    var onAddToRoster: ((String) -> Void)? = nil
     /// Called with the removed draft BEFORE it leaves the array, so the composer can
     /// record it — a removed card must stay removed across re-parses (`DraftMerge`
     /// filters re-proposals against the session's `RemovedDraftSet`).
@@ -37,7 +46,8 @@ struct ConfirmCreationList: View {
         LazyVStack(spacing: Spacing.sm) {
             ForEach($drafts) { $draft in
                 ConfirmCreationCard(
-                    draft: $draft, ownerOptions: ownerOptions, onRemove: { remove(draft) }
+                    draft: $draft, ownerOptions: ownerOptions, rosterNames: rosterNames,
+                    onAddToRoster: onAddToRoster, onRemove: { remove(draft) }
                 )
                 .transition(Motion.cardEntry)
             }
@@ -60,6 +70,15 @@ struct ConfirmCreationCard: View {
     /// Names the owner chip may delegate to (never includes "You" — that's the
     /// explicit first entry). Passed as values from the composer's own fetches.
     var ownerOptions: [String] = []
+    /// EVERY live roster name, the current user included — the set `resolveOwners`
+    /// actually matches against at commit. Distinct from `ownerOptions` (which excludes
+    /// you, because "You" is its own menu entry): resolvability must be judged against
+    /// the real roster, or a task owned by your own named member would read unresolvable.
+    var rosterNames: [String] = []
+    /// Add a name to the household roster. The card can't do it itself — the composer
+    /// owns the context and the household — and this is deliberately the ONLY way a
+    /// name becomes a member from here: an explicit human tap, never a silent mint.
+    var onAddToRoster: ((String) -> Void)? = nil
     let onRemove: () -> Void
 
     /// The due chip's three shortcuts cover the common cases; anything else needs a real
@@ -393,8 +412,31 @@ struct ConfirmCreationCard: View {
     //
     // No directional arrow yet. `→ Aisha` reads as transmission, and nothing is
     // transmitted until sync — it ships with delivery, not before.
+    /// The name on the chip that `resolveOwners` will NOT be able to resolve at commit.
+    ///
+    /// The no-mint policy is right — a phantom `FamilyMember` conjured from a misheard
+    /// name becomes an *existing* person who can accrue category ownership and be
+    /// proposed as an owner for future work. But the card said "Maya" in confident type
+    /// and commit then produced an unowned task, silently. That's the policy leaking as
+    /// a broken promise. Say so on the chip instead, while it is still one tap to fix.
+    private var unresolvableOwner: String? {
+        guard let name = draft.ownerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !name.isEmpty,
+            // Same comparison `AppBrain.resolveOwners` uses, so the chip and the commit
+            // can never disagree about what "resolvable" means.
+            !rosterNames.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame })
+        else { return nil }
+        return name
+    }
+
     private var ownerChip: some View {
         Menu {
+            if let missing = unresolvableOwner, let onAddToRoster {
+                Button("Add \(missing) to household…", systemImage: "person.badge.plus") {
+                    onAddToRoster(missing)
+                }
+                Divider()
+            }
             Button("You") {
                 draft.ownerName = nil
                 draft.markEdited(.ownerName)
@@ -410,16 +452,39 @@ struct ConfirmCreationCard: View {
             }
         } label: {
             MetadataChip(density: draft.ownerName == nil ? .compact : .standard) {
-                if draft.ownerReason != nil { assumedMark }
-                OwnerAvatarBadge(
-                    name: draft.ownerName ?? "Me", isMe: draft.ownerName == nil, size: 16)
-                Text(draft.ownerName ?? "You")
-                    .font(.metadata.weight(.medium))
+                if draft.ownerReason != nil, unresolvableOwner == nil { assumedMark }
+                if let missing = unresolvableOwner {
+                    Image(systemName: "person.crop.circle.badge.questionmark")
+                        .font(.system(size: IconSize.caption))
+                    Text("\(missing) · not in household")
+                        .font(.metadata.weight(.medium))
+                        .lineLimit(1)
+                } else {
+                    OwnerAvatarBadge(
+                        name: draft.ownerName ?? "Me", isMe: draft.ownerName == nil, size: 16)
+                    Text(draft.ownerName ?? "You")
+                        .font(.metadata.weight(.medium))
+                }
             }
-            .foregroundStyle(draft.ownerName == nil ? Palette.mutedText : Palette.secondaryText)
+            .foregroundStyle(ownerChipTint)
         }
-        .accessibilityLabel(
-            "Owner, \(draft.ownerName ?? "you")\(draft.ownerReason != nil ? ", assumed" : "")")
+        .accessibilityLabel(ownerAccessibilityLabel)
+    }
+
+    /// `warning` is the literal-warning token (the only other user is Settings' store-reset
+    /// notice) — deliberately NOT one of the three attention hues, which mean urgency,
+    /// in-progress, and overdue on a *task*. This is a warning about the card itself.
+    private var ownerChipTint: Color {
+        if unresolvableOwner != nil { return Palette.warning }
+        return draft.ownerName == nil ? Palette.mutedText : Palette.secondaryText
+    }
+
+    private var ownerAccessibilityLabel: String {
+        if let missing = unresolvableOwner {
+            return
+                "Owner, \(missing), not in your household — this task will be shared unless you add them"
+        }
+        return "Owner, \(draft.ownerName ?? "you")\(draft.ownerReason != nil ? ", assumed" : "")"
     }
 
     /// Why the AI chose this owner, in one line. Only ever present for a real
