@@ -91,8 +91,9 @@ struct ComposerView: View {
     @State private var usedDictation = false
     /// The text already present when dictation started; live transcript appends to it.
     @State private var dictationBase = ""
-    /// Bumped on every transcript change so a stale silence-timeout can no-op itself.
-    @State private var silenceGeneration = 0
+    /// The single silence-timeout in flight; cancelled and replaced on every
+    /// transcript delta, cancelled outright on stop/disappear.
+    @State private var silenceTask: Task<Void, Never>?
     /// Bumped on every text change; an in-flight triage that comes back stale drops
     /// its result instead of clobbering fresher candidates.
     @State private var triageGeneration = 0
@@ -185,9 +186,19 @@ struct ComposerView: View {
             }
             .onChange(of: speech.state) { _, state in
                 if state == .listening { scheduleSilenceStop() }
+                // Voice and keyboard are one channel at a time: focus drops while the
+                // mic is live (a retained keyboard could still type into the field the
+                // transcript is about to rewrite) and returns when dictation ends, so
+                // the hand-off back to typing is seamless.
+                if speech.isActive {
+                    focused = false
+                } else if state == .idle {
+                    focused = true
+                }
             }
             .onDisappear {
                 speech.stop()
+                silenceTask?.cancel()
                 triageTask?.cancel()
                 // The backstop that makes this whole phase worth having: a swipe-down,
                 // a phone call, anything that tears the sheet down mid-thought leaves
@@ -538,6 +549,12 @@ struct ComposerView: View {
                 .foregroundStyle(Palette.primaryText)
                 .scrollContentBackground(.hidden)
                 .padding(Spacing.md)
+                // While the mic owns the field, the keyboard must not: every transcript
+                // tick rewrites the whole text from `dictationBase + transcript`, so a
+                // manual edit made mid-dictation was silently clobbered a beat later.
+                // The field must not LOOK editable while it isn't — hit-testing off,
+                // and the state change below drops keyboard focus.
+                .allowsHitTesting(!speech.isActive)
         }
     }
 
@@ -591,7 +608,7 @@ struct ComposerView: View {
                 .metadataStyle()
                 .transition(.opacity)
         case .listening:
-            Text("Listening — pause and it'll stop on its own.")
+            Text("Listening — pause to finish, or tap the mic to edit by hand.")
                 .font(.metadata)
                 .foregroundStyle(Palette.accentFlat)
                 .transition(.opacity)
@@ -616,6 +633,7 @@ struct ComposerView: View {
 
     private func toggleDictation() {
         if speech.isActive {
+            silenceTask?.cancel()
             speech.stop()
         } else {
             // Append live transcript after existing text, with a separating space.
@@ -625,15 +643,21 @@ struct ComposerView: View {
         }
     }
 
-    /// Auto-stop after ~2.5s of no new transcript, so the user doesn't have to.
+    /// How long a transcript silence runs before dictation stops itself. Generous on
+    /// purpose: the product's core scenario is a RAMBLE — an overloaded person thinking
+    /// out loud — and thinking pauses routinely pass 2.5s, which is where the old
+    /// window sat; it cut people off mid-thought and the tail of the ramble was gone.
+    private static let silenceStopSeconds: Double = 5
+
+    /// Auto-stop after a stretch of no new transcript, so the user doesn't have to.
+    /// ONE cancellable handle, cancel-and-replace per delta — the old shape spawned an
+    /// uncancelled sleeping Task per transcript tick, unbounded by design.
     private func scheduleSilenceStop() {
-        silenceGeneration += 1
-        let generation = silenceGeneration
-        Task {
-            try? await Task.sleep(for: .seconds(2.5))
-            if generation == silenceGeneration, speech.state == .listening {
-                speech.stop()
-            }
+        silenceTask?.cancel()
+        silenceTask = Task {
+            try? await Task.sleep(for: .seconds(Self.silenceStopSeconds))
+            guard !Task.isCancelled, speech.state == .listening else { return }
+            speech.stop()
         }
     }
 
