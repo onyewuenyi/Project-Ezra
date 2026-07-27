@@ -157,6 +157,33 @@ struct RelationshipTests {
         #expect(Relationship.firstViolation(in: [.blocks(taskID: other)], owner: id) == nil)
     }
 
+    @Test("The static derivations match the instance accessors on arbitrary edge lists")
+    func staticDerivationsMatchInstanceAccessors() {
+        // The statics exist so a bulk pass can decode once and derive many views;
+        // they must stay behaviorally identical to the accessors they back.
+        var rng = SystemRandomNumberGenerator()
+        let open = TaskItem(title: "open", status: .todo)
+        let resolved = TaskItem(title: "done", status: .done)
+        let parent = TaskItem(title: "umbrella", status: .todo)
+        let all = [open, resolved, parent]
+
+        for _ in 0..<20 {
+            let task = TaskItem(title: "subject", status: .todo)
+            if Bool.random(using: &rng) { task.addTaskBlocker(open.uuid!, among: all + [task]) }
+            if Bool.random(using: &rng) { task.addTaskBlocker(resolved.uuid!, among: all + [task]) }
+            if Bool.random(using: &rng) { task.addExternalBlocker("a wait", among: [task]) }
+            if Bool.random(using: &rng) { task.linkParent(parent.uuid!) }
+
+            let rels = task.relationships
+            let openIDs = Set((all + [task]).filter { !$0.status.isResolved }.compactMap(\.uuid))
+            #expect(TaskItem.blockers(from: rels) == task.blockers)
+            #expect(TaskItem.parentTaskID(from: rels) == task.parentTaskID)
+            #expect(
+                TaskItem.activeBlockers(from: rels, openIDs: openIDs)
+                    == task.activeBlockers(among: all + [task]))
+        }
+    }
+
     @Test("The versioned envelope round-trips")
     func envelopeRoundTrip() throws {
         let rels = [Relationship.blocks(taskID: UUID()), Relationship.externalWait("later")]

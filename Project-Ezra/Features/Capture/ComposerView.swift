@@ -252,13 +252,17 @@ struct ComposerView: View {
     /// ("should anything already open wait on this new task?").
     private var openTaskSnapshots: [OpenTaskSnapshot] {
         let open = allTasks.filter { !$0.status.isResolved }
+        // Both hoisted out of the loop: the unresolved-id Set used to be rebuilt inside
+        // activeBlockers PER TASK (an O(N²) pass on the main thread, per parse), and
+        // each task's relationships blob was decoded twice (blockers + parent). One
+        // Set, one decode per task, every view derived from it.
+        let openIDs = Set(open.compactMap(\.uuid))
         let titlesByID = Dictionary(
             uniqueKeysWithValues: open.compactMap { task in task.uuid.map { ($0, task.title) } })
         return open.compactMap { task in
             guard let id = task.uuid else { return nil }
-            // Derive the active blockers ONCE and reuse for both the notes and isBlocked
-            // (this used to call activeBlockers + hasActiveBlockers, decoding twice).
-            let active = task.activeBlockers(among: open)
+            let rels = task.relationships
+            let active = TaskItem.activeBlockers(from: rels, openIDs: openIDs)
             return OpenTaskSnapshot(
                 id: id,
                 title: task.title,
@@ -267,7 +271,7 @@ struct ComposerView: View {
                 updatedAt: task.updatedAt,
                 dueDate: task.dueDate,
                 isBlocked: !active.isEmpty,
-                parentTitle: task.parentTaskID.flatMap { titlesByID[$0] }
+                parentTitle: TaskItem.parentTaskID(from: rels).flatMap { titlesByID[$0] }
             )
         }
     }

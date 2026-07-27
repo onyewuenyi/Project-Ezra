@@ -617,10 +617,11 @@ extension TaskItem {
         }
     }
 
-    /// Everything this task is waiting on — a READ-ONLY derived view over the
-    /// `.blocks` edges. `Blocker` survives as the UI value type; each derived
-    /// blocker reuses its edge's `id`, so `removeBlocker(_ id:)` still lands.
-    var blockers: [Blocker] {
+    /// Derive the Blocker views from an ALREADY-DECODED edge list. The statics exist
+    /// so a bulk pass (the composer's open-set snapshot) can decode each task's blob
+    /// once and derive every view from it, instead of paying one decode per accessor
+    /// per task; the instance accessors delegate here, so there is one derivation.
+    static func blockers(from relationships: [Relationship]) -> [Blocker] {
         relationships
             .filter { $0.kind == .blocks }
             .map { rel in
@@ -630,12 +631,28 @@ extension TaskItem {
             }
     }
 
+    static func parentTaskID(from relationships: [Relationship]) -> UUID? {
+        relationships.first { $0.kind == .parent }?.targetID
+    }
+
+    static func activeBlockers(from relationships: [Relationship], openIDs: Set<UUID>) -> [Blocker] {
+        blockers(from: relationships).filter { blocker in
+            switch blocker.kind {
+            case .external: return true
+            case .task: return blocker.taskID.map(openIDs.contains) ?? false
+            }
+        }
+    }
+
+    /// Everything this task is waiting on — a READ-ONLY derived view over the
+    /// `.blocks` edges. `Blocker` survives as the UI value type; each derived
+    /// blocker reuses its edge's `id`, so `removeBlocker(_ id:)` still lands.
+    var blockers: [Blocker] { Self.blockers(from: relationships) }
+
     /// The task this one is a step under, if any — the first `.parent` edge's
     /// target. Read-only (Split-Into-Subtasks plumbing; capture child-linking is
     /// the only writer, via a mutation helper).
-    var parentTaskID: UUID? {
-        relationships.first { $0.kind == .parent }?.targetID
-    }
+    var parentTaskID: UUID? { Self.parentTaskID(from: relationships) }
 
     /// The graph edges only. Chains and the cycle guard are built from tracked
     /// dependencies; an `.external` blocker is real but has no edge to walk.
@@ -649,12 +666,7 @@ extension TaskItem {
     /// don't count here.
     func activeBlockers(among tasks: [TaskItem]) -> [Blocker] {
         let openIDs = Set(tasks.filter { !$0.status.isResolved }.compactMap(\.uuid))
-        return blockers.filter { blocker in
-            switch blocker.kind {
-            case .external: return true
-            case .task: return blocker.taskID.map(openIDs.contains) ?? false
-            }
-        }
+        return Self.activeBlockers(from: relationships, openIDs: openIDs)
     }
 
     /// True when at least one blocker still stands — the single definition of Blocked.
