@@ -193,7 +193,7 @@ final class AppBrain {
             // can't pollute the deadline-tuning evidence.
             let started = Date()
             let outcome = await CaptureTriageRace.run(
-                deadline: ModelDeadline.cardSeconds, onPartial: partialHandler
+                deadline: ModelDeadline.captureSeconds, onPartial: partialHandler
             ) { tee in
                 try await self.engine.triage(rawText: rawText, context: context, onPartial: tee)
             }

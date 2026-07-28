@@ -139,6 +139,7 @@ struct RootTabView: View {
                 UserProfile.bootstrapIdentity(in: context)
                 await seedIfRequested()
             }
+            await runCaptureDiagnosticsIfRequested()
         }
     }
 
@@ -240,6 +241,51 @@ struct RootTabView: View {
         context.saveChanges()
         hasOnboarded = true
         showOnboarding = false
+    }
+
+    /// Verification seam for the ONE thing only real hardware can answer: how the
+    /// capture pipeline behaves against a live on-device model.
+    ///
+    /// `-CaptureDiagnostics` runs a deliberately long ramble through the active engine
+    /// and prints the result — tier, wall-clock, draft count, and the `ModelMetrics`
+    /// tallies — to stdout, where `devicectl process launch --console` can read it.
+    /// Everything here was previously legible only as text on a DEBUG footer, i.e. only
+    /// to a human holding the phone, which is why "device-verify" had stayed a checklist
+    /// someone had to perform rather than a thing that could simply be run.
+    ///
+    /// Deliberately does NOT commit: this measures the parse, and leaving a pile of
+    /// tasks behind would make the seam destructive to re-run.
+    private func runCaptureDiagnosticsIfRequested() async {
+        guard ProcessInfo.processInfo.arguments.contains("-CaptureDiagnostics") else { return }
+        // Long, messy, and full of the shapes that make the model work: dates, a
+        // delegation, a blocker, judgment calls, and a duplicate of a seeded task.
+        let ramble =
+            String(repeating: "", count: 1) + """
+                ok brain dump time — renew my passport before the trip, and book flights \
+                for that trip but only after the passport comes through, oil change is \
+                overdue by like two weeks now, should I keep paying for the gym I honestly \
+                never use, call mom back she left three voicemails, daycare enrollment \
+                forms are due Friday, finish the Q3 deck for the board thing, return the \
+                amazon package before the window closes, figure out if the side project is \
+                still worth it or if I should let it go, pay the water bill it's the second \
+                notice, ask Maya to sort out the insurance renewal, schedule the kitchen \
+                plumber once the contractor calls back, and renew my passport
+                """
+        print("=== CAPTURE DIAGNOSTICS ===")
+        print("engine: \(brain.status.description)")
+        print("input: \(ramble.count) chars")
+        let started = Date()
+        let drafts = await brain.triage(ramble)
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        print("drafts: \(drafts.count)")
+        print("wall clock: \(elapsed)ms")
+        print(
+            "proposals: \(drafts.reduce(0) { $0 + $1.edgeProposals.count }) "
+                + "· owners: \(drafts.compactMap(\.ownerName).count) "
+                + "· blockers: \(drafts.compactMap(\.blockedBy).count) "
+                + "· dated: \(drafts.compactMap(\.dueDate).count)")
+        for line in ModelMetrics.shared.footerLines() { print("metrics: \(line)") }
+        print("=== END CAPTURE DIAGNOSTICS ===")
     }
 
     /// Deterministic verification seam. Launch with `-SeedFlowFixtures` to populate

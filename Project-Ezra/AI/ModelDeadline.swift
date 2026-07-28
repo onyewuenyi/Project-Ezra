@@ -37,6 +37,22 @@ enum ModelDeadline {
     /// Shorter, because its output is a single word and nothing on screen is blocked.
     static let backgroundSeconds: Double = 10
 
+    /// The composer's live parse. Longer than `cardSeconds` because the workload is
+    /// categorically different: a card generates ONE short answer, while a capture
+    /// generates a whole structured set whose size scales with how much the user
+    /// dumped — and "dump it all" is the product's entire pitch.
+    ///
+    /// Measured, not guessed (`-CaptureDiagnostics` on device): a 648-character ramble
+    /// — thirteen items, an ordinary Sunday-night brain dump — took **21.1s** against
+    /// the on-device model and tripped the 20s card deadline. Salvage did its job and
+    /// the user kept five of the candidates, but a deadline that fires on a normal
+    /// capture is a deadline set for the wrong job: it silently truncates exactly the
+    /// long dumps the product asks for. 30s matches what the Today advisor already
+    /// allows itself for a comparably large generation.
+    ///
+    /// This is the number `ModelMetrics` exists to tune. Re-measure before changing it.
+    static let captureSeconds: Double = 30
+
     /// The deadline fired. Distinct from the operation's own errors so a caller can tell
     /// "the model refused" from "the model never answered" — different fixes.
     struct Exceeded: Error {}
