@@ -38,6 +38,10 @@ struct ConfirmCreationList: View {
     /// record it — a removed card must stay removed across re-parses (`DraftMerge`
     /// filters re-proposals against the session's `RemovedDraftSet`).
     var onRemove: ((TaskDraft) -> Void)? = nil
+    /// Counts removals so the card leaving can be FELT, not just seen. Dropping a
+    /// candidate is a decisive act on a surface where everything else is a
+    /// reversible edit; the animation alone left it oddly weightless.
+    @State private var removals = 0
 
     var body: some View {
         // Lazy on purpose: a big paste renders only what's visible. Safe now that
@@ -57,10 +61,13 @@ struct ConfirmCreationList: View {
         // size, rather than dropping the user into an unlabeled run of cards.
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            drafts.count == 1 ? "1 task to review" : "\(drafts.count) tasks to review")
+            drafts.count == 1 ? "1 task to review" : "\(drafts.count) tasks to review"
+        )
+        .sensoryFeedback(.impact(weight: .light), trigger: removals)
     }
 
     private func remove(_ draft: TaskDraft) {
+        removals += 1
         onRemove?(draft)
         Motion.withMotion(Motion.decide) {
             drafts.removeAll { $0.id == draft.id }
