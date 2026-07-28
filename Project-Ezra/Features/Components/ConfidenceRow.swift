@@ -34,13 +34,13 @@ struct ConfidenceRow: View {
         switch task.autonomy {
         case .silent:
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: IconSize.caption))
+                .font(.glyphCaption())
                 .foregroundStyle(Palette.accentFlat)
         case .suggest:
             AITag()
         case .ask:
             Image(systemName: "hand.raised.fill")
-                .font(.system(size: IconSize.caption))
+                .font(.glyphCaption())
                 .foregroundStyle(Palette.decisionAccent)
         }
     }

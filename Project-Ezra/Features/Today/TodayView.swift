@@ -211,7 +211,7 @@ struct TodayView: View {
     private var readingIndicator: some View {
         HStack(spacing: Spacing.xs) {
             Image(systemName: "sparkles")
-                .font(.system(size: IconSize.caption))
+                .font(.glyphCaption())
                 .foregroundStyle(Palette.accentFlat)
                 .symbolEffect(.pulse, options: .repeating)
             Text("Reading your day…")
@@ -235,7 +235,7 @@ struct TodayView: View {
     private var readingCover: some View {
         VStack(spacing: Spacing.md) {
             Image(systemName: "sparkles")
-                .font(.system(size: IconSize.display))
+                .font(.glyphDisplay())
                 .foregroundStyle(Palette.accentFlat)
                 .symbolEffect(.pulse, options: .repeating)
             Text("Reading your day…")
@@ -345,7 +345,7 @@ struct TodayView: View {
             } label: {
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "tray")
-                        .font(.system(size: IconSize.caption))
+                        .font(.glyphCaption())
                     Text(
                         parked.count == 1
                             ? "1 capture waiting" : "\(parked.count) captures waiting"
@@ -402,7 +402,7 @@ struct TodayView: View {
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: IconSize.caption, weight: .semibold))
+                    .font(.glyphCaption(.semibold))
                     .foregroundStyle(Palette.mutedText)
             }
             .padding(Spacing.md)
@@ -438,7 +438,7 @@ struct TodayView: View {
     private func stepMarker(number: Int, task: TaskItem) -> some View {
         if task.status.isResolved {
             Image(systemName: task.status.symbol)
-                .font(.system(size: IconSize.small, weight: .semibold))
+                .font(.glyphSmall(.semibold))
                 .foregroundStyle(task.status.tint)
                 .frame(width: 20, alignment: .leading)
         } else {
@@ -461,7 +461,7 @@ struct TodayView: View {
     private var planClearedLine: some View {
         HStack(spacing: Spacing.xs) {
             Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: IconSize.small))
+                .font(.glyphSmall())
                 .foregroundStyle(Palette.accentFlat)
             Text("That's the plan, all of it.")
                 .font(.controlLabel)

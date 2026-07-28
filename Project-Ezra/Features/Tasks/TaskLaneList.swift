@@ -172,7 +172,7 @@ struct AssignedSectionsView: View {
     private func sectionHeader(_ section: MyTasksSection) -> some View {
         HStack(spacing: Spacing.xs) {
             Image(systemName: section.status.symbol)
-                .font(.system(size: IconSize.caption, weight: .semibold))
+                .font(.glyphCaption(.semibold))
                 .foregroundStyle(section.status.tint)
             Text(section.status.label)
                 .metadataStyle()

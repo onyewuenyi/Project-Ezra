@@ -177,7 +177,7 @@ struct TaskRow: View {
         } else if task.ownerID == nil {
             // Shared / unassigned — Linear's dashed unassigned ring.
             Image(systemName: "person.crop.circle.dashed")
-                .font(.system(size: IconSize.action))
+                .font(.glyphAction())
                 .foregroundStyle(Palette.mutedText)
         }
         // Mine → nothing.

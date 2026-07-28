@@ -135,7 +135,7 @@ extension View {
 struct BlockedIndicator: View {
     var body: some View {
         Image(systemName: "hourglass")
-            .font(.system(size: IconSize.caption))
+            .font(.glyphCaption())
             .foregroundStyle(Palette.mutedText)
             .accessibilityHidden(true)
     }

@@ -120,7 +120,7 @@ struct ThinkingPartnerView: View {
             if !framing.costOfWaiting.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
                     Image(systemName: "clock")
-                        .font(.system(size: IconSize.caption))
+                        .font(.glyphCaption())
                         .foregroundStyle(Palette.mutedText)
                     Text(framing.costOfWaiting)
                         .supportingStyle()

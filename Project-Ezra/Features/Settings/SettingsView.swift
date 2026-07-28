@@ -143,7 +143,7 @@ struct SettingsView: View {
         settingsCard(title: "AI Engine") {
             HStack(spacing: Spacing.sm) {
                 Image(systemName: brain.status.isOnDevice ? "sparkles" : "gearshape.2")
-                    .font(.system(size: IconSize.body))
+                    .font(.glyphBody())
                     .foregroundStyle(brain.status.isOnDevice ? Palette.accentFlat : Palette.secondaryText)
                 Text(brain.status.description)
                     .font(.supporting)
@@ -218,7 +218,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: IconSize.caption))
+                        .font(.glyphCaption())
                         .foregroundStyle(Palette.warning)
                     Text(
                         "Your saved data was cleared on \(reset.date.formatted(date: .abbreviated, time: .shortened)) because \(reset.reason.explanation)."

@@ -117,7 +117,7 @@ struct HouseholdView: View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(spacing: Spacing.sm) {
                 Image(systemName: statusGlyph(snap.status))
-                    .font(.system(size: IconSize.display))
+                    .font(.glyphDisplay())
                     .foregroundStyle(statusTint(snap.status))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(householdName)
@@ -188,7 +188,7 @@ struct HouseholdView: View {
         } label: {
             HStack(spacing: Spacing.sm) {
                 Image(systemName: eventGlyph(event.kind))
-                    .font(.system(size: IconSize.caption, weight: .semibold))
+                    .font(.glyphCaption(.semibold))
                     .foregroundStyle(eventTint(event.kind))
                     .frame(width: 20)
                 Text(event.sentence)

@@ -126,7 +126,7 @@ struct TaskChainStackView: View {
                 Text("\(chain.members.count)")
                     .font(.chipLabel)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: IconSize.nano, weight: .semibold))
+                    .font(.glyphNano(.semibold))
                     .rotationEffect(.degrees(isExpanded ? 180 : 0))
                     .animation(Motion.snap, value: isExpanded)
             }

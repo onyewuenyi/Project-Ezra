@@ -273,7 +273,7 @@ struct TaskDetailView: View {
         } label: {
             chip {
                 Image(systemName: task.status.symbol)
-                    .font(.system(size: IconSize.caption))
+                    .font(.glyphCaption())
                     .foregroundStyle(task.status.tint)
                 Text(task.status.label)
             }
@@ -303,7 +303,7 @@ struct TaskDetailView: View {
             chip {
                 if task.ownerID == nil {
                     Image(systemName: "person.crop.circle.dashed")
-                        .font(.system(size: IconSize.caption))
+                        .font(.glyphCaption())
                     Text("Up for grabs")
                 } else if let name = task.ownerDisplayName(among: otherMembers) {
                     OwnerAvatarBadge(
@@ -324,7 +324,7 @@ struct TaskDetailView: View {
         } label: {
             chip(muted: !task.isUrgent) {
                 Image(systemName: task.isUrgent ? "exclamationmark.circle.fill" : "exclamationmark.circle")
-                    .font(.system(size: IconSize.caption))
+                    .font(.glyphCaption())
                     .foregroundStyle(task.isUrgent ? Palette.priorityUrgent : Palette.mutedText)
                 Text(task.isUrgent ? "Urgent" : "Not urgent")
             }
@@ -351,7 +351,7 @@ struct TaskDetailView: View {
             }
         } label: {
             chip(muted: task.dueDate == nil) {
-                Image(systemName: "calendar").font(.system(size: IconSize.caption))
+                Image(systemName: "calendar").font(.glyphCaption())
                 Text(task.dueDate.map(dueText) ?? "No due date")
             }
         }
@@ -369,7 +369,7 @@ struct TaskDetailView: View {
         } label: {
             chip {
                 Image(systemName: TaskCategory.symbol(for: task.category))
-                    .font(.system(size: IconSize.caption))
+                    .font(.glyphCaption())
                 Text(task.category)
             }
         }
@@ -397,7 +397,7 @@ struct TaskDetailView: View {
             }
         } label: {
             chip(muted: task.workIntent == nil) {
-                Image(systemName: "square.stack.3d.up").font(.system(size: IconSize.caption))
+                Image(systemName: "square.stack.3d.up").font(.glyphCaption())
                 Text(task.workIntent?.label ?? "Kind of work")
             }
         }
@@ -415,7 +415,7 @@ struct TaskDetailView: View {
             }
         } label: {
             chip(muted: task.effortLabel == nil) {
-                Image(systemName: "timer").font(.system(size: IconSize.caption))
+                Image(systemName: "timer").font(.glyphCaption())
                 Text(task.effortLabel.map { "~\($0)" } ?? "No estimate")
             }
         }
@@ -428,7 +428,7 @@ struct TaskDetailView: View {
             onPickExternal: { addExternalBlocker($0) }
         ) {
             chip(muted: true) {
-                Image(systemName: "plus").font(.system(size: IconSize.caption))
+                Image(systemName: "plus").font(.glyphCaption())
                 Text(task.activeBlockers(among: allTasks).isEmpty ? "Waiting on" : "Add wait")
             }
         }
@@ -445,7 +445,7 @@ struct TaskDetailView: View {
         }
         return HStack(spacing: Spacing.sm) {
             Image(systemName: blocker.kind == .task ? "arrow.turn.down.right" : "hourglass")
-                .font(.system(size: IconSize.caption))
+                .font(.glyphCaption())
                 .foregroundStyle(Palette.mutedText)
             Text(title)
                 .font(.supporting)
@@ -456,7 +456,7 @@ struct TaskDetailView: View {
                 removeBlocker(blocker.id)
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: IconSize.caption))
+                    .font(.glyphCaption())
                     .foregroundStyle(Palette.mutedText)
             }
             .buttonStyle(.pressableIcon)
@@ -547,7 +547,7 @@ struct TaskDetailView: View {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "square.stack.3d.down.right")
-                        .font(.system(size: IconSize.small))
+                        .font(.glyphSmall())
                         .foregroundStyle(Palette.accentFlat)
                     Text("This looks like several steps")
                         .font(.sectionHeader)
@@ -587,7 +587,7 @@ struct TaskDetailView: View {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "hand.raised.fill")
-                        .font(.system(size: IconSize.small))
+                        .font(.glyphSmall())
                         .foregroundStyle(Palette.decisionAccent)
                     Text(flagged ? "Needs a decision" : "A decision to make")
                         .font(.sectionHeader)

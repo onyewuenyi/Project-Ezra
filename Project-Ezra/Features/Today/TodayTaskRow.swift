@@ -88,7 +88,7 @@ struct TodayTaskRow: View {
         switch register {
         case .recap:
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: IconSize.body))
+                .font(.glyphBody())
                 .foregroundStyle(Palette.success)
                 .frame(width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn)
         case .plan:
@@ -99,7 +99,7 @@ struct TodayTaskRow: View {
                 if !isDone { onComplete?() }
             } label: {
                 Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: IconSize.control, weight: isDone ? .regular : .light))
+                    .font(.glyphControl(isDone ? .regular : .light))
                     .foregroundStyle(isDone ? Palette.success : Palette.secondaryText)
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn)

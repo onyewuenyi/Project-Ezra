@@ -182,7 +182,7 @@ struct RootTabView: View {
             presentComposer(resuming: nil)
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: IconSize.control, weight: .semibold))
+                .font(.glyphControl(.semibold))
                 .foregroundStyle(Palette.onAccent)
                 .frame(width: 52, height: 52)
                 .background(Palette.accentGradient, in: Circle())

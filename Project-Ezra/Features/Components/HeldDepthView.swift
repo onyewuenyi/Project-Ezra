@@ -53,7 +53,7 @@ struct HeldDepthView: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: IconSize.caption, weight: .semibold))
+                    .font(.glyphCaption(.semibold))
                     .foregroundStyle(Palette.mutedText)
             }
             .padding(Spacing.md)

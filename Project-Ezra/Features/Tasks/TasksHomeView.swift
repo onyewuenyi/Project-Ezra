@@ -270,7 +270,7 @@ struct TasksHomeView: View {
                 systemName: filtersActive
                     ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"
             )
-            .font(.system(size: IconSize.small, weight: .semibold))
+            .font(.glyphSmall(.semibold))
             .foregroundStyle(filtersActive ? Palette.accentFlat : Palette.secondaryText)
             .frame(width: 32, height: 32)
             .contentShape(Rectangle())

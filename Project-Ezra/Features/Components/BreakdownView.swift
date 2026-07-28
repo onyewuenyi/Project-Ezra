@@ -154,7 +154,7 @@ struct BreakdownView: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
                 Image(systemName: isAccepted ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: IconSize.caption))
+                    .font(.glyphCaption())
                     .foregroundStyle(isAccepted ? Palette.accentFlat : Palette.mutedText)
                 Text(step.title)
                     .font(.controlLabel)

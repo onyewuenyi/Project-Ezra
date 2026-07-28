@@ -30,7 +30,7 @@ struct UnstickView: View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(spacing: Spacing.xs) {
                 Image(systemName: "hourglass")
-                    .font(.system(size: IconSize.small))
+                    .font(.glyphSmall())
                     .foregroundStyle(Palette.overdue)
                 Text("This keeps sliding")
                     .font(.sectionHeader)

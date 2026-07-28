@@ -163,7 +163,7 @@ struct TaskCardView: View {
                     .fill(Palette.success.opacity(min(1, dragOffset / swipeCompleteThreshold) * 0.5))
                     .overlay(alignment: .leading) {
                         Image(systemName: "checkmark")
-                            .font(.system(size: IconSize.control, weight: .bold))
+                            .font(.glyphControl(.bold))
                             .foregroundStyle(Palette.success)
                             .padding(.leading, Spacing.lg)
                             .opacity(min(1, dragOffset / swipeCompleteThreshold))
@@ -230,7 +230,7 @@ struct TaskCardView: View {
             complete()
         } label: {
             Image(systemName: "circle")
-                .font(.system(size: IconSize.control, weight: .light))
+                .font(.glyphControl(.light))
                 .foregroundStyle(Palette.secondaryText)
                 .frame(
                     width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn,

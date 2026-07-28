@@ -95,6 +95,21 @@ extension Font {
     }
 
     /// The scaled glyph tokens, each paired with the text style its tier sits beside.
+    static func glyphDisplay(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.display, weight: weight, relativeTo: .largeTitle)
+    }
+    static func glyphControl(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.control, weight: weight, relativeTo: .title2)
+    }
+    static func glyphAction(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.action, weight: weight, relativeTo: .title3)
+    }
+    static func glyphBody(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.body, weight: weight, relativeTo: .body)
+    }
+    static func glyphSmall(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.small, weight: weight, relativeTo: .subheadline)
+    }
     static func glyphCaption(_ weight: UIFont.Weight = .regular) -> Font {
         glyph(IconSize.caption, weight: weight, relativeTo: .caption1)
     }
@@ -103,9 +118,6 @@ extension Font {
     }
     static func glyphNano(_ weight: UIFont.Weight = .regular) -> Font {
         glyph(IconSize.nano, weight: weight, relativeTo: .caption2)
-    }
-    static func glyphAction(_ weight: UIFont.Weight = .regular) -> Font {
-        glyph(IconSize.action, weight: weight, relativeTo: .title3)
     }
 }
 

@@ -209,7 +209,7 @@ private struct HouseholdRosterContent: View {
                 Button("Remove from household", role: .destructive) { remove(member) }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: IconSize.caption, weight: .semibold))
+                    .font(.glyphCaption(.semibold))
                     .foregroundStyle(Palette.mutedText)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
@@ -225,7 +225,7 @@ private struct HouseholdRosterContent: View {
         } label: {
             HStack(spacing: Spacing.sm) {
                 Image(systemName: "plus")
-                    .font(.system(size: IconSize.body, weight: .semibold))
+                    .font(.glyphBody(.semibold))
                     .foregroundStyle(Palette.accentFlat)
                     .frame(width: 44, height: 44)
                 Text("Add someone")

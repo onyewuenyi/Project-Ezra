@@ -22,7 +22,7 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: Spacing.md) {
             Image(systemName: symbol)
-                .font(.system(size: IconSize.display, weight: .light))
+                .font(.glyphDisplay(.light))
                 .foregroundStyle(tint)
                 .padding(.bottom, Spacing.xxs)
 
