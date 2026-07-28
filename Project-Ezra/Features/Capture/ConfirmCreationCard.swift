@@ -111,7 +111,7 @@ struct ConfirmCreationCard: View {
             HStack(alignment: .top, spacing: Spacing.sm) {
                 if isUncertain {
                     Image(systemName: "questionmark.circle")
-                        .font(.system(size: IconSize.caption, weight: .semibold))
+                        .font(.glyphCaption(.semibold))
                         .foregroundStyle(Palette.mutedText)
                         .padding(.top, 3)
                         .transition(.opacity)
@@ -125,7 +125,7 @@ struct ConfirmCreationCard: View {
 
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
-                        .font(.system(size: IconSize.caption, weight: .semibold))
+                        .font(.glyphCaption(.semibold))
                         .foregroundStyle(Palette.mutedText)
                         .frame(width: 32, height: 32)
                         .contentShape(Rectangle())
@@ -277,20 +277,20 @@ struct ConfirmCreationCard: View {
                 case .accepted:
                     pill {
                         assumedMark
-                        Image(systemName: "arrow.triangle.merge").font(.system(size: IconSize.caption))
+                        Image(systemName: "arrow.triangle.merge").font(.glyphCaption())
                         Text("Merges into “\(dup.targetTitle)”").font(.metadata.weight(.medium)).lineLimit(1)
                     }
                     .foregroundStyle(Palette.accentFlat)
                 case .undecided:
                     pill {
                         assumedMark
-                        Image(systemName: "questionmark.circle").font(.system(size: IconSize.caption))
+                        Image(systemName: "questionmark.circle").font(.glyphCaption())
                         Text("Same as “\(dup.targetTitle)”?").font(.metadata.weight(.medium)).lineLimit(1)
                     }
                     .foregroundStyle(Palette.secondaryText)
                 case .rejected:
                     pill {
-                        Image(systemName: "rectangle.on.rectangle").font(.system(size: IconSize.caption))
+                        Image(systemName: "rectangle.on.rectangle").font(.glyphCaption())
                         Text("Keeping both").font(.metadata.weight(.medium))
                     }
                     .foregroundStyle(Palette.mutedText)
@@ -317,14 +317,14 @@ struct ConfirmCreationCard: View {
                 // a 180-day suppression consequence looked like it never registered.
                 if child.decision == .rejected {
                     pill {
-                        Image(systemName: "rectangle.on.rectangle").font(.system(size: IconSize.caption))
+                        Image(systemName: "rectangle.on.rectangle").font(.glyphCaption())
                         Text("Keeping separate").font(.metadata.weight(.medium))
                     }
                     .foregroundStyle(Palette.mutedText)
                 } else {
                     pill {
                         assumedMark
-                        Image(systemName: "arrow.turn.down.right").font(.system(size: IconSize.caption))
+                        Image(systemName: "arrow.turn.down.right").font(.glyphCaption())
                         Text("Step of “\(child.targetTitle)”").font(.metadata.weight(.medium)).lineLimit(1)
                     }
                     .foregroundStyle(Palette.secondaryText)
@@ -352,7 +352,7 @@ struct ConfirmCreationCard: View {
             pill {
                 assumedMark
                 Image(systemName: TaskCategory.symbol(for: draft.category))
-                    .font(.system(size: IconSize.caption))
+                    .font(.glyphCaption())
                 Text(draft.category)
                     .font(.metadata.weight(.medium))
             }
@@ -387,7 +387,7 @@ struct ConfirmCreationCard: View {
             if let intent = draft.workIntent {
                 pill {
                     assumedMark
-                    Image(systemName: "square.stack.3d.up").font(.system(size: IconSize.caption))
+                    Image(systemName: "square.stack.3d.up").font(.glyphCaption())
                     Text(intent.label).font(.metadata.weight(.medium))
                 }
                 .foregroundStyle(Palette.secondaryText)
@@ -395,7 +395,7 @@ struct ConfirmCreationCard: View {
                 // Unreachable after the resolver's backfill, but kept so a fixture or a
                 // cleared value degrades to the same add-affordance its neighbours use.
                 pill {
-                    Image(systemName: "plus").font(.system(size: IconSize.caption))
+                    Image(systemName: "plus").font(.glyphCaption())
                     Text("kind").font(.metadata.weight(.medium))
                 }
                 .foregroundStyle(Palette.mutedText)
@@ -424,13 +424,13 @@ struct ConfirmCreationCard: View {
             if let due = draft.dueDate {
                 pill {
                     assumedMark
-                    Image(systemName: "calendar").font(.system(size: IconSize.caption))
+                    Image(systemName: "calendar").font(.glyphCaption())
                     Text(dueText(due)).font(.metadata.weight(.medium))
                 }
                 .foregroundStyle(Palette.secondaryText)
             } else {
                 pill {
-                    Image(systemName: "plus").font(.system(size: IconSize.caption))
+                    Image(systemName: "plus").font(.glyphCaption())
                     Text("due").font(.metadata.weight(.medium))
                 }
                 .foregroundStyle(Palette.mutedText)
@@ -500,7 +500,7 @@ struct ConfirmCreationCard: View {
                 if draft.ownerReason != nil, unresolvableOwner == nil { assumedMark }
                 if let missing = unresolvableOwner {
                     Image(systemName: "person.crop.circle.badge.questionmark")
-                        .font(.system(size: IconSize.caption))
+                        .font(.glyphCaption())
                     Text("\(missing) · not in household")
                         .font(.metadata.weight(.medium))
                         .lineLimit(1)
@@ -566,7 +566,7 @@ struct ConfirmCreationCard: View {
         } label: {
             pill {
                 assumedMark
-                Image(systemName: "arrow.turn.down.right").font(.system(size: IconSize.caption))
+                Image(systemName: "arrow.turn.down.right").font(.glyphCaption())
                 Text("blocks “\(dependent.title)”")
                     .font(.metadata.weight(.medium))
                     .lineLimit(1)
@@ -587,7 +587,7 @@ struct ConfirmCreationCard: View {
         } label: {
             pill {
                 assumedMark
-                Image(systemName: "hourglass").font(.system(size: IconSize.caption))
+                Image(systemName: "hourglass").font(.glyphCaption())
                 Text("after \(draft.blockedBy ?? "")")
                     .font(.metadata.weight(.medium))
                     .lineLimit(1)
@@ -608,13 +608,13 @@ struct ConfirmCreationCard: View {
             if draft.isUrgent {
                 pill {
                     assumedMark
-                    Image(systemName: "exclamationmark.circle.fill").font(.system(size: IconSize.caption))
+                    Image(systemName: "exclamationmark.circle.fill").font(.glyphCaption())
                     Text("Urgent").font(.metadata.weight(.medium))
                 }
                 .foregroundStyle(Palette.priorityUrgent)
             } else {
                 pill {
-                    Image(systemName: "exclamationmark.circle").font(.system(size: IconSize.caption))
+                    Image(systemName: "exclamationmark.circle").font(.glyphCaption())
                     Text("urgent").font(.metadata.weight(.medium))
                 }
                 .foregroundStyle(Palette.mutedText)
@@ -636,14 +636,14 @@ struct ConfirmCreationCard: View {
             if draft.effortMinutes != nil {
                 pill {
                     assumedMark
-                    Image(systemName: "timer").font(.system(size: IconSize.caption))
+                    Image(systemName: "timer").font(.glyphCaption())
                     Text(effortLabel)
                         .font(.metadata.weight(.medium))
                 }
                 .foregroundStyle(Palette.secondaryText)
             } else {
                 pill {
-                    Image(systemName: "plus").font(.system(size: IconSize.caption))
+                    Image(systemName: "plus").font(.glyphCaption())
                     Text("effort").font(.metadata.weight(.medium))
                 }
                 .foregroundStyle(Palette.mutedText)
@@ -664,7 +664,7 @@ struct ConfirmCreationCard: View {
     /// AITag; that stays within its budget.
     private var assumedMark: some View {
         Image(systemName: "sparkle")
-            .font(.system(size: IconSize.nano, weight: .semibold))
+            .font(.glyphNano(.semibold))
             .foregroundStyle(Palette.accentFlat)
     }
 

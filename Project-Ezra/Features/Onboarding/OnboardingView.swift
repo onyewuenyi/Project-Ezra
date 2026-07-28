@@ -341,7 +341,7 @@ struct OnboardingView: View {
             } label: {
                 MetadataChip(density: .compact) {
                     Image(systemName: TaskCategory.symbol(for: draft.wrappedValue.category))
-                        .font(.system(size: IconSize.caption))
+                        .font(.glyphCaption())
                 }
                 .foregroundStyle(Palette.secondaryText)
             }
@@ -380,7 +380,7 @@ struct OnboardingView: View {
                 }
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: IconSize.caption, weight: .semibold))
+                    .font(.glyphCaption(.semibold))
                     .foregroundStyle(Palette.mutedText)
                     .frame(width: 32, height: 32)
                     .contentShape(Rectangle())

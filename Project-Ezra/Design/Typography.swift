@@ -76,9 +76,44 @@ extension Font {
     static var chipLabelTight: Font { scaledToken(10, .semibold, relativeTo: .caption2) }
 }
 
+extension Font {
+    /// A glyph size scaled along the type system's curve — the SF Symbol counterpart
+    /// to the text tokens above.
+    ///
+    /// `IconSize` promised that glyphs "scale with the type system", but its values are
+    /// plain point sizes and every call site fed them to `.font(.system(size:))`, which
+    /// is fixed. So at accessibility text sizes a chip's LABEL grew while the glyph
+    /// beside it stayed frozen — the pairing the tokens exist to keep drifted apart
+    /// exactly where legibility matters most. Rendering at the default content size is
+    /// byte-identical (a scaled font at the default category IS the base size), so this
+    /// changes nothing for most users and everything for the ones who need it.
+    static func glyph(
+        _ size: CGFloat, weight: UIFont.Weight = .regular,
+        relativeTo style: UIFont.TextStyle = .body
+    ) -> Font {
+        scaledToken(size, weight, relativeTo: style)
+    }
+
+    /// The scaled glyph tokens, each paired with the text style its tier sits beside.
+    static func glyphCaption(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.caption, weight: weight, relativeTo: .caption1)
+    }
+    static func glyphMicro(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.micro, weight: weight, relativeTo: .caption2)
+    }
+    static func glyphNano(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.nano, weight: weight, relativeTo: .caption2)
+    }
+    static func glyphAction(_ weight: UIFont.Weight = .regular) -> Font {
+        glyph(IconSize.action, weight: weight, relativeTo: .title3)
+    }
+}
+
 /// SF Symbol point sizes, tokenized so glyphs scale with the type system rather than
-/// scattered `.system(size:)` literals. The micro tier (`micro`/`nano`) pairs with the
-/// `chipLabel`/`chipLabelTight` fonts for the sub-`caption` chip glyphs.
+/// scattered `.system(size:)` literals. Reach for the `Font.glyph*` tokens above rather
+/// than `.system(size: IconSize.x)` — the raw values are fixed sizes and don't scale.
+/// The micro tier (`micro`/`nano`) pairs with the `chipLabel`/`chipLabelTight` fonts
+/// for the sub-`caption` chip glyphs.
 enum IconSize {
     static let display: CGFloat = 40  // empty-state / calm-state glyphs
     static let control: CGFloat = 22  // complete circle, prominent controls
