@@ -137,7 +137,6 @@ struct ComposerView: View {
                     .animation(reduceMotion ? nil : Motion.settle, value: drafts.isEmpty)
 
                 dictationHint
-                engineDisclosure
 
                 if drafts.isEmpty {
                     Text(foundNothing ? Self.nothingFoundHint : Self.openingHint)
@@ -145,6 +144,7 @@ struct ComposerView: View {
                         .animation(Motion.fade, value: foundNothing)
                     Spacer(minLength: 0)
                 } else {
+                    engineDisclosure
                     ScrollView {
                         ConfirmCreationList(
                             drafts: $drafts,
@@ -741,6 +741,11 @@ struct ComposerView: View {
     /// exist only on-device), and without this the user's only signal was a DEBUG
     /// footer — degradation read as inconsistency. Suppressed under XCTest so view
     /// tests don't all sprout an extra line.
+    ///
+    /// It annotates RESULTS, never the empty field. Greeting every capture with it
+    /// put a caveat ahead of the instruction that actually helps someone start typing,
+    /// and repeated a standing device condition as if it were news — the nagging the
+    /// guardrails refuse. Beside the cards it explains something the user can see.
     @ViewBuilder private var engineDisclosure: some View {
         if case .fallback(let reason) = brain.status, reason != "test" {
             Text("On-device intelligence unavailable — using quick rules.")
