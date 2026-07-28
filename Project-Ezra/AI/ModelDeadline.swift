@@ -42,15 +42,25 @@ enum ModelDeadline {
     /// generates a whole structured set whose size scales with how much the user
     /// dumped — and "dump it all" is the product's entire pitch.
     ///
-    /// Measured, not guessed (`-CaptureDiagnostics` on device): a 648-character ramble
-    /// — thirteen items, an ordinary Sunday-night brain dump — took **21.1s** against
-    /// the on-device model and tripped the 20s card deadline. Salvage did its job and
-    /// the user kept five of the candidates, but a deadline that fires on a normal
-    /// capture is a deadline set for the wrong job: it silently truncates exactly the
-    /// long dumps the product asks for. 30s matches what the Today advisor already
-    /// allows itself for a comparably large generation.
+    /// Measured on device with `-CaptureDiagnostics`, twice, on one 648-character
+    /// ramble (thirteen items — an ordinary Sunday-night brain dump):
     ///
-    /// This is the number `ModelMetrics` exists to tune. Re-measure before changing it.
+    ///     20s deadline →  5 drafts ·  4 owners · 0 dated · deadline hit
+    ///     30s deadline → 11 drafts · 11 owners · 3 dated · deadline hit (30.15s)
+    ///
+    /// **Neither run finished.** The generation scales with how much was dumped, and
+    /// "dump it all" makes the input unbounded — so no constant here ever guarantees a
+    /// complete parse, and raising it further just trades the user's time for more
+    /// candidates. That reframes what this number is: NOT a failure threshold, but the
+    /// point where we stop waiting for MORE. Salvage means a hit costs completeness,
+    /// never the capture — and because the user watches candidates stream in and can
+    /// confirm at any moment, they are never actually blocked by it.
+    ///
+    /// So 30s is chosen as "long enough that a big dump parses substantially, short
+    /// enough that the thinking indicator doesn't run forever", and a deadline hit on a
+    /// long ramble is the EXPECTED path, recorded as `.salvaged` rather than a failure.
+    /// If long captures need to be genuinely complete, the answer is chunking the input
+    /// — not a bigger number here.
     static let captureSeconds: Double = 30
 
     /// The deadline fired. Distinct from the operation's own errors so a caller can tell

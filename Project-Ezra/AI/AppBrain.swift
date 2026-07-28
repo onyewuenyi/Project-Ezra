@@ -203,9 +203,12 @@ final class AppBrain {
                 ModelMetrics.shared.record(.captureTriage, .success, latencyMs: latency)
                 intents = value
             case .salvaged(let value):
-                // The deadline DID fire — record it (that's the tuning evidence) but
-                // keep the streamed work instead of discarding it for a heuristic wipe.
-                ModelMetrics.shared.record(.captureTriage, .timedOut, latencyMs: latency)
+                // Recorded as SALVAGED, not timed out: the deadline fired, but the user
+                // was served real candidates. Device measurement showed this is the
+                // NORMAL outcome for a long ramble (see `ModelDeadline.captureSeconds`),
+                // and counting it as a failure made the footer report "0 ok" for
+                // captures that produced perfectly good tasks.
+                ModelMetrics.shared.record(.captureTriage, .salvaged, latencyMs: latency)
                 intents = value
             case .timedOutEmpty:
                 ModelMetrics.shared.record(.captureTriage, .timedOut, latencyMs: latency)

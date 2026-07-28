@@ -243,15 +243,25 @@ final class ModelMetrics {
     struct Stats: Sendable, Equatable {
         var successes = 0
         var timeouts = 0
+        /// Deadline hits where streamed work was SALVAGED — the user got usable output.
+        /// Split out from `timeouts` because collapsing them made the footer read
+        /// "0 ok · 2 timeout" for two captures that both produced tasks the user could
+        /// confirm. A metric that calls a served user a failure is the kind of lie this
+        /// codebase keeps finding in itself.
+        var salvaged = 0
         var failures = 0
         var lastLatencyMs = -1
         var lastError: String?
 
-        var calls: Int { successes + timeouts + failures }
+        var calls: Int { successes + salvaged + timeouts + failures }
+        /// Calls that put usable output in front of the user, however they got there.
+        var served: Int { successes + salvaged }
     }
 
     enum Outcome {
         case success
+        /// The deadline fired but the streamed partial was viable and was returned.
+        case salvaged
         case timedOut
         case failed(String)
     }
@@ -265,6 +275,7 @@ final class ModelMetrics {
             stats[feature] = Stats(
                 successes: defaults.integer(forKey: Key.successes(feature)),
                 timeouts: defaults.integer(forKey: Key.timeouts(feature)),
+                salvaged: defaults.integer(forKey: Key.salvaged(feature)),
                 failures: defaults.integer(forKey: Key.failures(feature)),
                 lastLatencyMs: defaults.object(forKey: Key.lastLatencyMs(feature)) as? Int ?? -1,
                 lastError: defaults.string(forKey: Key.lastError(feature)))
@@ -281,6 +292,13 @@ final class ModelMetrics {
             // footer shows the CURRENT state rather than an error from days ago.
             entry.lastError = nil
             defaults.removeObject(forKey: Key.lastError(feature))
+        case .salvaged:
+            entry.salvaged += 1
+            // NOT an error: the user was served. The deadline is still worth knowing
+            // about (it bounds how complete the result was), which is what the
+            // separate tally is for.
+            entry.lastError = nil
+            defaults.removeObject(forKey: Key.lastError(feature))
         case .timedOut:
             entry.timeouts += 1
             entry.lastError = "timedOut"
@@ -293,6 +311,7 @@ final class ModelMetrics {
         stats[feature] = entry
         defaults.set(entry.successes, forKey: Key.successes(feature))
         defaults.set(entry.timeouts, forKey: Key.timeouts(feature))
+        defaults.set(entry.salvaged, forKey: Key.salvaged(feature))
         defaults.set(entry.failures, forKey: Key.failures(feature))
         defaults.set(latencyMs, forKey: Key.lastLatencyMs(feature))
     }
@@ -303,6 +322,7 @@ final class ModelMetrics {
         ModelFeature.allCases.compactMap { feature in
             guard let entry = stats[feature], entry.calls > 0 else { return nil }
             var line = "\(feature.label): \(entry.successes) ok"
+            if entry.salvaged > 0 { line += " · \(entry.salvaged) salvaged" }
             if entry.timeouts > 0 { line += " · \(entry.timeouts) timeout" }
             if entry.failures > 0 { line += " · \(entry.failures) fail" }
             if entry.lastLatencyMs >= 0 {
@@ -316,6 +336,7 @@ final class ModelMetrics {
     private enum Key {
         static func successes(_ f: ModelFeature) -> String { "model.\(f.rawValue).successes" }
         static func timeouts(_ f: ModelFeature) -> String { "model.\(f.rawValue).timeouts" }
+        static func salvaged(_ f: ModelFeature) -> String { "model.\(f.rawValue).salvaged" }
         static func failures(_ f: ModelFeature) -> String { "model.\(f.rawValue).failures" }
         static func lastLatencyMs(_ f: ModelFeature) -> String { "model.\(f.rawValue).lastLatencyMs" }
         static func lastError(_ f: ModelFeature) -> String { "model.\(f.rawValue).lastError" }
