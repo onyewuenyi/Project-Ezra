@@ -185,24 +185,68 @@ extension TaskItem {
         touch(now: now)
     }
 
+    /// Undo of a force-unblock — the ONLY caller is `ChangeLogUndo`'s `"unblocked"` arm.
+    ///
+    /// Deliberately not `touchHuman`: reverting a mis-tap is not engagement with the
+    /// task, and stamping the human clock here would clear a genuine staleness signal
+    /// (and, via `touchHuman`, reset `deferralCount`) as a side effect of undo.
+    func restoreBlockerEdges(_ snapshot: UnblockSnapshot, now: Date = Date()) {
+        guard !snapshot.removed.isEmpty else { return }
+        // Anything re-added since the unblock stays: undo restores what the action
+        // removed, it does not roll the graph back to a moment in time.
+        let existing = Set(relationships.map(\.id))
+        relationships += snapshot.removed.filter { !existing.contains($0.id) }
+        lastUnblockedAt = snapshot.priorUnblockedAt
+        touch(now: now)
+    }
+
     /// Force-unblock: drop every `.blocks` edge (tracked and external alike), leaving
     /// any `.parent`/other edges intact. The detail sheet's "Unblock" action. Leaves
     /// the status alone — the task simply stops reading as blocked on the next
     /// derivation. Human-initiated (a detail/recommended-action tap), so it stamps
     /// both `lastUnblockedAt` (the recently-unblocked fact) and the human clock.
     ///
-    /// **Known gap — this is destructive and unlogged.** It removes N edges, writes no
-    /// `ChangeLogEntry`, and is therefore the one mutation on this type with no Undo.
-    /// `ActivityVocab` already carries an `"unblocked"` glyph, tint and word that nothing
-    /// writes, so the trail entry was designed and never wired. Splitting the call by
-    /// `Origin` was considered and rejected: `addTaskBlocker`/`addExternalBlocker` both
-    /// default to `.human`, so an origin-gated version would prompt on nearly every tap
-    /// while still leaving the underlying action irreversible. Reversibility is the fix.
-    func unblock(now: Date = Date()) {
-        guard !blockers.isEmpty else { return }
+    /// Returns what it removed and the `lastUnblockedAt` it overwrote, so
+    /// `unblockAndLog` can make the action reversible. Splitting the call by `Origin`
+    /// was considered and rejected: `addTaskBlocker`/`addExternalBlocker` both default
+    /// to `.human`, so an origin-gated version would prompt on nearly every tap while
+    /// still leaving the underlying action irreversible. Reversibility is the fix, and
+    /// `unblockAndLog` is the seam every UI caller should use.
+    @discardableResult
+    func unblock(now: Date = Date()) -> UnblockSnapshot? {
+        guard !blockers.isEmpty else { return nil }
+        let removed = relationships.filter { $0.kind == .blocks }
+        let priorUnblockedAt = lastUnblockedAt
         removeRelationships { $0.kind == .blocks }
         lastUnblockedAt = now
         touchHuman(now: now)
+        return UnblockSnapshot(removed: removed, priorUnblockedAt: priorUnblockedAt)
+    }
+
+    /// The logged, reversible form — what the detail sheet's "Unblock" CTA runs.
+    ///
+    /// This used to be the one destructive mutation on the type with no `ChangeLogEntry`
+    /// and no undo: a full-width primary button that dropped N edges, human-authored
+    /// ones included, with nothing to restore them from. `ActivityVocab` already carried
+    /// an `"unblocked"` glyph, tint and word that nothing wrote — the trail entry was
+    /// designed and never wired.
+    func unblockAndLog(in context: NSManagedObjectContext, now: Date = Date()) {
+        guard let snapshot = unblock(now: now) else { return }
+        let count = snapshot.removed.count
+        context.insert(
+            ChangeLogEntry(
+                summary: "Unblocked “\(title)”",
+                detail: count == 1 ? "Cleared 1 blocker" : "Cleared \(count) blockers",
+                action: "unblocked",
+                fieldChanged: "blockers",
+                oldValue: TaskItem.encodeUnblock(snapshot),
+                initiatedBy: .human,
+                isReversible: true,
+                taskTitle: title,
+                taskUUID: uuid,
+                actorID: UserProfile.currentMemberID(in: context),
+                in: context
+            ))
     }
 
     /// Reopen a resolved task, restoring the live status it left when it was resolved
@@ -445,21 +489,29 @@ extension TaskItem {
     /// Run an already-resolved action, so the label the user tapped and the mutation
     /// that runs are the same decision rather than two independent derivations.
     /// Callers own `save()`.
+    /// Returns any dependents the action freed, so the caller can name them in an undo
+    /// notice ("Completed X — unblocked Y"). Only `.resolve` can free anything; every
+    /// other arm returns `[]`. Returning it here rather than re-deriving at the call
+    /// site keeps the resurfacing chain readable from exactly one place.
+    @discardableResult
     func performRecommendedAction(
         _ action: RecommendedAction, among tasks: [TaskItem], in context: NSManagedObjectContext
-    ) {
+    ) -> [TaskItem] {
         switch action {
-        case .claim: claimAndLog(ownerID: UserProfile.currentMemberID(in: context), among: tasks, in: context)
-        // Inferred edges only. A human-authored blocker survives this call — the caller
-        // that wants it gone has to ask the user and pass `includingHuman: true`.
-        case .unblock: unblock()
+        case .claim:
+            claimAndLog(ownerID: UserProfile.currentMemberID(in: context), among: tasks, in: context)
+        // Through the logged seam: dropping every blocker at once is destructive and
+        // human-authored edges are among the casualties, so it owes a trail row and an
+        // undo like every other mutation here.
+        case .unblock: unblockAndLog(in: context)
         // Through the shared seam: records the StateVisit, logs a coalescing human
         // edit that self-deletes on a round-trip, stays out of the Inbox feed, and
         // bumps the human clock so picking a task up resets its staleness.
         case .start, .resume: setStatus(.doing, in: context)
-        case .resolve: completeAndResurface(in: context)
+        case .resolve: return completeAndResurface(in: context)
         case .reopen: reopenAndReblock(in: context)
         }
+        return []
     }
 }
 
@@ -649,6 +701,30 @@ extension TaskItem {
                 actorID: UserProfile.currentMemberID(in: context),
                 in: context
             ))
+    }
+
+    /// The `"unblocked"` payload: every edge the force-unblock dropped, plus the
+    /// `lastUnblockedAt` it overwrote.
+    ///
+    /// **Undo-completeness** (see `ChangeLogUndo`'s header): restoring the edges alone
+    /// would leave the task stamped as recently-unblocked, so `TaskRanking`'s
+    /// `recentUnblockBoost` would keep lifting it for an unblock that was taken back.
+    /// An action that writes two fields owes an undo that restores two fields.
+    struct UnblockSnapshot: Codable {
+        var removed: [Relationship]
+        var priorUnblockedAt: Date?
+    }
+
+    /// Kept beside `unblockAndLog` and `ChangeLogUndo`'s `"unblocked"` arm — the only
+    /// two readers — so the pair can never drift. A payload that fails to decode
+    /// reverts nothing rather than reverting partially.
+    static func encodeUnblock(_ snapshot: UnblockSnapshot) -> String? {
+        (try? JSONEncoder().encode(snapshot)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    static func decodeUnblock(_ raw: String?) -> UnblockSnapshot? {
+        guard let data = raw?.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(UnblockSnapshot.self, from: data)
     }
 
     /// The `"assigned"` old/new codec: `"<uuid>|<origin>"`, or `"|<origin>"` when the

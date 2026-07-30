@@ -60,6 +60,20 @@ final class ChangeLogEntry: NSManagedObject {
     /// routes on (`ChangeLogUndo`).
     static let editedAction = "edited"
 
+    /// The verb for a Today-plan generation. Excluded from the Inbox for the same
+    /// reason `Metrics.acceptanceRate` already excludes it: a daily plan is not a
+    /// per-task action the user accepts or rejects, so it is neither household news
+    /// nor something an Undo can meaningfully reverse.
+    ///
+    /// It used to be inbox-visible AND `isReversible`, which cost twice: it badged the
+    /// tab on first open, on every Replan, and on every self-heal upgrade (writing
+    /// "Planned 0 actions for today" on an empty day), and its Undo button struck the
+    /// row through and then did nothing — `ChangeLogUndo` has no arm for it, and the
+    /// entry carries no `taskUUID` for `linkedTask` to resolve. A control that appears
+    /// to succeed while doing nothing is the most corrosive thing a product built on
+    /// "every AI action is reversible" can ship.
+    static let plannedAction = "planned"
+
     convenience init(
         summary: String,
         detail: String? = nil,
@@ -98,17 +112,25 @@ final class ChangeLogEntry: NSManagedObject {
 // MARK: - Inbox visibility (one seam for the feed AND the unread badge)
 
 extension ChangeLogEntry {
+    /// Verbs that never reach the global Inbox feed. `editedAction` lives only in the
+    /// task's own Activity timeline; `plannedAction` is the app's own daily background
+    /// work rather than an action anyone took. Both forms below read THIS list, so a
+    /// future verb can't be excluded from one and not the other.
+    static let inboxHiddenActions = [ChangeLogEntry.editedAction, ChangeLogEntry.plannedAction]
+
     /// The single predicate deciding whether an entry belongs in the global Inbox feed
-    /// (and its unread tab badge). Manual per-task field edits (`editedAction`) are
-    /// excluded — they live only in the task's own Activity timeline. `InboxView` and
-    /// `RootTabView.unreadInboxCount` MUST both read this seam so a future verb can't
-    /// drift the feed and the badge apart. (`action == nil` keeps pre-redesign entries.)
+    /// (and its unread tab badge). `InboxView` and `RootTabView.unreadInboxCount` MUST
+    /// both read this seam so a future verb can't drift the feed and the badge apart.
+    /// (`action == nil` keeps pre-redesign entries.)
     static let inboxVisiblePredicate = NSPredicate(
-        format: "action == nil OR action != %@", ChangeLogEntry.editedAction)
+        format: "action == nil OR NOT (action IN %@)", ChangeLogEntry.inboxHiddenActions)
 
     /// The in-memory mirror of `inboxVisiblePredicate`, for filtering an already-fetched
     /// set (the unread badge counts over a live `FetchedResults`).
-    var isInboxVisible: Bool { action != ChangeLogEntry.editedAction }
+    var isInboxVisible: Bool {
+        guard let action else { return true }
+        return !ChangeLogEntry.inboxHiddenActions.contains(action)
+    }
 }
 
 // MARK: - Date codec (stable string encoding for dueDate edits' old/new values)

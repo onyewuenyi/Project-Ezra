@@ -38,6 +38,10 @@ struct TaskDetailPager: View {
     @State private var currentID: NSManagedObjectID?
     /// Interactive left-edge swipe-to-dismiss (the chevron promises push semantics).
     @State private var dragOffset: CGFloat = 0
+    /// The undo pill lives on the PAGER, not the page: resolving slides the page away
+    /// (or dismisses the cover), so a page presenting its own notice would take it with
+    /// it — exactly when the user most needs the way back.
+    @State private var notice: UndoNotice?
 
     /// `peers` is the presenting surface's on-screen order; empty (or missing `opened`)
     /// collapses to a single page — the pre-pager behaviour.
@@ -87,9 +91,11 @@ struct TaskDetailPager: View {
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        TaskMoreMenu(task: currentTask, onResolved: advanceAfterResolve)
+                        TaskMoreMenu(
+                            task: currentTask, onResolved: advanceAfterResolve, notice: $notice)
                     }
                 }
+                .undoNotice($notice)
         }
         .overlay(alignment: .leading) { edgeSwipeCatcher }
         .offset(x: dragOffset)
@@ -105,7 +111,8 @@ struct TaskDetailPager: View {
                     TaskDetailView(
                         task: task,
                         isActive: task.objectID == currentID,
-                        onResolved: advanceAfterResolve
+                        onResolved: advanceAfterResolve,
+                        notice: $notice
                     )
                     .containerRelativeFrame(.horizontal)
                 }
@@ -175,6 +182,9 @@ struct TaskDetailPager: View {
 struct TaskMoreMenu: View {
     @ObservedObject var task: TaskItem
     let onResolved: () -> Void
+    /// Presented by the pager — see the note on `TaskDetailPager.notice`. Both resolving
+    /// items here owe the user the same way back a row's resolution gives them.
+    @Binding var notice: UndoNotice?
 
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
@@ -211,8 +221,9 @@ struct TaskMoreMenu: View {
                     // choice, not the biggest button on the screen.
                     Button {
                         actionPulse += 1
-                        task.completeAndResurface(in: context)
+                        let unblocked = task.completeAndResurface(in: context)
                         context.saveChanges()
+                        offerUndo(verb: "Completed", unblocked: unblocked)
                         onResolved()
                     } label: {
                         Label("Mark done for \(name)", systemImage: "checkmark.circle")
@@ -231,8 +242,9 @@ struct TaskMoreMenu: View {
 
                 Button(role: .destructive) {
                     actionPulse += 1
-                    task.killAndResurface(in: context)
+                    let unblocked = task.killAndResurface(in: context)
                     context.saveChanges()
+                    offerUndo(verb: "Canceled", unblocked: unblocked)
                     onResolved()
                 } label: {
                     Label("Cancel task", systemImage: "xmark.circle")
@@ -243,6 +255,17 @@ struct TaskMoreMenu: View {
         }
         .accessibilityLabel("More")
         .sensoryFeedback(.impact(flexibility: .soft), trigger: actionPulse)
+    }
+
+    /// Same contract as `completeTask`/`cancelTask` on the record surfaces: name what
+    /// happened, name what it freed, and reopen to the live status the task left.
+    private func offerUndo(verb: String, unblocked: [TaskItem]) {
+        let task = self.task
+        let context = self.context
+        notice = .resolution(verb, task.title, unblocked: unblocked) {
+            task.reopenAndReblock(in: context)
+            context.saveChanges()
+        }
     }
 }
 

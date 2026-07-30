@@ -26,9 +26,12 @@ enum Metrics {
     /// trust number.
     static func acceptanceRate(entries: [ChangeLogEntry]) -> Double? {
         // "planned" entries (the daily Today plan) are excluded: a plan is not an
-        // AI *action on a task* the user accepts or rejects — its undo just clears
-        // the day cache — so folding it in would distort the trust number.
-        let aiEntries = entries.filter { $0.initiatedBy == .ai && $0.action != "planned" }
+        // AI *action on a task* the user accepts or rejects, so folding it in would
+        // distort the trust number. It is not reversible and not inbox-visible for
+        // the same reason — see `ChangeLogEntry.plannedAction`.
+        let aiEntries = entries.filter {
+            $0.initiatedBy == .ai && $0.action != ChangeLogEntry.plannedAction
+        }
         guard !aiEntries.isEmpty else { return nil }
         let kept = aiEntries.filter { !$0.undone }.count
         return Double(kept) / Double(aiEntries.count)

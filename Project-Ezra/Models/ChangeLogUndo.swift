@@ -84,6 +84,17 @@ enum ChangeLogUndo {
         case "decided":
             // The human's "Mark decided" re-escalates to the open decision.
             task.escalateToDecision()
+        case "unblocked":
+            // Restore every edge the force-unblock dropped — tracked and external, human
+            // and inferred alike — through the graph's own write primitive so the DEBUG
+            // `Relationship.validate` still runs.
+            //
+            // Undo-completeness: `lastUnblockedAt` goes back too. The unblock stamped it,
+            // and `TaskRanking.recentUnblockBoost` reads it, so restoring only the edges
+            // would leave the task lifted in the stack by an unblock the user just took
+            // back — while simultaneously reading as blocked again.
+            guard let snapshot = TaskItem.decodeUnblock(entry.oldValue) else { return }
+            task.restoreBlockerEdges(snapshot, now: now)
         case "split":
             // Undo of a breakdown: delete the children this split created, and with them
             // their `.parent` edges (the edge lives ON the child, so deleting the child
@@ -142,7 +153,7 @@ enum ChangeLogUndo {
             }
             task.touch()
         default:
-            // archived / unblocked / anything else → reopen if resolved, so the task is
+            // archived / anything else → reopen if resolved, so the task is
             // back in the working set and the human has it again. There is no
             // pre-confirm state to demote it to; `.todo` is where a task lives.
             //

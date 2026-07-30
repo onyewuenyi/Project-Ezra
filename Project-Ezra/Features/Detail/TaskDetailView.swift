@@ -31,6 +31,13 @@ struct TaskDetailView: View {
     /// The task left the working set (done / canceled). The pager decides what that means
     /// — advance to the next peer, or dismiss when there is no next.
     let onResolved: () -> Void
+    /// The transient undo pill, owned and presented by the pager (a page that resolves
+    /// gets swiped away, so it can't present its own).
+    ///
+    /// Resolving used to be the one mutation whose reversibility depended on WHICH
+    /// SCREEN you were standing on: the same completion offered an undo — and named the
+    /// dependents it freed — from a row, and nothing at all from here.
+    @Binding var notice: UndoNotice?
 
     @Environment(\.managedObjectContext) private var context
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -69,10 +76,14 @@ struct TaskDetailView: View {
     @State private var originalTitle = ""
     @State private var originalNotes: String?
 
-    init(task: TaskItem, isActive: Bool = true, onResolved: @escaping () -> Void = {}) {
+    init(
+        task: TaskItem, isActive: Bool = true, onResolved: @escaping () -> Void = {},
+        notice: Binding<UndoNotice?> = .constant(nil)
+    ) {
         self.task = task
         self.isActive = isActive
         self.onResolved = onResolved
+        _notice = notice
         _activityResults = FetchRequest(
             sortDescriptors: [NSSortDescriptor(keyPath: \ChangeLogEntry.timestamp, ascending: false)],
             predicate: task.uuid.map { NSPredicate(format: "taskUUID == %@", $0 as CVarArg) }
@@ -758,11 +769,17 @@ struct TaskDetailView: View {
 
     private func performPrimary(_ action: RecommendedAction) {
         actionPulse += 1
+        var unblocked: [TaskItem] = []
         Motion.withMotion(Motion.decide) {
-            task.performRecommendedAction(action, among: allTasks, in: context)
+            unblocked = task.performRecommendedAction(action, among: allTasks, in: context)
         }
         context.saveChanges()
-        if action.dismissesDetail { onResolved() }
+        // Only the resolving arm leaves the working set, and it is the only one that can
+        // free dependents — so it is the only one that owes the user a way back.
+        if action.dismissesDetail {
+            offerUndo(verb: "Completed", unblocked: unblocked)
+            onResolved()
+        }
     }
 
     // MARK: - Mutations wiring
@@ -772,7 +789,23 @@ struct TaskDetailView: View {
         actionPulse += 1
         Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
         context.saveChanges()
-        if state.isResolved { onResolved() }
+        if state.isResolved {
+            offerUndo(verb: state == .canceled ? "Canceled" : "Completed")
+            onResolved()
+        }
+    }
+
+    /// One pill, one way back — matching `completeTask`/`cancelTask`'s contract on the
+    /// record surfaces so a resolution reads the same wherever it was made. Reopen
+    /// restores the live status the task left via its timeline, so undoing a completion
+    /// mid-flight returns it to `.doing` rather than stranding it at the start.
+    private func offerUndo(verb: String, unblocked: [TaskItem] = []) {
+        let task = self.task
+        let context = self.context
+        notice = .resolution(verb, task.title, unblocked: unblocked) {
+            task.reopenAndReblock(in: context)
+            context.saveChanges()
+        }
     }
 
     private func setOwner(_ id: UUID?) {

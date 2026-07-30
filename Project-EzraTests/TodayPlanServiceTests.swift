@@ -49,8 +49,14 @@ struct TodayPlanServiceTests {
         #expect(!plan.actions.isEmpty)
         #expect(plan.actions.count == request.fallbackCount)
 
-        // The generation is logged as one reversible `.ai` "planned" entry.
+        // The generation is logged as one `.ai` "planned" entry — a record, but neither
+        // reversible nor inbox-visible: it is the app's own background work, not an
+        // action anyone took, and there is no undo arm that could honour the button.
         let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
-        #expect(entries.contains { $0.action == "planned" && $0.initiatedBy == .ai })
+        let planned = entries.filter { $0.action == ChangeLogEntry.plannedAction }
+        #expect(planned.count == 1)
+        #expect(planned.allSatisfy { $0.initiatedBy == .ai })
+        #expect(planned.allSatisfy { !$0.isReversible })
+        #expect(planned.allSatisfy { !$0.isInboxVisible })
     }
 }

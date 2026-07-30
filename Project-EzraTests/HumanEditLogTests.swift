@@ -309,4 +309,54 @@ struct HumanEditLogTests {
         // Still present on the task's own timeline (fetched by taskUUID, no predicate).
         #expect(try editedEntries(for: task, in: context).count == 1)
     }
+
+    /// The Today plan's generation entry is the app's OWN background work, not an action
+    /// anyone took — so it must not badge the Inbox tab. It used to, on first open, on
+    /// every Replan, and on every self-heal upgrade, which turned a re-entrant background
+    /// job into an engagement signal the guardrails refuse.
+    ///
+    /// Both forms are asserted because they are the drift risk: the fetch predicate and
+    /// the in-memory mirror are read by different call sites (`InboxView` vs
+    /// `RootTabView.unreadInboxCount`), and a verb excluded from one but not the other
+    /// shows a feed and a badge that disagree.
+    @Test("'planned' entries are excluded from the Inbox by both forms of the seam")
+    func plannedExcludedFromInbox() throws {
+        let context = context()
+        let planned = ChangeLogEntry(
+            summary: "Planned 3 actions for today (rules)",
+            action: ChangeLogEntry.plannedAction, initiatedBy: .ai, isReversible: false,
+            in: context)
+        context.insert(planned)
+        let filed = ChangeLogEntry(
+            summary: "Filed", action: "filed", initiatedBy: .ai, in: context)
+        context.insert(filed)
+        try context.save()
+
+        let visibleRequest = NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry")
+        visibleRequest.predicate = ChangeLogEntry.inboxVisiblePredicate
+        let visible = try context.fetch(visibleRequest)
+        #expect(!visible.contains { $0.action == ChangeLogEntry.plannedAction })
+        #expect(visible.contains { $0.action == "filed" })
+
+        #expect(!planned.isInboxVisible)
+        #expect(filed.isInboxVisible)
+    }
+
+    /// Not reversible, and deliberately so: there is no `"planned"` arm in
+    /// `ChangeLogUndo` and the entry carries no `taskUUID` for `linkedTask` to resolve,
+    /// so an Undo button on it struck the row through and then did nothing. If an action
+    /// has no honest arm, the fix is to stop offering the button.
+    @Test("'planned' entries never offer an Undo")
+    func plannedIsNotReversible() throws {
+        let context = context()
+        let planned = ChangeLogEntry(
+            summary: "Planned 0 actions for today (rules)",
+            action: ChangeLogEntry.plannedAction, initiatedBy: .ai, isReversible: false,
+            in: context)
+        context.insert(planned)
+        try context.save()
+
+        #expect(!planned.isReversible)
+        #expect(planned.taskUUID == nil)
+    }
 }

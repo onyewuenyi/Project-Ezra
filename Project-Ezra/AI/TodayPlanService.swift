@@ -403,8 +403,16 @@ extension AppBrain {
 
     // MARK: ChangeLog
 
-    /// One reversible `.ai` entry per generation. Undo clears the day cache (wired
-    /// where the trail's undo runs against the store).
+    /// One `.ai` entry per generation, kept as a record and deliberately NOT reversible
+    /// and NOT inbox-visible (`ChangeLogEntry.plannedAction`).
+    ///
+    /// It used to claim both. That badged the Inbox tab on first open, on every Replan,
+    /// and on every self-heal upgrade — the app generating engagement signal from its
+    /// own background work — and it rendered an Undo button with nothing behind it:
+    /// there is no `"planned"` arm in `ChangeLogUndo`, and the entry carries no
+    /// `taskUUID` for `linkedTask` to resolve, so the tap struck the row through and
+    /// stopped there. `Metrics.acceptanceRate` already excluded this verb for the same
+    /// reason; the feed now agrees with the metric.
     private func logPlanned(_ plan: GeneratedPlan, in context: NSManagedObjectContext) {
         let source: String
         switch plan.tier {
@@ -416,9 +424,9 @@ extension AppBrain {
         let entry = ChangeLogEntry(
             summary: "Planned \(count) action\(count == 1 ? "" : "s") for today (\(source))",
             detail: plan.headline,
-            action: "planned",
+            action: ChangeLogEntry.plannedAction,
             initiatedBy: .ai,
-            isReversible: true,
+            isReversible: false,
             in: context)
         context.insert(entry)
         context.saveChanges()

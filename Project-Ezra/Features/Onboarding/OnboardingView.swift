@@ -266,11 +266,20 @@ struct OnboardingView: View {
 
     private var result: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // The header follows the CTA into the emptied state: "I found 0 areas. From
+            // 0 items. 0 I'm leaving for you to decide." is technically true and reads
+            // like a bug, on the one screen where the user has just deliberately said
+            // no to everything.
             VStack(alignment: .leading, spacing: Spacing.xs) {
-                Text("I found \(areaCount) area\(areaCount == 1 ? "" : "s")")
-                    .screenTitleStyle()
                 Text(
-                    "From \(drafts.count) item\(drafts.count == 1 ? "" : "s"). \(judgmentCount) I'm leaving for you to decide."
+                    drafts.isEmpty
+                        ? "Nothing to bring in" : "I found \(areaCount) area\(areaCount == 1 ? "" : "s")"
+                )
+                .screenTitleStyle()
+                Text(
+                    drafts.isEmpty
+                        ? "You cleared them all. You can start from an empty slate and capture as things come up."
+                        : "From \(drafts.count) item\(drafts.count == 1 ? "" : "s"). \(judgmentCount) I'm leaving for you to decide."
                 )
                 .supportingStyle()
             }
@@ -303,19 +312,33 @@ struct OnboardingView: View {
                 .padding(.horizontal, Spacing.lg)
             }
 
+            // The CTA changes identity rather than going dead. Every row here is one ✕
+            // from gone, and this scene has no other control — no back edge, no skip,
+            // and it sits in a `fullScreenCover` with no interactive dismissal. So
+            // removing the last row used to leave a first-run user staring at "I found
+            // 0 areas" and a greyed-out button, with no way forward OR back.
+            //
+            // `.intro` already solved this: its disabled "Show me" is always paired with
+            // a live "Start empty". Here there is only one slot, so the slot moves.
             VStack(spacing: Spacing.xs) {
                 Button {
-                    commit()
+                    if drafts.isEmpty { onComplete() } else { commit() }
                 } label: {
-                    Text("Manage these for me")
+                    Text(drafts.isEmpty ? "Start empty" : "Manage these for me")
                         .font(.ctaLabel)
-                        .foregroundStyle(Palette.onAccent)
+                        .foregroundStyle(
+                            drafts.isEmpty ? Palette.secondaryText : Palette.onAccent
+                        )
                         .frame(maxWidth: .infinity)
                         .frame(height: 54)
-                        .background(Palette.accentGradient, in: Capsule())
+                        .background(
+                            drafts.isEmpty
+                                ? AnyShapeStyle(Palette.secondarySurface)
+                                : AnyShapeStyle(Palette.accentGradient),
+                            in: Capsule()
+                        )
                 }
                 .buttonStyle(.pressableProminent)
-                .disabled(drafts.isEmpty)
             }
             .padding(Spacing.lg)
         }

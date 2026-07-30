@@ -61,7 +61,9 @@ struct TodayView: View {
     }
     /// AI-handled count for the held-depth tile — excludes the daily "planned" entry.
     private var tidiedCount: Int {
-        changesResults.filter { !$0.undone && $0.initiatedBy == .ai && $0.action != "planned" }.count
+        changesResults.filter {
+            !$0.undone && $0.initiatedBy == .ai && $0.action != ChangeLogEntry.plannedAction
+        }.count
     }
 
     /// The plan's actions that still resolve to a real task, paired with it. A merge or a
@@ -263,6 +265,8 @@ struct TodayView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, Spacing.sm)
 
+                tierDisclosure(plan)
+
                 if resting, sequence.dayChanged(currentTasks: tasks) {
                     Button {
                         sequence.replan()
@@ -315,6 +319,27 @@ struct TodayView: View {
             }
             .padding(Spacing.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Says so when the advisor never spoke.
+    ///
+    /// `AppBrain.todayPlan` walks its tier chain and swallows every failure with a
+    /// `continue`, so an unavailable / timed-out / guardrail-tripped model produces a
+    /// briefing that is silently a different artifact: headline "Your day", fact-line
+    /// rationales instead of reasoning, and NO Tradeoffs or Risks sections at all
+    /// (they're nil, so their `if let`s just skip). Without this line the user has no
+    /// way to tell a thin day from a missing advisor — the Trust Checklist's
+    /// *Understand* row, on the surface where the AI most speaks in its own voice.
+    ///
+    /// It annotates the headline rather than replacing it, and names the artifact the
+    /// user is actually holding — the composer's `engineDisclosure` does the same job
+    /// for capture, and the two deliberately read as one voice.
+    @ViewBuilder private func tierDisclosure(_ plan: GeneratedPlan) -> some View {
+        if plan.tier == .deterministic {
+            Text("On-device intelligence unavailable — this is a ranked list, not a briefing.")
+                .metadataStyle()
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

@@ -72,7 +72,12 @@ struct InboxView: View {
             }
             .animation(Motion.fade, value: entries.isEmpty)
             .background(Palette.background)
+            // Dev-only, and the WHOLE inset is compiled out: the strip's opaque
+            // background painted over the Capture FAB, so leaving an empty one in
+            // release would keep the collision without the content that justified it.
+            #if DEBUG
             .safeAreaInset(edge: .bottom) { diagnosticsFooter }
+            #endif
             .sensoryFeedback(.impact(flexibility: .soft), trigger: undoCount)
             .navigationTitle("Inbox")
             .navigationBarTitleDisplayMode(.inline)
@@ -141,13 +146,20 @@ struct InboxView: View {
         context.saveChanges()
     }
 
-    // MARK: - Diagnostics footer (dev-only plan tiers)
+    // MARK: - Diagnostics footer (dev-only)
 
+    #if DEBUG
+    /// Which engine and which plan tier actually ran. Entirely dev-only — the engine
+    /// line used to sit outside this guard, so a shipping user got a pinned strip
+    /// reading `Rules engine · appleIntelligenceNotEnabled`: an internal enum
+    /// description in production chrome, and AI branding the guardrails refuse.
+    ///
+    /// The user-facing half of this information is the Today briefing's
+    /// deterministic-tier disclosure — the place the degradation is actually felt.
     private var diagnosticsFooter: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
             Text(brain.status.description)
                 .metadataStyle()
-            #if DEBUG
             Text(planDiagnosticsLine)
                 .metadataStyle()
             // One line per capability that has actually run a model call — the evidence
@@ -157,7 +169,6 @@ struct InboxView: View {
                 Text(line)
                     .metadataStyle()
             }
-            #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Spacing.lg)
@@ -165,6 +176,7 @@ struct InboxView: View {
         .background(Palette.background.opacity(0.9))
         .accessibilityElement(children: .combine)
     }
+    #endif
 
     #if DEBUG
     private var planDiagnosticsLine: String {
