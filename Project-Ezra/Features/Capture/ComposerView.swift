@@ -15,11 +15,15 @@
 //  Correction row — the local learning signal.
 //
 //  On device, Foundation Models streams partial generation through `onPartial`,
-//  so candidates fill in progressively within a single parse. The heuristic
-//  engine — what the simulator always runs — is effectively instant, so the felt
-//  behavior is live either way. Continuous mid-utterance re-parse remains on the
-//  debounce trigger (restarting a generation per keystroke is waste); a
-//  continuous session is the future upgrade.
+//  so candidates fill in progressively within a single parse — and the parse
+//  ROLLS: input arriving while a parse streams never cancels it (its cards are
+//  landing live); a follow-up over the fuller text chains at completion, and a
+//  max-wait bound fires the first parse of a burst even when dictation deltas
+//  arrive faster than the debounce can ever survive. The old shape cancelled the
+//  in-flight generation on every delta, so "cards take shape as you talk" was
+//  structurally "cards appear when you stop"; now the mid-ramble screen is the
+//  product's signature moment on both engines (the heuristic is instant, so its
+//  rolling cadence is simply the max-wait tick).
 //
 
 import CoreData
@@ -219,11 +223,12 @@ struct ComposerView: View {
             .onDisappear {
                 speech.stop()
                 parse.silenceTask?.cancel()
-                parse.triageTask?.cancel()
+                parse.debounceTask?.cancel()
+                parse.parseTask?.cancel()
                 // The backstop that makes this whole phase worth having: a swipe-down,
                 // a phone call, anything that tears the sheet down mid-thought leaves
                 // the raw text and every edited draft on disk.
-                parkIfUnfinished()
+                parkIfUnfinished(force: true)
             }
             .confirmationDialog(
                 "Discard this capture?", isPresented: $showDiscardConfirm, titleVisibility: .visible
@@ -262,16 +267,34 @@ struct ComposerView: View {
 
     // MARK: - Live triage loop
 
-    /// Debounce ~400ms, cancel in-flight, drop stale results. The heuristic path
-    /// resolves near-instantly; the on-device model takes a beat — either way the
-    /// newest text always wins.
+    /// The rolling cadence, three numbers:
+    /// - `debounce`: the quiet gap after which a burst of input is worth parsing.
+    /// - `maxParseDeferral`: how long continuous input may keep resetting that
+    ///   debounce before a parse fires anyway. Dictation's volatile hypotheses land
+    ///   faster than the debounce can ever survive, so without this bound the
+    ///   flagship input mode never parsed until the speaker stopped.
+    /// - `parkThrottle`: the floor between mid-session park writes (an O(capture)
+    ///   encode + synchronous save) now that rolling parses complete far more often
+    ///   than the old at-pause cadence. Raw text is never at risk for longer than
+    ///   this window, and dismissal always parks unthrottled.
+    private static let debounceMilliseconds = 400
+    private static let maxParseDeferralSeconds: TimeInterval = 1.2
+    private static let parkThrottleSeconds: TimeInterval = 2
+
+    /// The input edge of the loop: debounce quiet gaps, bound continuous bursts by
+    /// `maxParseDeferralSeconds` — and never disturb a parse that is already
+    /// streaming (its candidates are landing on screen; a follow-up chains the
+    /// moment it completes instead).
     private func scheduleTriage() {
-        parse.triageGeneration += 1
-        let generation = parse.triageGeneration
-        parse.triageTask?.cancel()
+        parse.debounceTask?.cancel()
 
         let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !captured.isEmpty else {
+            // Everything in flight is now about text that no longer exists.
+            parse.parseEpoch += 1
+            parse.parseTask?.cancel()
+            parse.parseTask = nil
+            parse.burstStartedAt = nil
             drafts = []
             lastParsedText = nil
             lastParseYieldedCandidates = false
@@ -287,16 +310,43 @@ struct ComposerView: View {
             return
         }
 
-        parse.triageTask = Task {
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled, generation == parse.triageGeneration else { return }
+        // A parse is already streaming; don't disturb it. Whether a follow-up is
+        // needed is decided at its completion, by comparing the field against what
+        // it actually parsed — no flag to keep honest.
+        if parse.parseTask != nil { return }
+
+        let now = Date()
+        let burstStart = parse.burstStartedAt ?? now
+        parse.burstStartedAt = burstStart
+        if now.timeIntervalSince(burstStart) >= Self.maxParseDeferralSeconds {
+            startParse()
+        } else {
+            parse.debounceTask = Task {
+                try? await Task.sleep(for: .milliseconds(Self.debounceMilliseconds))
+                guard !Task.isCancelled else { return }
+                startParse()
+            }
+        }
+    }
+
+    /// One parse, start to finish: prep the context, run the engine with streaming
+    /// partials, apply the completed result, chain the follow-up if the field moved
+    /// while it ran. Exactly one parse runs at a time — `scheduleTriage` defers to a
+    /// running one, so the only caller-side invariant is `parse.parseTask == nil`.
+    private func startParse() {
+        let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !captured.isEmpty else { return }
+        parse.burstStartedAt = nil
+        parse.parseEpoch += 1
+        let epoch = parse.parseEpoch
+
+        parse.parseTask = Task {
             // Everything below is real work (correction-profile build, open-set snapshot,
-            // suppression load + prune, embedding warm-up). It runs only AFTER the debounce
-            // survives cancellation — never once per keystroke — so a fast typist doesn't
-            // pay for parses that are immediately superseded.
+            // suppression load + prune, embedding warm-up). It runs only once a burst
+            // earns a parse — never once per keystroke — so a fast typist doesn't pay
+            // for input that is immediately superseded.
             let roster = rosterSnapshot
-            let learned = CorrectionProfile.rules(
-                from: corrections.map { $0 }, tasks: allTasks.map { $0 })
+            let learned = sessionRules()
             let openTasks = openTaskSnapshots
             let suppressions = sessionSuppressions()
             let ownership = ownershipSnapshot
@@ -311,15 +361,20 @@ struct ComposerView: View {
                 suppressions: suppressions,
                 ownership: ownership,
                 onPartial: { partial in
-                    // Streaming (device): candidates fill in while the model is
-                    // still generating. Stale snapshots drop; edits survive merge.
-                    guard generation == self.parse.triageGeneration else { return }
+                    // Streaming (device): candidates fill in while the model is still
+                    // generating — including while the user keeps talking. Snapshots
+                    // from an invalidated epoch drop; edits survive merge; cards the
+                    // snapshot hasn't reached yet are KEPT (only a completed parse
+                    // may drop a card).
+                    guard epoch == self.parse.parseEpoch else { return }
                     Motion.withMotion(Motion.settle) {
-                        self.drafts = self.merge(fresh: partial, into: self.drafts)
+                        self.drafts = self.merge(
+                            fresh: partial, into: self.drafts, keepingUnmatched: true)
                     }
                 }
             )
-            guard !Task.isCancelled, generation == parse.triageGeneration else { return }
+            guard !Task.isCancelled, epoch == parse.parseEpoch else { return }
+            parse.parseTask = nil
             // Persist any title vectors retrieval computed fresh this pass — tiny rows
             // on the app's write context, post-debounce (never per keystroke). The
             // save rides the next commit; an abandoned capture just re-memoizes later.
@@ -333,10 +388,26 @@ struct ComposerView: View {
             lastParsedText = captured
             announceParseResult()
             // Park as soon as there is something worth keeping, not only on dismiss —
-            // it shrinks the window in which the thought lives only in memory to a
-            // single debounce.
+            // it shrinks the window in which the thought lives only in memory.
             parkIfUnfinished()
+            // The field moved while this parse ran (dictation deltas, more typing).
+            // Chain the follow-up immediately: the debounce's job — don't parse
+            // mid-burst — has been done by the parse's own duration.
+            if text.trimmingCharacters(in: .whitespacesAndNewlines) != captured {
+                startParse()
+            }
         }
+    }
+
+    /// The learned-correction rules, built once per composer session. Correction rows
+    /// are only written at commit, which dismisses the session — so every parse of a
+    /// session sees identical rules, and rebuilding them per parse (a pass over all
+    /// corrections and tasks with a reflection sort) was pure spike on the pause path.
+    private func sessionRules() -> [LearnedRule] {
+        if let cached = parse.cachedRules { return cached }
+        let rules = CorrectionProfile.rules(from: corrections.map { $0 }, tasks: allTasks.map { $0 })
+        parse.cachedRules = rules
+        return rules
     }
 
     /// The open working set as value snapshots, for reverse dependency detection
@@ -388,6 +459,11 @@ struct ComposerView: View {
     /// Everything `OwnerProposer` needs, snapshotted as values so the proposer stays a
     /// pure function. Empty on a solo install, which makes the whole feature a no-op.
     private var ownershipSnapshot: OwnershipContext {
+        // Dead work until sync ships: `OwnerProposer.propose` bails to `.mine` before
+        // reading any of this while `HouseholdSync.isLive` is false (the spoken-name
+        // rung reads the draft, not this context) — so the three full passes over
+        // every task below fed a ladder that never looked at them, per parse.
+        guard HouseholdSync.isLive else { return .none }
         let me = profiles.first?.linkedMemberID
         let others = familyMembers.filter { !$0.isRemoved && $0.uuid != me }
         guard !others.isEmpty else { return .none }
@@ -430,8 +506,12 @@ struct ComposerView: View {
     /// Keep cards stable across re-parses and streaming partials: `DraftMerge`
     /// matches by the AI's reading of the line, transplants identity, re-applies
     /// the user's edits over the fresh values, and honors the session's removals.
-    private func merge(fresh: [TaskDraft], into current: [TaskDraft]) -> [TaskDraft] {
-        DraftMerge.merge(fresh: fresh, into: current, removed: removedDrafts)
+    private func merge(
+        fresh: [TaskDraft], into current: [TaskDraft], keepingUnmatched: Bool = false
+    ) -> [TaskDraft] {
+        DraftMerge.merge(
+            fresh: fresh, into: current, removed: removedDrafts,
+            keepingUnmatched: keepingUnmatched)
     }
 
     // MARK: - Footer (the Confirm-Creation moment)
@@ -499,11 +579,20 @@ struct ComposerView: View {
         AccessibilityNotification.Announcement(message).post()
     }
 
-    /// Persist the in-flight capture. Called on dismiss and after each parse, so the
-    /// window in which a thought exists only in memory is as small as possible.
-    private func parkIfUnfinished() {
+    /// Persist the in-flight capture. Called on dismiss (`force`, always writes) and
+    /// after each completed parse — throttled there, because rolling parses complete
+    /// far more often than the old at-pause cadence and each park is an O(capture)
+    /// encode plus a synchronous save. The thought is never at risk for longer than
+    /// the throttle window, and the drafts are derived (resume re-parses `rawText`).
+    private func parkIfUnfinished(force: Bool = false) {
         guard !drafts.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
+        if !force, let last = parse.lastParkAt,
+            Date().timeIntervalSince(last) < Self.parkThrottleSeconds
+        {
+            return
+        }
+        parse.lastParkAt = Date()
         parked = brain.park(
             drafts, rawCapture: text, source: usedDictation ? .voice : .text,
             into: parked, in: context)
@@ -532,7 +621,10 @@ struct ComposerView: View {
 
     private func discard() {
         speech.stop()
-        parse.triageTask?.cancel()
+        parse.parseEpoch += 1
+        parse.debounceTask?.cancel()
+        parse.parseTask?.cancel()
+        parse.parseTask = nil
         if let parked { AppBrain.discard(parked, in: context) }
         parked = nil
         drafts = []
@@ -544,7 +636,10 @@ struct ComposerView: View {
     private func commitAll() {
         guard !drafts.isEmpty else { return }
         speech.stop()
-        parse.triageTask?.cancel()
+        parse.parseEpoch += 1
+        parse.debounceTask?.cancel()
+        parse.parseTask?.cancel()
+        parse.parseTask = nil
         committed += 1
         // Adopt the parked row rather than creating a second one for the same event.
         brain.commit(
@@ -566,6 +661,7 @@ struct ComposerView: View {
         text = ""
         context.saveChanges()
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
+        parse.cachedRules = nil  // likewise new corrections
         dismiss()
     }
 
@@ -759,10 +855,22 @@ struct ComposerView: View {
 /// mutate on every keystroke and transcript delta, and nothing in the view's `body`
 /// reads them, so observing them only bought a redundant render pass per event.
 final class LiveParseState {
-    /// Bumped on every text change; an in-flight triage that comes back stale drops
-    /// its result instead of clobbering fresher candidates.
-    var triageGeneration = 0
-    var triageTask: Task<Void, Never>?
+    /// Bumped whenever in-flight work must be invalidated — a parse starting, the
+    /// field emptied, commit/discard. A parse captures the value at start; its
+    /// streamed partials and final result apply only while still current.
+    var parseEpoch = 0
+    /// The sleeping debounce; cancelled and replaced per input event.
+    var debounceTask: Task<Void, Never>?
+    /// The one running parse. New input never cancels it — its candidates are
+    /// streaming onto the screen; it is superseded only at its own completion.
+    var parseTask: Task<Void, Never>?
+    /// When the current burst of unparsed input began — the max-wait clock. Cleared
+    /// when a parse starts.
+    var burstStartedAt: Date?
+    /// The learned-correction rules for this session (see `sessionRules`).
+    var cachedRules: [LearnedRule]?
+    /// The last mid-session park write, for the throttle.
+    var lastParkAt: Date?
     /// The single silence-timeout in flight; cancelled and replaced on every
     /// transcript delta, cancelled outright on stop/disappear.
     var silenceTask: Task<Void, Never>?

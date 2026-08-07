@@ -46,9 +46,18 @@ enum DraftMerge {
     /// One-to-one merge of a fresh parse into the current cards, preserving fresh's
     /// order (it reflects the capture text). Matched cards keep their identity and
     /// user edits; unmatched fresh candidates enter as new cards; unmatched current
-    /// cards drop (the model no longer reads that line).
+    /// cards drop (the model no longer reads that line) — unless `keepingUnmatched`.
+    ///
+    /// `keepingUnmatched` is the STREAMING arm: a partial snapshot grows from the top
+    /// of the text, so "this line isn't in the snapshot yet" is a statement about how
+    /// far generation has gotten, not about the line. Dropping on that read collapsed
+    /// an established card list to one card at the start of every chained re-parse and
+    /// regrew it — cards blinking away mid-ramble. Unmatched current cards ride at the
+    /// tail (they ARE the tail: snapshots claim cards top-down); only a COMPLETED
+    /// parse, which really has re-read every line, may drop one.
     static func merge(
-        fresh: [TaskDraft], into current: [TaskDraft], removed: RemovedDraftSet
+        fresh: [TaskDraft], into current: [TaskDraft], removed: RemovedDraftSet,
+        keepingUnmatched: Bool = false
     ) -> [TaskDraft] {
         let candidates = removed.filter(fresh)
         var claimed = [Bool](repeating: false, count: current.count)
@@ -78,9 +87,13 @@ enum DraftMerge {
             }
         }
 
-        return candidates.enumerated().map { f, candidate in
+        var merged = candidates.enumerated().map { f, candidate in
             matches[f].map { adopt(fresh: candidate, keeping: current[$0]) } ?? candidate
         }
+        if keepingUnmatched {
+            merged += current.indices.filter { !claimed[$0] }.map { current[$0] }
+        }
+        return merged
     }
 
     /// Fresh's values + kept's identity + kept's user-touched fields re-applied.

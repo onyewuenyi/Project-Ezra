@@ -123,6 +123,55 @@ struct DraftMergeTests {
         #expect(Set(merged.map(\.id)).count == 2)
     }
 
+    // MARK: - Streaming partials keep the tail
+
+    @Test("A partial snapshot keeps the cards it hasn't reached yet")
+    func partialKeepsUnreachedCards() {
+        let a = draft("renew passport")
+        let b = draft("book dentist appointment")
+        let c = draft("water the plants")
+        // A chained re-parse's stream starts over from the top of the text: its
+        // first snapshot reads one line, not zero of the others.
+        let firstSnapshot = [draft("renew passport")]
+
+        let merged = DraftMerge.merge(
+            fresh: firstSnapshot, into: [a, b, c], removed: none, keepingUnmatched: true)
+
+        #expect(merged.map(\.id) == [a.id, b.id, c.id])
+    }
+
+    @Test("A partial's growing tail claims its card; only a completed parse drops one")
+    func partialGrowsWithoutDropping() {
+        let a = draft("renew passport")
+        let b = draft("book dentist appointment")
+        let partial = [draft("renew passport"), draft("book dentist")]
+
+        let streamed = DraftMerge.merge(
+            fresh: partial, into: [a, b], removed: none, keepingUnmatched: true)
+        #expect(streamed.map(\.id) == [a.id, b.id])
+
+        // The completed parse re-read every line — its drop is authoritative.
+        let completed = DraftMerge.merge(
+            fresh: [draft("renew passport")], into: [a, b], removed: none)
+        #expect(completed.map(\.id) == [a.id])
+    }
+
+    @Test("A kept unmatched card retains its user edits untouched")
+    func partialKeepsEditsOnUnreachedCards() {
+        var edited = draft("call the vet")
+        edited.category = "Health"
+        edited.markEdited(.category)
+
+        let merged = DraftMerge.merge(
+            fresh: [draft("renew passport")], into: [edited], removed: none,
+            keepingUnmatched: true)
+
+        #expect(merged.count == 2)
+        #expect(merged[1].id == edited.id)
+        #expect(merged[1].category == "Health")
+        #expect(merged[1].userEdited(.category))
+    }
+
     // MARK: - Removal stickiness
 
     @Test("A removed card stays removed when the re-parse proposes it again")
