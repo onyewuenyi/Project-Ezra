@@ -24,6 +24,14 @@ extension EnvironmentValues {
     @Entry var openInbox: () -> Void = {}
 }
 
+/// One presentation of the capture composer. Fresh id per open — every open is a new
+/// session by construction, and `sheet(item:)` hands this value to the content
+/// closure directly (see `RootTabView.composerSession` for why that's load-bearing).
+private struct ComposerSession: Identifiable {
+    let id = UUID()
+    let resuming: Capture?
+}
+
 struct RootTabView: View {
     @AppStorage("hasOnboarded") private var hasOnboarded = false
     @Environment(\.managedObjectContext) private var context
@@ -38,18 +46,26 @@ struct RootTabView: View {
     private var changesResults: FetchedResults<ChangeLogEntry>
     @AppStorage("lastInboxSeenAt") private var lastInboxSeenAt: Double = 0
     @State private var showOnboarding: Bool
-    @State private var showComposer = false
-    /// A parked capture the user chose to resume, from the Today "captures waiting"
-    /// line. Nil for a fresh capture — opening the composer always starts a NEW one, so
-    /// being interrupted twice never overwrites the first thought.
-    @State private var resumingCapture: Capture?
+    /// The presented composer session, item-based ON PURPOSE: with the paired
+    /// `isPresented` + `resumingCapture` shape, SwiftUI evaluated the sheet's content
+    /// closure once with the STALE nil resume target and re-evaluated with the real
+    /// one only after `ComposerView` had already mounted and run its restore — so a
+    /// resume silently opened a fresh composer (verified via the `-OpenCapture`
+    /// console seam). `sheet(item:)` hands the closure the value itself; the race is
+    /// unrepresentable. `resuming` nil = a fresh capture — opening the composer always
+    /// starts a NEW one, so being interrupted twice never overwrites the first thought.
+    @State private var composerSession: ComposerSession?
     /// The transient "Added N tasks" receipt, shown after the composer closes.
     @State private var commitNotice: UndoNotice?
     @State private var selection: Int
 
     init() {
         let onboarded = UserDefaults.standard.bool(forKey: "hasOnboarded")
-        let seeding = ProcessInfo.processInfo.arguments.contains("-SeedSampleData")
+        // Verification seams skip onboarding: both exist to reach a screen state
+        // directly, and a first-run cover would fight the presentation they drive.
+        let seeding =
+            ProcessInfo.processInfo.arguments.contains("-SeedSampleData")
+            || ProcessInfo.processInfo.arguments.contains("-OpenCapture")
         _showOnboarding = State(initialValue: !onboarded && !seeding)
         // Verification seam: `-InitialTab N` selects the starting tab.
         let args = ProcessInfo.processInfo.arguments
@@ -102,16 +118,10 @@ struct RootTabView: View {
             selection = 0
             briefing.pendingOpenBriefing = false
         }
-        // onDismiss is the invariant's backstop: however the sheet closed (commit,
-        // discard, swipe), the next open starts fresh unless \.resumeCapture re-arms it.
-        .sheet(
-            isPresented: $showComposer,
-            onDismiss: {
-                resumingCapture = nil
-                presentCommitNotice()
-            }
-        ) {
-            ComposerView(resuming: resumingCapture)
+        // Item-based, so however the sheet closed (commit, discard, swipe) the session
+        // clears with it — the next open starts fresh unless \.resumeCapture re-arms it.
+        .sheet(item: $composerSession, onDismiss: { presentCommitNotice() }) { session in
+            ComposerView(resuming: session.resuming)
         }
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView {
@@ -140,7 +150,32 @@ struct RootTabView: View {
                 await seedIfRequested()
             }
             await runCaptureDiagnosticsIfRequested()
+            await openCaptureIfRequested()
         }
+    }
+
+    /// Deterministic verification seam. Launch with `-OpenCapture ["text"]` to present
+    /// the composer at launch — the one capture surface no other arg could reach
+    /// (synthetic taps are blocked here, and the composer only opens from a tap). With
+    /// a text argument the seam parks that text as a `Capture` and RESUMES it, which
+    /// re-parses through the full live loop (`restoreIfResuming` → `scheduleTriage`) —
+    /// so the streaming/rolling parse is observable in a screenshot without a keyboard.
+    /// Never fires in normal runs.
+    private func openCaptureIfRequested() async {
+        let args = ProcessInfo.processInfo.arguments
+        guard let flag = args.firstIndex(of: "-OpenCapture") else { return }
+        var target: Capture?
+        if args.indices.contains(flag + 1), !args[flag + 1].hasPrefix("-") {
+            let capture = Capture(rawText: args[flag + 1], source: .text, in: context)
+            // Parked with drafts pending — exactly the shape resume re-parses from.
+            capture.parkedDrafts = []
+            context.insert(capture)
+            context.saveChanges()
+            target = capture
+        }
+        // Let the launch render pass settle before presenting over it.
+        try? await Task.sleep(for: .milliseconds(300))
+        presentComposer(resuming: target)
     }
 
     /// The one way the composer is presented. Every entry point (the FAB, `openCapture`,
@@ -152,8 +187,7 @@ struct RootTabView: View {
         // absorbs the cost, so the first parse doesn't pay it against the user's pause.
         AppBrain.prewarmCapture(in: context)
         brain.lastCommitSummary = nil
-        resumingCapture = capture
-        showComposer = true
+        composerSession = ComposerSession(resuming: capture)
     }
 
     /// Show the receipt for a confirm that just happened, once. Deliberately no Undo

@@ -47,6 +47,7 @@ Append to the `simctl launch` line:
 - `-SeedSampleData` — populate real tasks via the AI engine and skip onboarding (the sim uses the heuristic engine; Foundation Models isn't available there).
 - `-SeedFlowFixtures` — populate deterministic fixture data covering every core user flow except onboarding (Daily Brief, Needs Decision Resolution, Weekly Retro, Dependency Chain Resurfacing), bypassing the AI engine so results are exact and identical every run. See `docs/mock-data-user-flows.md` for what each fixture produces.
 - `-InitialTab N` — start on tab N: `0` Today, `1` Inbox, `2` My Tasks, `3` Household.
+- `-OpenCapture ["text"]` — present the capture composer at launch; with a text argument it parks + resumes that text, driving the live parse loop so the results are screenshot-observable.
 
 Example — land on the seeded My Tasks surface:
 ```bash
