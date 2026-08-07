@@ -47,10 +47,6 @@ final class AppBrain {
     /// True while a triage call is in flight — drives the soft-glow processing UI.
     var isProcessing = false
 
-    /// Minimum spacing between APPLIED streaming partials (the UI-facing cadence;
-    /// the salvage box still records every raw snapshot).
-    static let partialCoalesceSeconds: Double = 0.1
-
     /// What the last confirm produced, for the transient notice the PRESENTING surface
     /// shows once the composer has closed. Parked on the brain rather than returned,
     /// because the notice has to outlive the sheet that earned it — the composer is gone
@@ -144,13 +140,20 @@ final class AppBrain {
     ) async -> [TaskDraft] {
         isProcessing = true
         defer { isProcessing = false }
+        // The parse clock starts HERE — before retrieval — so the recorded latency is
+        // what the user experiences from the debounce surviving, not just generation.
+        // Retrieval's own wall-clock is measured inside the detached task (it stays
+        // honest when Wave 2 makes retrieval concurrent with generation).
+        let parseStarted = Date()
         // Retrieve the slice of the graph most relevant to this capture — the candidate
         // package the model uses for duplicate/child/blocks detection (the only valid ids).
         // Detached: the ranking runs up to 21 sentence-embedding inferences, and they
         // used to land on the main actor in the window right after the user's pause —
         // exactly when typing resumes. Pure over value snapshots; results come back here.
-        let candidates = await Task.detached(priority: .userInitiated) {
-            ContextRetrieval.candidates(matching: rawText, among: openTasks)
+        let (candidates, retrievalMs) = await Task.detached(priority: .userInitiated) {
+            let retrievalStarted = Date()
+            let ranked = ContextRetrieval.candidates(matching: rawText, among: openTasks)
+            return (ranked, Int(Date().timeIntervalSince(retrievalStarted) * 1000))
         }.value
         let context = TriageContext(
             personalization: CorrectionProfile.instructionLines(learned),
@@ -174,14 +177,21 @@ final class AppBrain {
         // snapshots inside the window are skipped — the SALVAGE box still sees every
         // raw snapshot (the race tees before this handler), and the final result never
         // routes through here, so nothing is ever lost to the throttle.
+        // Parse-shape instrumentation: first-applied-partial latency and applied-partial
+        // count, recorded with the outcome — the numbers the deadline and the streaming
+        // cadence are tuned on. Cadence control lives AT THE SOURCE now
+        // (`FoundationModelsEngine.partialThrottleSeconds` gates before the
+        // O(tasks-so-far) snapshot mapping, not merely before the resolver), so this
+        // handler applies every partial it receives — a second gate here would
+        // double-drop against the engine's jitter.
+        var firstPartialMs = -1
+        var appliedPartials = 0
         let partialHandler: (@MainActor ([TaskIntent]) -> Void)? = onPartial.map { handler in
-            var lastApplied = Date.distantPast
-            return { intents in
-                let now = Date()
-                guard now.timeIntervalSince(lastApplied) >= Self.partialCoalesceSeconds else {
-                    return
+            { intents in
+                if firstPartialMs < 0 {
+                    firstPartialMs = Int(Date().timeIntervalSince(parseStarted) * 1000)
                 }
-                lastApplied = now
+                appliedPartials += 1
                 handler(resolveAndGate(intents))
             }
         }
@@ -191,16 +201,22 @@ final class AppBrain {
             // composer) with streamed-partial salvage, and it is the one place capture
             // metrics are recorded: completed calls only, so debounce cancellations
             // can't pollute the deadline-tuning evidence.
-            let started = Date()
             let outcome = await CaptureTriageRace.run(
                 deadline: ModelDeadline.captureSeconds, onPartial: partialHandler
             ) { tee in
                 try await self.engine.triage(rawText: rawText, context: context, onPartial: tee)
             }
-            let latency = Int(Date().timeIntervalSince(started) * 1000)
+            // Latency includes retrieval (the clock starts at parse start) — it is the
+            // user's wait, not the model's.
+            let latency = Int(Date().timeIntervalSince(parseStarted) * 1000)
+            func recordCapture(_ outcome: ModelMetrics.Outcome) {
+                ModelMetrics.shared.record(
+                    .captureTriage, outcome, latencyMs: latency, retrievalMs: retrievalMs,
+                    firstPartialMs: firstPartialMs, partialCount: appliedPartials)
+            }
             switch outcome {
             case .finished(let value):
-                ModelMetrics.shared.record(.captureTriage, .success, latencyMs: latency)
+                recordCapture(.success)
                 intents = value
             case .salvaged(let value):
                 // Recorded as SALVAGED, not timed out: the deadline fired, but the user
@@ -208,17 +224,16 @@ final class AppBrain {
                 // NORMAL outcome for a long ramble (see `ModelDeadline.captureSeconds`),
                 // and counting it as a failure made the footer report "0 ok" for
                 // captures that produced perfectly good tasks.
-                ModelMetrics.shared.record(.captureTriage, .salvaged, latencyMs: latency)
+                recordCapture(.salvaged)
                 intents = value
             case .timedOutEmpty:
-                ModelMetrics.shared.record(.captureTriage, .timedOut, latencyMs: latency)
+                recordCapture(.timedOut)
                 intents = []
             case .cancelled:
                 // Debounce supersession — the caller already dropped this generation.
                 return []
             case .failed(let error):
-                ModelMetrics.shared.record(
-                    .captureTriage, .failed(Self.errorLabel(error)), latencyMs: latency)
+                recordCapture(.failed(Self.errorLabel(error)))
                 intents = []
             }
             // Model found nothing / timed out empty / failed → deterministic fallback,

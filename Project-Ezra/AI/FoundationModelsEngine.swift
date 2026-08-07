@@ -41,16 +41,39 @@ struct FoundationModelsEngine: AIEngine {
         // candidates immediately, so tasks appear while generation is still
         // running — the felt-magic half of the two-speed loop. The final,
         // fully-generated result is still what the caller gets back.
+        //
+        // Throttled AT THE SOURCE: snapshots arrive at token cadence and the
+        // mapping below is O(tasks-so-far) on the main actor — mapping every
+        // snapshot made per-snapshot cost grow with the ramble while the eye can't
+        // use more than ~10 updates/s anyway. Skipped snapshots are strictly
+        // superseded by the next forwarded one (each snapshot is the whole array
+        // so far), and the first non-empty snapshot always passes. Cost accepted:
+        // the salvage box downstream is at most one throttle window stale when the
+        // deadline fires — ~100ms against a 30s deadline.
         let stream = session.streamResponse(to: prompt, generating: TriageResult.self)
+        var lastForwarded = Date.distantPast
         for try await snapshot in stream {
+            let now = Date()
+            guard now.timeIntervalSince(lastForwarded) >= Self.partialThrottleSeconds else {
+                continue
+            }
             let intents = Self.intents(fromPartial: snapshot.content)
             if !intents.isEmpty {
+                lastForwarded = now
                 await onPartial(intents)
             }
         }
+        // NOTE(device-verify): `collect()` after the stream is drained is believed to
+        // return the retained final response without a second traversal — it works in
+        // production, but whether the await is redundant is only measurable on device.
         let final = try await stream.collect().content
         return final.tasks.map { $0.toIntent() }
     }
+
+    /// Floor between forwarded stream snapshots — the eye can't use more than ~10
+    /// updates/s, and everything downstream of a forward (mapping, resolver, owner
+    /// proposal, merge, spring) runs on the main actor.
+    static let partialThrottleSeconds: Double = 0.1
 
     // MARK: - Household narrative
 

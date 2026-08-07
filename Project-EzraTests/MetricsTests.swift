@@ -108,4 +108,35 @@ struct MetricsRecorderTests {
         let relaunched = MetricsRecorder(defaults: defaults, now: install.addingTimeInterval(999))
         #expect(relaunched.installedAt == install)
     }
+
+    // MARK: - ModelMetrics parse shape
+
+    @Test("Parse-shape trio records in memory and renders in the footer line")
+    func parseShapeRecordsAndRenders() {
+        let metrics = ModelMetrics(defaults: freshDefaults())
+        metrics.record(
+            .captureTriage, .salvaged, latencyMs: 30_150, retrievalMs: 85, firstPartialMs: 1_900,
+            partialCount: 7)
+
+        let stats = metrics.stats[.captureTriage]
+        #expect(stats?.lastRetrievalMs == 85)
+        #expect(stats?.lastFirstPartialMs == 1_900)
+        #expect(stats?.lastPartialCount == 7)
+
+        let line = metrics.footerLines().first { $0.contains("capture") }
+        #expect(line?.contains("first 1.9s") == true)
+        #expect(line?.contains("retr 85ms") == true)
+        #expect(line?.contains("7 partials") == true)
+    }
+
+    @Test("A capability that reports no parse shape keeps its footer line unchanged")
+    func parseShapeOmittedWhenUnreported() {
+        let metrics = ModelMetrics(defaults: freshDefaults())
+        metrics.record(.captureTriage, .success, latencyMs: 800)
+
+        let line = metrics.footerLines().first { $0.contains("capture") }
+        #expect(line?.contains("first") == false)
+        #expect(line?.contains("retr") == false)
+        #expect(line?.contains("partials") == false)
+    }
 }

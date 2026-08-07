@@ -255,6 +255,12 @@ final class ModelMetrics {
         var failures = 0
         var lastLatencyMs = -1
         var lastError: String?
+        /// Parse-shape diagnostics, IN-MEMORY ONLY (deliberately not persisted — the
+        /// record path already pays five synchronous defaults writes, and these tune
+        /// in-session behavior; -1/0 = not reported by this capability).
+        var lastRetrievalMs = -1
+        var lastFirstPartialMs = -1
+        var lastPartialCount = 0
 
         var calls: Int { successes + salvaged + timeouts + failures }
         /// Calls that put usable output in front of the user, however they got there.
@@ -285,9 +291,15 @@ final class ModelMetrics {
         }
     }
 
-    func record(_ feature: ModelFeature, _ outcome: Outcome, latencyMs: Int) {
+    func record(
+        _ feature: ModelFeature, _ outcome: Outcome, latencyMs: Int,
+        retrievalMs: Int = -1, firstPartialMs: Int = -1, partialCount: Int = 0
+    ) {
         var entry = stats[feature] ?? Stats()
         entry.lastLatencyMs = latencyMs
+        entry.lastRetrievalMs = retrievalMs
+        entry.lastFirstPartialMs = firstPartialMs
+        entry.lastPartialCount = partialCount
         switch outcome {
         case .success:
             entry.successes += 1
@@ -331,6 +343,13 @@ final class ModelMetrics {
             if entry.lastLatencyMs >= 0 {
                 line += String(format: " · last %.1fs", Double(entry.lastLatencyMs) / 1000)
             }
+            // The parse-shape trio, present only when the capability reported it —
+            // the numbers the deadline and streaming cadence are tuned on.
+            if entry.lastFirstPartialMs >= 0 {
+                line += String(format: " · first %.1fs", Double(entry.lastFirstPartialMs) / 1000)
+            }
+            if entry.lastRetrievalMs >= 0 { line += " · retr \(entry.lastRetrievalMs)ms" }
+            if entry.lastPartialCount > 0 { line += " · \(entry.lastPartialCount) partials" }
             if let error = entry.lastError { line += " · \(error)" }
             return line
         }
