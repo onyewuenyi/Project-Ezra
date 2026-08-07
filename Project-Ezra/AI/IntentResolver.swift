@@ -36,12 +36,17 @@ enum IntentResolver {
         suppressions: [RelationshipSuppression] = [], now: Date = Date()
     ) -> TaskDraft {
         let intent = applyRules(rules, to: intent)
+        // One tokenization per draft: four backfill helpers below read the same
+        // significant-word set, and each used to recompute it — ~5 full tokenizations
+        // per draft per applied partial. Computed AFTER rule application (a title
+        // rewrite changes the words).
+        let titleWords = CorrectionProfile.significantWords(intent.title)
         // The date the user actually EXPRESSED, kept separate from the one inferred
         // from the task's nature below — the two are not interchangeable downstream.
         let spokenDate = resolveDate(expression: intent.dateExpression, now: now)
         let workIntent =
             intent.workIntent.flatMap { WorkIntent(rawValue: $0) }
-            ?? inferredWorkIntent(title: intent.title)
+            ?? inferredWorkIntent(title: intent.title, words: titleWords)
         // A captured wait suppresses the proposal. Two reasons, one of which the eval
         // caught: the blocker's own words are IN the title ("book flights after passport
         // is done" read as a passport renewal and got a two-week deadline), and a task
@@ -49,7 +54,7 @@ enum IntentResolver {
         // Overdue. A spoken date still lands on a blocked task — that one the user meant.
         let proposedDue =
             spokenDate == nil && intent.blockerPhrase == nil
-            ? inferredDueDate(title: intent.title, now: now) : nil
+            ? inferredDueDate(title: intent.title, now: now, words: titleWords) : nil
         var draft = TaskDraft(
             title: intent.title,
             category: intent.category,
@@ -70,9 +75,11 @@ enum IntentResolver {
             // anything due within two days, so feeding it an inferred date would let
             // a guess inflate the attention score — inference stacked on inference.
             aiImportance: intent.importance
-                ?? inferredImportance(title: intent.title, dueDate: spokenDate, now: now),
+                ?? inferredImportance(
+                    title: intent.title, dueDate: spokenDate, now: now, words: titleWords),
             ownerName: intent.personReference,
-            effortMinutes: intent.effortMinutes ?? estimatedEffort(for: intent.title)
+            effortMinutes: intent.effortMinutes
+                ?? estimatedEffort(for: intent.title, words: titleWords)
         )
         draft.workIntent = workIntent
         draft.dueReason = proposedDue?.reason
@@ -170,9 +177,11 @@ enum IntentResolver {
         var intent = intent
 
         for case let .titleRewrite(from, to) in rules {
-            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: from) + "\\b"
-            intent.title = intent.title.replacingOccurrences(
-                of: pattern, with: to, options: [.regularExpression, .caseInsensitive])
+            guard let regex = rewriteRegex(for: from) else { continue }
+            let range = NSRange(intent.title.startIndex..., in: intent.title)
+            intent.title = regex.stringByReplacingMatches(
+                in: intent.title, range: range,
+                withTemplate: NSRegularExpression.escapedTemplate(for: to))
         }
 
         for case let .ownerAlias(spoken, actual) in rules {
@@ -190,6 +199,21 @@ enum IntentResolver {
         }
 
         return intent
+    }
+
+    /// Compiled rewrite patterns, memoized by source word. The rule set is stable for
+    /// a whole composer session, but `applyRules` runs per draft per applied partial —
+    /// compiling the same ≤8 patterns hundreds of times per ramble was pure spike.
+    /// Main-actor state (the resolver runs on the main actor by default isolation).
+    private static var rewriteRegexCache: [String: NSRegularExpression] = [:]
+
+    private static func rewriteRegex(for from: String) -> NSRegularExpression? {
+        if let cached = rewriteRegexCache[from] { return cached }
+        let pattern = "\\b" + NSRegularExpression.escapedPattern(for: from) + "\\b"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        else { return nil }
+        rewriteRegexCache[from] = regex
+        return regex
     }
 
     // MARK: - Reverse dependencies ("should anything open wait on this?")
@@ -234,8 +258,10 @@ enum IntentResolver {
     static let highImportance = 0.75
     static let ordinaryImportance = 0.4
 
-    static func inferredImportance(title: String, dueDate: Date?, now: Date = Date()) -> Double {
-        let words = CorrectionProfile.significantWords(title)
+    static func inferredImportance(
+        title: String, dueDate: Date?, now: Date = Date(), words: Set<String>? = nil
+    ) -> Double {
+        let words = words ?? CorrectionProfile.significantWords(title)
         if !consequenceSignals.isDisjoint(with: words) { return highImportance }
         if let dueDate, (TaskItem.daysUntil(dueDate, now: now) ?? .max) <= 2 {
             return highImportance
@@ -254,8 +280,8 @@ enum IntentResolver {
     /// Effort when the engine didn't estimate: a quick touch (call/text/reply)
     /// ≈ 15, an errand ≈ 30, a chunk of focused work ≈ 60 — the same bands the
     /// on-device model is instructed to use, so the sim's estimates match.
-    static func estimatedEffort(for title: String) -> Int {
-        let words = CorrectionProfile.significantWords(title)
+    static func estimatedEffort(for title: String, words: Set<String>? = nil) -> Int {
+        let words = words ?? CorrectionProfile.significantWords(title)
         if !quickVerbs.isDisjoint(with: words) { return 15 }
         if !focusedSignals.isDisjoint(with: words) { return 60 }
         return 30
@@ -285,13 +311,13 @@ enum IntentResolver {
     /// 2. **Everything unrecognised falls to `.action`**, which is behaviourally
     ///    identical to nil (same CTA verb, same capability set) — so the default arm is
     ///    a naming, not a behaviour change.
-    static func inferredWorkIntent(title: String) -> WorkIntent {
+    static func inferredWorkIntent(title: String, words: Set<String>? = nil) -> WorkIntent {
         let lower = title.lowercased()
         // Phrases first: "figure out if" and "figure out how" are different questions
         // and share a stem, so word-level matching can't separate them.
         if decisionPhrases.contains(where: lower.contains) { return .decision }
         if planningPhrases.contains(where: lower.contains) { return .planning }
-        let words = CorrectionProfile.significantWords(title)
+        let words = words ?? CorrectionProfile.significantWords(title)
         if !decisionWords.isDisjoint(with: words) { return .decision }
         if !planningWords.isDisjoint(with: words) { return .planning }
         return .action
@@ -331,8 +357,10 @@ enum IntentResolver {
     ///
     /// The residual cost, accepted knowingly: `TaskItem.isStale` only fires on undated
     /// tasks, so anything that gets a proposed date leaves stale detection.
-    static func inferredDueDate(title: String, now: Date = Date()) -> (date: Date, reason: String)? {
-        let words = CorrectionProfile.significantWords(title)
+    static func inferredDueDate(
+        title: String, now: Date = Date(), words: Set<String>? = nil
+    ) -> (date: Date, reason: String)? {
+        let words = words ?? CorrectionProfile.significantWords(title)
         let cal = Calendar.current
 
         if !recurringBillSignals.isDisjoint(with: words) {
@@ -542,15 +570,21 @@ enum IntentResolver {
         return candidate
     }
 
+    /// Fixed-format POSIX formatter, built once — `DateFormatter` construction is the
+    /// classic per-call allocation tax, and this runs inside the per-draft date arm.
+    private static let isoFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
     private static func parseISO(_ raw: String) -> Date? {
         // yyyy-MM-dd anywhere in the phrase.
         guard let range = raw.range(of: #"\d{4}-\d{2}-\d{2}"#, options: .regularExpression) else {
             return nil
         }
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: String(raw[range]))
+        return isoFormatter.date(from: String(raw[range]))
     }
 }

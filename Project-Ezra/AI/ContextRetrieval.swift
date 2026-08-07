@@ -64,6 +64,12 @@ enum ContextRetrieval {
         let queryWords = CorrectionProfile.significantWords(text)
         let queryVector =
             EmbeddingStore.cachedVector(for: text) ?? EmbeddingStore.computeVector(for: text)
+        // Nil-safe degrade, same rule the embedding term already follows: with no query
+        // category (the CAPTURE call site never has one — a raw ramble isn't
+        // categorized yet), the category weight shifts onto lexical overlap instead of
+        // silently compressing every score by 10% against a fixed relevance floor.
+        let effectiveLexicalWeight = lexicalWeight + (category == nil ? categoryWeight : 0)
+        let effectiveCategoryWeight = category == nil ? 0.0 : categoryWeight
 
         // Score the CHEAP components for every candidate first — lexical overlap, category,
         // recency — plus the embedding-free "provisional" score. This decides WHERE the
@@ -85,8 +91,8 @@ enum ContextRetrieval {
             let categoryScore = (category != nil && category == snap.category) ? 1.0 : 0.0
             let recency = recencyScore(snap.updatedAt, now: now)
             let provisional =
-                (embeddingWeight + lexicalWeight) * lexical
-                + categoryWeight * categoryScore + recencyWeight * recency
+                (embeddingWeight + effectiveLexicalWeight) * lexical
+                + effectiveCategoryWeight * categoryScore + recencyWeight * recency
             return Prescored(
                 snap: snap, lexical: lexical, categoryScore: categoryScore, recency: recency,
                 provisional: provisional,
@@ -119,8 +125,8 @@ enum ContextRetrieval {
             if let queryVector, let vector {
                 let similarity = EmbeddingStore.similarity(queryVector, vector)
                 score =
-                    embeddingWeight * similarity + lexicalWeight * item.lexical
-                    + categoryWeight * item.categoryScore + recencyWeight * item.recency
+                    embeddingWeight * similarity + effectiveLexicalWeight * item.lexical
+                    + effectiveCategoryWeight * item.categoryScore + recencyWeight * item.recency
             } else {
                 // Embedding unavailable (no model, or a miss the budget didn't reach) →
                 // the embedding weight shifts onto lexical overlap (the provisional score).
