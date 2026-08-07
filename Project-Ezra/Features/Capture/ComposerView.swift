@@ -48,23 +48,26 @@ struct ComposerView: View {
     private var allTasks: [TaskItem] { Array(allTasksResults) }
 
     /// The delegatable roster for the confirm cards' owner chips — everyone but the
-    /// current user, who is the chip's explicit "You" entry. Computed once here and
-    /// passed down as values, so cards don't each own live fetch controllers.
-    private var ownerOptions: [String] {
-        let me = profiles.first?.linkedMemberID
-        return
-            familyMembers
-            .filter { !$0.isRemoved && $0.uuid != me }
-            .map(\.name)
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-    }
+    /// current user, who is the chip's explicit "You" entry. MEMOIZED: the filter +
+    /// map + localized SORT ran on every composer body evaluation — every keystroke,
+    /// every streamed partial — for a roster that only changes via `addToRoster`
+    /// in-session. Refreshed there and at appear.
+    @State private var ownerOptions: [String] = []
 
     /// Every live roster name, YOU included — what `AppBrain.resolveOwners` matches a
     /// draft's `ownerName` against at commit. `ownerOptions` can't serve here: it drops
     /// the current user, so a draft owned by your own named member would render as
     /// "not in household" on a card that commit resolves perfectly well.
-    private var rosterNames: [String] {
-        familyMembers.filter { !$0.isRemoved }.map(\.name)
+    @State private var rosterNames: [String] = []
+
+    private func refreshRosterCaches() {
+        let me = profiles.first?.linkedMemberID
+        ownerOptions =
+            familyMembers
+            .filter { !$0.isRemoved && $0.uuid != me }
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        rosterNames = familyMembers.filter { !$0.isRemoved }.map(\.name)
     }
 
     /// Grow the roster from an unresolvable owner chip, so commit can then resolve the
@@ -82,6 +85,7 @@ struct ComposerView: View {
         let member = FamilyMember(name: trimmed, in: context)
         member.household = Household.current(in: context)
         context.saveChanges()
+        refreshRosterCaches()  // the one in-session mutation path
     }
 
     @State private var text = ""
@@ -203,6 +207,7 @@ struct ComposerView: View {
             }
             .onAppear {
                 focused = true
+                refreshRosterCaches()
                 restoreIfResuming()
             }
             // Live transcript flows into the field: base text + everything heard so far.

@@ -53,6 +53,13 @@ struct ConfirmCreationList: View {
                     draft: $draft, ownerOptions: ownerOptions, rosterNames: rosterNames,
                     onAddToRoster: onAddToRoster, onRemove: { remove(draft) }
                 )
+                // Structural skipping, explicitly: the card holds closures, so
+                // SwiftUI would otherwise rebuild every card's body on every list
+                // invalidation — each keystroke into any title, each streamed
+                // partial. `==` compares the VALUES (draft + rosters); the closures
+                // are deliberately excluded (behaviorally stable — they route
+                // through DraftMerge keys and live fetches, never captured state).
+                .equatable()
                 .transition(Motion.cardEntry)
             }
         }
@@ -77,7 +84,7 @@ struct ConfirmCreationList: View {
 
 // MARK: - One candidate card
 
-struct ConfirmCreationCard: View {
+struct ConfirmCreationCard: View, Equatable {
     @Binding var draft: TaskDraft
     /// Names the owner chip may delegate to (never includes "You" — that's the
     /// explicit first entry). Passed as values from the composer's own fetches.
@@ -97,6 +104,14 @@ struct ConfirmCreationCard: View {
     /// calendar, and making the user commit first and fix it in the detail is the kind of
     /// small tax the confirm glance exists to remove.
     @State private var showDatePicker = false
+
+    /// Value equality for `.equatable()` — the draft and the roster values are the
+    /// card's whole rendered identity; the closures are excluded on purpose (see the
+    /// call site) and `showDatePicker` is view storage SwiftUI tracks itself.
+    static func == (lhs: ConfirmCreationCard, rhs: ConfirmCreationCard) -> Bool {
+        lhs.draft == rhs.draft && lhs.ownerOptions == rhs.ownerOptions
+            && lhs.rosterNames == rhs.rosterNames
+    }
 
     /// Low confidence is a VISUAL state, never a queue: the candidate appears
     /// immediately, dimmed with a quiet question mark, and resolves (undims) if
@@ -197,18 +212,18 @@ struct ConfirmCreationCard: View {
         }
         // The overflow affordance the glance was missing: chips past the fold used
         // to be invisible with zero cue (no indicator, no fade), which is how a
-        // wrong owner survived the one moment it was cheap to catch. The trailing
-        // fade is the cheapest honest "there is more" (mask alpha only — the colors
-        // here are opacity, not paint).
-        .mask(
-            HStack(spacing: 0) {
-                Rectangle()
-                LinearGradient(
-                    colors: [.black, .clear], startPoint: .leading, endPoint: .trailing
-                )
-                .frame(width: Spacing.lg)
-            }
-        )
+        // wrong owner survived the one moment it was cheap to catch. The fade is an
+        // OVERLAY painting the card's own surface color, not a mask — a mask forced
+        // an offscreen compositing pass per card, paid on every frame of every
+        // scroll and settle animation. Identical look on the solid card surface.
+        .overlay(alignment: .trailing) {
+            LinearGradient(
+                colors: [Palette.primarySurface.opacity(0), Palette.primarySurface],
+                startPoint: .leading, endPoint: .trailing
+            )
+            .frame(width: Spacing.lg)
+            .allowsHitTesting(false)
+        }
     }
 
     /// The chip row plus the owner rationale beneath it, so "why Maya?" is answerable
@@ -479,8 +494,11 @@ struct ConfirmCreationCard: View {
     }
 
     private var ownerChip: some View {
-        Menu {
-            if let missing = unresolvableOwner, let onAddToRoster {
+        // One resolvability check per build — as a computed property it was
+        // re-evaluated (a trim + roster scan) at every one of its ~5 read sites.
+        let missing = unresolvableOwner
+        return Menu {
+            if let missing, let onAddToRoster {
                 Button("Add \(missing) to household…", systemImage: "person.badge.plus") {
                     onAddToRoster(missing)
                 }
@@ -501,8 +519,8 @@ struct ConfirmCreationCard: View {
             }
         } label: {
             MetadataChip(density: .compact) {
-                if draft.ownerReason != nil, unresolvableOwner == nil { assumedMark }
-                if let missing = unresolvableOwner {
+                if draft.ownerReason != nil, missing == nil { assumedMark }
+                if let missing {
                     Image(systemName: "person.crop.circle.badge.questionmark")
                         .font(.glyphCaption())
                     Text("\(missing) · not in household")
@@ -515,21 +533,21 @@ struct ConfirmCreationCard: View {
                         .font(.metadata.weight(.medium))
                 }
             }
-            .foregroundStyle(ownerChipTint)
+            .foregroundStyle(ownerChipTint(missing: missing))
         }
-        .accessibilityLabel(ownerAccessibilityLabel)
+        .accessibilityLabel(ownerAccessibilityLabel(missing: missing))
     }
 
     /// `warning` is the literal-warning token (the only other user is Settings' store-reset
     /// notice) — deliberately NOT one of the three attention hues, which mean urgency,
     /// in-progress, and overdue on a *task*. This is a warning about the card itself.
-    private var ownerChipTint: Color {
-        if unresolvableOwner != nil { return Palette.warning }
+    private func ownerChipTint(missing: String?) -> Color {
+        if missing != nil { return Palette.warning }
         return draft.ownerName == nil ? Palette.mutedText : Palette.secondaryText
     }
 
-    private var ownerAccessibilityLabel: String {
-        if let missing = unresolvableOwner {
+    private func ownerAccessibilityLabel(missing: String?) -> String {
+        if let missing {
             return
                 "Owner, \(missing), not in your household — this task will be shared unless you add them"
         }
