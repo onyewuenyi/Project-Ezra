@@ -35,7 +35,7 @@ The differentiation is **"attention manager, not task manager."** Four edges kee
 
 - **AI owns *order*, the user owns *decisions*.** "The user never reprioritizes" means they never reorder the ranking — Priority is AI-set and shows only as position. It does **not** mean the AI decides *for* them: Status stays user-owned (confirm, complete, kill, defer), and judgment calls are always the user's. The three data dimensions are never fused.
 - **Due-date is a *signal*, not the organizing question.** "Due today" is one input to attention, never the sort key. Ranking is *Needs Decision → Blocked → attention score → Blocking → Overdue → dueDate* (dueDate is a low-order tiebreak). Never let "due today" quietly become the primary sort.
-- **The Plan is AI-authored; there is no manual planning.** The Today Plan is generated, not arranged: no drag-to-plan, no rescheduling, no manual reorder. Membership and order are `TaskRanking`'s; the user's one input is Capacity (how much today). This keeps "execution surface, not planning surface" honest — the AI absorbs the arranging, the user executes.
+- **The Plan is AI-authored; there is no manual planning.** The Today Plan is generated, not arranged: no drag-to-plan, no rescheduling, no manual reorder — and no capacity question. The advisor decides membership, order, and size (§8); `TaskRanking` provides the candidate set and the deterministic fallback. This keeps "execution surface, not planning surface" honest — the AI absorbs the arranging, the user executes.
 - **Today = *my* execution; Household = *our* coordination.** Household work enters my Today only when it needs *me* (assigned to me, up-for-grabs, or my task blocks someone). Team-level "are we coordinated?" lives on the Household surface. So a reason like "Blocks Maya's trip" belongs on my Today only because it's *my* task holding up hers.
 
 ---
@@ -47,22 +47,20 @@ Capture
       ↓
 Foundation Model (Heuristic fallback) → raw intents (TaskIntent)
       ↓
-Deterministic resolver (IntentResolver) → drafts (ALL land Inbox)
+Deterministic resolver (IntentResolver) → drafts (parked on the Capture)
       ↓
 Confirm-Creation glance  ← the one human-in-the-loop moment
       ↓
 Tasks (system of record)
       ↓
-TodayQueries (recap / docket)  +  TaskRanking (membership & order)
+TaskRanking → the capped candidate set (and the deterministic fallback)
       ↓
-CapacityBaseline (deterministic, from CapacityLog) → sizes the plan
+TodayPlanService (on-device | PCC | deterministic) → the advisor briefing
       ↓
-TodayPlanGenerator (on-device | PCC | deterministic) → narrates only
-      ↓
-Today (the cinematic sequence; sanitized(against:) enforces "narrates, never ranks")
+Today (the cinematic sequence; validated(against:) is the anti-hallucination guard)
 ```
 
-Confidence is **not** a gate at capture — it becomes a *visual state* on the confirm card (dimmed + "?"), never a separate held queue. The Today surface only consumes existing tasks, **never stores state on a task**, and is a personalized derived view: the pure queries and `TaskRanking` decide the plan; the model attaches rationales, which `GeneratedPlan.sanitized(against:)` re-imposes order and membership over.
+Confidence is **not** a gate at capture — it becomes a *visual state* on the confirm card (dimmed + "?"), never a separate held queue. The Today surface only consumes existing tasks, **never stores state on a task**, and is a personalized derived view: `TaskRanking` provides the candidates, the advisor selects/orders/sizes (§8), and `GeneratedPlan.validated(against:)` drops hallucinated ids, dedupes, and caps — it does **not** reorder.
 
 ---
 
@@ -71,7 +69,7 @@ Confidence is **not** a gate at capture — it becomes a *visual state* on the c
 A task carries three separate dimensions (this replaces the old flat `Blocked/Ready/Needs Decision/Done` enum):
 
 - **Lifecycle** (single-value, **user-owned**): `Todo → Doing → Done | Canceled` — `TaskStatus`. A task comes into existence at Confirm, born `.todo`; the AI never moves the lifecycle again except the reversible stale auto-archive. **Superseded by `docs/task-model.md`, which is now the reference for all four axes** — this section is kept for the surrounding product context only.
-- **Attention** (replaces the retired user-facing Priority — see `docs/task-primitive-v2-spec.md`): one USER **Signal** (`isUrgent`, user-owned; the AI proposes it at capture) feeds a computed **system score** (`AttentionEngine` → persisted `AttentionMetadata`, 0–100 + explaining contributors). The score is **never a badge** and only breaks ties WITHIN the hard ranking bands; the Signal renders as a leading `SignalMarker` (Urgent) on the record surfaces only. (Pinned was a second Signal in V1 and is retired — a manual float-to-top override competed with the score it was meant to complement.) Persist-slow/compute-fast: the score reads only slow inputs and never a fast fact.
+- **Attention** (replaces the retired user-facing Priority — see `docs/task-primitive-v2-spec.md`): one USER **Signal** (`isUrgent`, user-owned; the AI proposes it at capture) feeds a computed **system score** (`AttentionEngine` → persisted `AttentionMetadata`, 0–100 + explaining contributors). The score is **never a badge** and only breaks ties WITHIN the hard ranking bands; the Signal renders in the row's leading `SignalMarker` slot on the record surfaces only — one slot with two residents, Needs Decision winning over Urgent when both are set (`docs/task-model.md`). (Pinned was a second Signal in V1 and is retired — a manual float-to-top override competed with the score it was meant to complement.) Persist-slow/compute-fast: the score reads only slow inputs and never a fast fact.
 - **Flags** (multi-value, stackable, conditions of attention): `Needs Decision, Blocked, Blocking, Overdue, Stale`.
 
 **Headline rule: only Needs Decision is ever shown as a label** (the one chip), plus a small Overdue marker in the card's metadata line. Everything else is internal, expressed through position — never text or color.
@@ -83,8 +81,8 @@ A task carries three separate dimensions (this replaces the old flat `Blocked/Re
 | Needs Decision | **Yes** (`needsDecision`) | Triage (judgment call OR confidence < 0.5) or `escalateToDecision()` | **Chip** | Forced crisp top of the stack, overriding the attention order and Blocked |
 | Blocked | Derived (`activeBlockers` non-empty) | Adding a `Blocker` (task ref or external note) | No | Sinks toward the back regardless of attention (unless also Needs Decision) |
 | Blocking | Derived (`isBlocking(among:)` reverse edge) | AI inference / dependency graph | No | Modest boost within the attention order |
-| Overdue | Derived (`isOverdue()` — dueDate < today) | The calendar | **Small marker** | Boost within the attention order (never overriding it); surfaces on the Today Docket |
-| Stale | Derived (`isStale()` — undated, no HUMAN touch past threshold) | The clock | No | Surfaces on the Docket; past `StalePolicy.archiveThreshold` triggers the silent, reversible auto-archive (`BrainSweeps`) |
+| Overdue | Derived (`isOverdue()` — dueDate < today) | The calendar | **Small marker** | Boost within the attention order (never overriding it); named in the briefing's risks |
+| Stale | Derived (`isStale()` — undated, no HUMAN touch past threshold) | The clock | No | No surface of its own; past `StalePolicy.archiveThreshold` triggers the silent, reversible auto-archive (`BrainSweeps`) |
 
 **Blocked is always derived, never written.** A task reads as blocked iff `activeBlockers(among:)` is non-empty — there is no `block()`. An Active task that gains a blocker STAYS Active. **Blocking, Overdue, and Stale are likewise derived** from data already on the record. Stale reads the **human clock** (`lastHumanTouchAt`, stamped only by `touchHuman()` on human-initiated edits; `createdAt` while nil) — `updatedAt` is also bumped by system paths (capture-time edge writes), which must never reset a task's staleness.
 
@@ -200,7 +198,7 @@ Capture → Tasks (system of record) → TaskRanking (candidate set) → TodayPl
 ### Sizing, tiers, cache
 
 - **Sizing:** the advisor decides the count. `CapacityLog` still logs daily throughput (the capacity dimension is vestigial `.steady` now the input is gone), and `CapacityBaseline(for: .steady)` — the rolling completion average, when ≥ 5 samples exist — is passed to the advisor as *context only* ("typically finishes ~N/day"), never a hard limit.
-- **Tier routing** (`PlanRouting`, pure & ordered): **on-device → PCC → deterministic**, deterministic always the tail so `AppBrain.todayPlan` never fails. Timeouts race generation against a deadline (~12s on-device, ~20s PCC).
+- **Tier routing** (`PlanRouting`, pure & ordered): a **simple ordered chain** — **on-device → PCC → deterministic**, deterministic always the tail so `AppBrain.todayPlan` never fails. There is no per-day escalation logic; each available tier is simply tried in order. Timeouts race generation against a deadline (30s on-device with partial salvage, 20s PCC).
 - **Plays once — reset & cache:** the reset trigger is ONE swappable predicate, `TodayPlanStore.shouldReplay(now:)` (V0: first open each day); nothing else tests the date. `TodayPlanCache` stores the briefing (headline/tradeoffs/risks/actions); it fail-softs to nil if the shape changes. Day-rollover reconciliation resolves yesterday's plan against live tasks → one `CapacityLog` row → then clears (reuses the Recap moment, no new surface).
 
 ### Motion & the data-driven transition
@@ -215,7 +213,7 @@ The advisor's per-action line is grounded in the same observable **facts** the c
 
 ## 9. AI System — two engines + personal context
 
-`AI/AIEngine.swift` defines the seam. **`FoundationModelsEngine`** (real on-device LLM, iOS 27) and **`HeuristicEngine`** (deterministic fallback) both conform and emit `[TaskIntent]` via `triage(rawText:context:onPartial:)`. `AppBrain` selects the engine at launch via `SystemLanguageModel.default.availability` and degrades to the heuristic on failure. Foundation Models is unavailable in the simulator, so **the sim always exercises the heuristic path.** Both engines stay behaviorally consistent — the shared derivation lives in `AutonomyPolicy.tier` + `IntentResolver` (including `applyRules`, the learned-correction half both engines get for free). Use guided generation (`@Generable` + `@Guide`), not JSON parsing; **device-verify any `@Generable` schema change.**
+`AI/AIEngine.swift` defines the seam. **`FoundationModelsEngine`** (real on-device LLM, iOS 27) and **`HeuristicEngine`** (deterministic fallback) both conform and emit `[TaskIntent]` via `triage(rawText:context:onPartial:)`. `AppBrain` selects the engine at launch via `SystemLanguageModel.default.availability` and degrades to the heuristic on failure. **The simulator is no longer guaranteed to exercise the heuristic path** — on Xcode 27 the sim follows the host Mac's Apple Intelligence and can run the real on-device model (verified 2026-07-26); read the Inbox diagnostics footer rather than assuming. Both engines stay behaviorally consistent — the shared derivation lives in `AutonomyPolicy.tier` + `IntentResolver` (including `applyRules`, the learned-correction half both engines get for free). Use guided generation (`@Generable` + `@Guide`), not JSON parsing; **device-verify any `@Generable` schema change.**
 
 **`TriageContext`** carries personal context per call: `personalization` (top-N learned corrections as instruction lines, built by `CorrectionProfile`) and `roster` (value snapshots backing `ResolvePersonTool`).
 
@@ -225,7 +223,7 @@ The advisor's per-action line is grounded in the same observable **facts** the c
 
 ### PCC escalation (shipped — the Today Plan's stronger tier)
 
-The Today Plan generator ships a real **Private Cloud Compute** tier (`PrivateCloudComputeLanguageModel`, `AI/TodayPlanService.swift`) alongside on-device. `PlanRouting` chooses it per call (see §8's routing table) — a bigger/chained/Light day, or a newly-divergent baseline, escalates to PCC first; a small calm day stays on-device. Any PCC error — including an ungranted `com.apple.developer.private-cloud-compute` entitlement — reads as **unavailability**, so the router simply falls through to on-device/deterministic and the feature never breaks.
+The Today Plan generator ships a real **Private Cloud Compute** tier (`PrivateCloudComputeLanguageModel`, `AI/TodayPlanService.swift`) alongside on-device. `PlanRouting` is a simple ordered chain (§8): on-device is tried first, PCC second when entitled and available — the earlier per-day escalation logic (day shape, divergent baseline) was retired with the capacity input. Any PCC error — including an ungranted `com.apple.developer.private-cloud-compute` entitlement — reads as **unavailability**, so the router simply falls through and the feature never breaks. (On device the construction itself is gated behind the compile-time `PCCEntitlement.isGranted`, because an unentitled construction traps.)
 
 - **Privacy is explicit and sanctioned:** on the PCC path, **task titles leave the device** to Apple's private compute (verifiable, non-retained). This is a deliberate trade for the stronger tier on the hardest days; the on-device and deterministic tiers keep everything local. The generator sends only the ranked shortlist and the **aggregated** baseline sentence — never raw `CapacityLog` history.
 - Personalization uses fresh per-call instructions (the `DynamicInstructions` API is the mechanism if the session ever becomes continuous); today's stateless-per-call sessions get the same freshness from a rebuilt instructions string.
@@ -241,7 +239,7 @@ The Today Plan generator ships a real **Private Cloud Compute** tier (`PrivateCl
 1. Capture on device with Apple Intelligence on → candidates fill **progressively** during one parse (streaming), and cancel cleanly when you keep typing.
 2. Mention a roster name ("ask Maya to…") → `personReference` resolves via the tool; watch for tool over-calling (triage suddenly slow).
 3. Teach a correction twice (recategorize two "gym" tasks) → the third capture applies it on device too (instructions); the sim already proves the resolver half.
-4. **Today Plan, streamed:** the `@Generable` `TodayPlanSchema` fills in progressively, partial rows map cleanly (known-uuid + non-empty rationale), and `sanitized(against:)` holds order/membership.
+4. **Today Plan, streamed:** the `@Generable` `TodayPlanSchema` fills in progressively, partial rows map cleanly (known-uuid + non-empty rationale), and `validated(against:)` drops unknown ids without reordering.
 5. **Tier fallthrough:** an on-device guardrail failure falls to PCC; an absent PCC entitlement falls through to on-device/deterministic without breaking; the divergence one-shot escalates exactly once per capacity.
 6. **Dynamic instructions & usage:** the personalized baseline sentence re-evaluates as the average shifts; wire `Response.usage` into `PlanMetrics` tokens (−1 until verified); profile latency with the Foundation Models Instruments template.
 7. **Motion review:** frame-by-frame check of the §4.3 spring values (starting points, not locked), and confirm the haptic and visual land on the same frame (numeral, capacity selection, final plan item).
@@ -250,14 +248,15 @@ The Today Plan generator ships a real **Private Cloud Compute** tier (`PrivateCl
 
 ## 10. Navigation
 
-Deliberately minimal — **three tabs + global Capture**:
+Deliberately minimal — **four tabs + a floating Capture button** (`RootTabView`):
 
-- **Today** — the cinematic daily briefing (execution). Where "given everything I'm carrying and how much I have today, what should I do?" is answered.
-- **Tasks** — the **system of record** for all work (trust / retrieval). Deliberately un-fused from Today.
-- **Household** — shared execution and coordination: ownership, handoffs, blockers, household operational health.
-- **Capture** — a persistent global action riding the tab bar's Liquid Glass accessory. Supports voice, text, photos, natural language (voice/text today; the rest reserved).
+- **Today** (0) — the cinematic daily briefing (execution). Where "given everything I'm carrying, what should I actually do today?" is answered.
+- **Inbox** (1) — the household activity feed, absorbing the old AI Activity Trail: all change-log entries with action-aware Undo. This is the trust surface, not a triage destination — nothing waits there for processing.
+- **My Tasks** (2) — the **system of record** for all work (trust / retrieval). Deliberately un-fused from Today.
+- **Household** (3) — shared execution and coordination: ownership, handoffs, blockers, household operational health.
+- **Capture** — a circular button overlaid at the bottom-trailing corner, inline with the floating tab-bar capsule. Supports voice, text, photos, natural language (voice/text today; the rest reserved).
 
-**Review / Inbox / Retro are NOT destinations.** The retro is gone — its rot-fighting job is absorbed by the Docket (stale/overdue surface there) and the day-rollover reconciliation. Screens open the composer via the `\.openCapture` environment action, never their own sheet.
+**Review / Retro are NOT destinations, and the Inbox is a feed, not a queue.** The retro is gone — its rot-fighting job is absorbed by the briefing's risks line and the day-rollover reconciliation. Screens open the composer via the `\.openCapture` environment action (and jump to the feed via `\.openInbox`), never their own sheet.
 
 ---
 
@@ -280,7 +279,7 @@ Users should be able to:
 *(PCC escalation is **shipped** for the Today Plan — see §9. Capture-time escalation of low-confidence candidates remains deferred.)*
 
 - **Inbox-confirm surfacing gap:** V0 ships **without a daily surface for unconfirmed inbox items** — the Today sequence does not port NowView's confirm section. Captures still confirm contextually via the composer, but there is no once-a-day "you have N to confirm" nudge. Open product gap.
-- **Stale-undated-work gap:** with the retro removed, the retro's do/kill/defer moment for stale undated work is gone; the Docket surfaces stale/overdue and `BrainSweeps` auto-archive is the only path for genuinely buried undated rot. Watch whether that's enough.
+- **Stale-undated-work gap:** with the retro removed, the retro's do/kill/defer moment for stale undated work is gone; the briefing's risks line names overdue/blocked/undecided work, and `BrainSweeps` auto-archive is the only path for genuinely buried undated rot. Watch whether that's enough.
 - **Final reset mechanism + mid-day re-entry:** the plays-once trigger is one swappable predicate (`shouldReplay(now:)`, V0 = per-day); the final mechanism and any mid-day regenerate behavior are held open pending separate input.
 - Rationale voice pass (the model's tone across many days), swipe-to-advance (V0 is tap-only), multi-profile plan orchestration, and Household-level capacity (capacity is per-user in V0).
 - Image capture (`Attachment` multimodal input is a confirmed API — Vision-OCR-to-text is the sim-friendly first step), Siri / App Intents / widgets / Action Button / watch entry points, a continuous capture session (`DynamicInstructions`), Split-Into-Subtasks & Merge-Duplicate UI (`parentTaskID` plumbing exists), `recentPatterns` tool, location/calendar triggers, visible cycle progress/burndown (stays rejected — solo apps have no standup audience).
