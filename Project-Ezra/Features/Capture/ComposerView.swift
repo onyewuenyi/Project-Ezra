@@ -119,6 +119,11 @@ struct ComposerView: View {
     /// Whether the last completed parse returned any candidates at all, before the
     /// session's removals filtered them. The honest input to `foundNothing`.
     @State private var lastParseYieldedCandidates = false
+    /// When the silence auto-stop will fire — rescheduled on every transcript delta,
+    /// nil outside dictation. The hero bar renders its last stretch as a draining ring.
+    @State private var silenceDeadline: Date?
+    /// The small mic capsule and the listening hero share this morph.
+    @Namespace private var voiceMorph
     @FocusState private var focused: Bool
 
     init(resuming: Capture? = nil) {
@@ -141,6 +146,10 @@ struct ComposerView: View {
                     .animation(reduceMotion ? nil : Motion.settle, value: drafts.isEmpty)
 
                 dictationHint
+                    // The hint states declare opacity transitions; this is the
+                    // animation that actually drives them — without it every state
+                    // change snapped.
+                    .animation(Motion.fade, value: speech.state)
 
                 if drafts.isEmpty {
                     Text(foundNothing ? Self.nothingFoundHint : Self.openingHint)
@@ -176,6 +185,9 @@ struct ComposerView: View {
             .onTapGesture { focused = false }
             // Success notification — capture committed is a capstone moment.
             .sensoryFeedback(.success, trigger: committed)
+            // Dictation start/stop is felt, not just seen — the trigger is the state
+            // edge, so the auto-stop lands the same haptic as a tap.
+            .sensoryFeedback(.impact(weight: .medium), trigger: speech.state == .listening)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -209,7 +221,7 @@ struct ComposerView: View {
                 scheduleTriage()
             }
             .onChange(of: speech.state) { _, state in
-                if state == .listening { scheduleSilenceStop() }
+                if state == .listening { scheduleSilenceStop() } else { silenceDeadline = nil }
                 // Voice and keyboard are one channel at a time: focus drops while the
                 // mic is live (a retained keyboard could still type into the field the
                 // transcript is about to rewrite) and returns when dictation ends, so
@@ -549,8 +561,23 @@ struct ComposerView: View {
             // without this, VoiceOver announced a bare count and nothing else.
             .accessibilityValue(brain.isProcessing ? "still reading, the count may change" : "")
 
-            micRow
+            // Voice as the hero while listening: the small capsule morphs into the
+            // full listening bar — level meter, 64pt stop control, silence countdown —
+            // and morphs back on stop. Under Reduce Motion the morph is a crossfade.
+            if speech.isActive {
+                VoiceHeroBar(
+                    monitor: speech.audioLevel,
+                    silenceDeadline: silenceDeadline,
+                    silenceWindow: Self.silenceStopSeconds,
+                    onStop: { toggleDictation() }
+                )
+                .matchedGeometryEffect(id: "voice", in: voiceMorph)
+            } else {
+                micRow
+                    .matchedGeometryEffect(id: "voice", in: voiceMorph)
+            }
         }
+        .animation(reduceMotion ? Motion.fade : Motion.capsuleExpand, value: speech.isActive)
     }
 
     private var ctaTitle: String {
@@ -669,21 +696,21 @@ struct ComposerView: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
                         .strokeBorder(
-                            brain.isProcessing
+                            fieldIsLive
                                 ? AnyShapeStyle(Palette.accentGradient)
                                 : AnyShapeStyle(Palette.border),
-                            lineWidth: brain.isProcessing ? 1.5 : 0.5
+                            lineWidth: fieldIsLive ? 1.5 : 0.5
                         )
                 }
-                // Soft glow while the model is thinking.
+                // Soft glow while the model is thinking — and while the mic is hot:
+                // the field is where the words land, so it participates in listening.
                 .shadow(
-                    color: brain.isProcessing ? Palette.accentGlow : .clear,
-                    radius: brain.isProcessing ? 16 : 0
+                    color: fieldIsLive ? Palette.accentGlow : .clear,
+                    radius: fieldIsLive ? 16 : 0
                 )
-                .animation(
-                    Motion.glowPulse.repeatWhileTrue(brain.isProcessing), value: brain.isProcessing)
+                .animation(Motion.glowPulse.repeatWhileTrue(fieldIsLive), value: fieldIsLive)
 
-            if text.isEmpty {
+            if text.isEmpty && !speech.isActive {
                 Text(
                     "Renew passport, book dentist, figure out if I should quit the side project, call mom…"
                 )
@@ -694,24 +721,49 @@ struct ComposerView: View {
                 .allowsHitTesting(false)
             }
 
-            TextEditor(text: $text)
-                .focused($focused)
-                .font(.bodyInput)
-                .foregroundStyle(Palette.primaryText)
-                .scrollContentBackground(.hidden)
+            if speech.isActive {
+                // The live transcript, honest about what's settled: finalized words in
+                // primary, the in-flight hypothesis in muted — the field is already
+                // non-interactive while the mic owns it, so a read-only surface swap
+                // loses nothing and gains the two-tone truth. Same font and padding
+                // tokens as the editor so the crossfade holds its geometry.
+                ScrollView {
+                    Text(listeningTranscript)
+                        .font(.bodyInput)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 5)
+                }
+                .defaultScrollAnchor(.bottom)
                 .padding(Spacing.md)
-                // While the mic owns the field, the keyboard must not: every transcript
-                // tick rewrites the whole text from `dictationBase + transcript`, so a
-                // manual edit made mid-dictation was silently clobbered a beat later.
-                // The field must not LOOK editable while it isn't — hit-testing off,
-                // and the state change below drops keyboard focus.
-                .allowsHitTesting(!speech.isActive)
-                // The field is the product's front door and it was unlabeled —
-                // VoiceOver read only the (long, example-laden) placeholder.
-                .accessibilityLabel("What's on your mind")
-                .accessibilityHint(
-                    "Type or dictate anything. Tasks take shape below as you go.")
+                .accessibilityLabel("Live transcript")
+            } else {
+                TextEditor(text: $text)
+                    .focused($focused)
+                    .font(.bodyInput)
+                    .foregroundStyle(Palette.primaryText)
+                    .scrollContentBackground(.hidden)
+                    .padding(Spacing.md)
+                    // The field is the product's front door and it was unlabeled —
+                    // VoiceOver read only the (long, example-laden) placeholder.
+                    .accessibilityLabel("What's on your mind")
+                    .accessibilityHint(
+                        "Type or dictate anything. Tasks take shape below as you go.")
+            }
         }
+        .animation(Motion.fade, value: speech.isActive)
+    }
+
+    /// The field participates in both live states: the model reading, or the mic hot.
+    private var fieldIsLive: Bool { brain.isProcessing || speech.state == .listening }
+
+    /// Settled words (typed base + finalized speech) in primary; the in-flight
+    /// hypothesis in muted — visually honest about what may still be revised.
+    private var listeningTranscript: AttributedString {
+        var settled = AttributedString(dictationBase + speech.finalizedText)
+        settled.foregroundColor = Palette.primaryText
+        var volatile = AttributedString(speech.volatileText)
+        volatile.foregroundColor = Palette.mutedText
+        return settled + volatile
     }
 
     // MARK: - Dictation
@@ -769,7 +821,7 @@ struct ComposerView: View {
                 .metadataStyle()
                 .transition(.opacity)
         case .listening:
-            Text("Listening — pause to finish, or tap the mic to edit by hand.")
+            Text("Listening — pause to finish, or tap stop to edit by hand.")
                 .font(.metadata)
                 .foregroundStyle(Palette.accentFlat)
                 .transition(.opacity)
@@ -812,9 +864,12 @@ struct ComposerView: View {
 
     /// Auto-stop after a stretch of no new transcript, so the user doesn't have to.
     /// ONE cancellable handle, cancel-and-replace per delta — the old shape spawned an
-    /// uncancelled sleeping Task per transcript tick, unbounded by design.
+    /// uncancelled sleeping Task per transcript tick, unbounded by design. The
+    /// deadline is published so the hero bar can make the last stretch VISIBLE —
+    /// the silent cut-off was the old design's worst dictation sin.
     private func scheduleSilenceStop() {
         parse.silenceTask?.cancel()
+        silenceDeadline = Date().addingTimeInterval(Self.silenceStopSeconds)
         parse.silenceTask = Task {
             try? await Task.sleep(for: .seconds(Self.silenceStopSeconds))
             guard !Task.isCancelled, speech.state == .listening else { return }

@@ -18,6 +18,10 @@ enum LayoutMetrics {
     /// The minimum interactive tap target (HIG). Every tappable glyph/control reserves
     /// at least this, even when its visual glyph is smaller than the column.
     static let hitTarget: CGFloat = 44
+    /// The voice hero control's diameter — the composer's listening-state stop button,
+    /// the one control operated mid-thought at arm's length. Deliberately larger than
+    /// `hitTarget`: it is the surface's focal point, not merely reachable.
+    static let voiceHero: CGFloat = 64
 }
 
 extension View {
