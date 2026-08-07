@@ -337,15 +337,20 @@ final class AppBrain {
     // MARK: - Household narrative
 
     /// Phrase the household's operating status over the engine's deterministic
-    /// facts. Mirrors `triage`'s degrade-on-failure contract: the active engine
-    /// (LLM on device, heuristic otherwise) tries first, and any on-device failure
-    /// falls back to the deterministic template so the surface always has a sentence.
+    /// facts. Runs through the `ModelRun` seam like every other model call — this
+    /// was the one straggler constructing its session unbounded, so a cold model
+    /// could hang the narrative task indefinitely with nothing recorded. Any
+    /// non-success (unavailable, deadline, failure, cancellation) falls back to
+    /// the deterministic template so the surface always has a sentence.
     func householdNarrative(_ facts: HouseholdFacts) async -> String {
-        do {
-            return try await engine.householdNarrative(facts)
-        } catch {
-            return (try? await HeuristicEngine().householdNarrative(facts)) ?? ""
+        let engine = self.engine
+        let result = await ModelRun.perform(
+            .householdNarrative, deadline: ModelDeadline.backgroundSeconds
+        ) {
+            try await engine.householdNarrative(facts)
         }
+        if case .success(let sentence) = result { return sentence }
+        return (try? await HeuristicEngine().householdNarrative(facts)) ?? ""
     }
 
     // MARK: - Commit

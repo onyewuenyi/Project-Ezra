@@ -29,6 +29,10 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// (until this) the only one generating no evidence to tune its deadline with.
     /// Recorded at the `AppBrain.triage` seam, never per debounce cancellation.
     case captureTriage
+    /// The Household surface's one-sentence status phrasing. The last call site to
+    /// join the seam — it previously constructed its session directly, which meant
+    /// no deadline (a cold model hung the narrative task indefinitely) and no metrics.
+    case householdNarrative
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -37,6 +41,7 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .decisionFraming: return "framing"
         case .workIntent: return "workIntent"
         case .captureTriage: return "capture"
+        case .householdNarrative: return "narrative"
         }
     }
 }
