@@ -32,6 +32,10 @@ final class SpeechCaptureService {
     private(set) var finalizedText = ""
     /// The in-flight hypothesis, replaced as the model refines it.
     private(set) var volatileText = ""
+    /// Live mic level for the listening UI. A separate observable ON PURPOSE — it
+    /// updates at buffer cadence, and only the leaf waveform view should re-render
+    /// at that rate (see `AudioLevelMonitor`).
+    let audioLevel = AudioLevelMonitor()
 
     /// The full editable transcript so far (settled + in-flight).
     var transcript: String { finalizedText + volatileText }
@@ -58,6 +62,7 @@ final class SpeechCaptureService {
         guard !isActive else { return }
         finalizedText = ""
         volatileText = ""
+        audioLevel.reset()
 
         let granted = await requestMicPermission()
         guard granted else { state = .denied; return }
@@ -91,6 +96,7 @@ final class SpeechCaptureService {
             finalizedText += volatileText
             volatileText = ""
         }
+        audioLevel.reset()
         state = .idle
     }
 
@@ -145,9 +151,18 @@ final class SpeechCaptureService {
         let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat)
 
         // The tap fires off the main actor. It captures only the (thread-safe) stream
-        // continuation and the pure converter — never `self` — so there's no isolation
-        // hop. `AVAudioPCMBuffer` isn't Sendable (warning-only in Swift 5 mode).
+        // continuation, the pure converter, and the level monitor reference — never
+        // `self` — so the analyzer path has no isolation hop. `AVAudioPCMBuffer`
+        // isn't Sendable (warning-only in Swift 5 mode).
+        let monitor = audioLevel
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
+            // Level metering rides the buffer we already hold — RMS via vDSP before
+            // the yield, one main-actor hop per buffer (~12/s), nothing added to the
+            // analyzer path itself.
+            if let rms = AudioLevelMonitor.rms(of: buffer) {
+                let normalized = AudioLevelMonitor.normalizedLevel(rms: rms)
+                Task { @MainActor in monitor.ingest(rawLevel: normalized) }
+            }
             guard let converter,
                 let converted = Self.convert(buffer, using: converter, to: analyzerFormat)
             else { return }

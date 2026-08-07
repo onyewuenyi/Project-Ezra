@@ -127,7 +127,11 @@ struct ConfirmCreationCard: View {
                     Image(systemName: "xmark")
                         .font(.glyphCaption(.semibold))
                         .foregroundStyle(Palette.mutedText)
-                        .frame(width: 32, height: 32)
+                        // Visual glyph stays quiet; the TOUCHABLE region meets the
+                        // HIG minimum — this is a destructive control operated at
+                        // speed while cards stream in, exactly where a miss-tap
+                        // lands on the title field instead.
+                        .frame(width: LayoutMetrics.hitTarget, height: LayoutMetrics.hitTarget)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressableIcon)
