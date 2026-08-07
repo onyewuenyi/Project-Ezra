@@ -85,4 +85,36 @@ struct EmbeddingStoreTests {
         let rows = try context.fetch(NSFetchRequest<EmbeddingCache>(entityName: "EmbeddingCache"))
         #expect(rows.count == 1)  // the stale + orphaned rows were physically pruned
     }
+
+    @Test("A memo-overflow wipe re-arms warm-up: persisted vectors reload instead of re-embedding forever")
+    func overflowReloadsPersistedVectors() throws {
+        let context = TestStore.makeContext()
+        EmbeddingStore.resetForTesting()
+        defer { EmbeddingStore.resetForTesting() }
+
+        let openID = UUID()
+        let snapshot = OpenTaskSnapshot(id: openID, title: "book flights")
+        context.insert(
+            EmbeddingCache(
+                taskID: openID, vector: [0.5, 0.6],
+                sourceHash: EmbeddingStore.sourceHash("book flights"),
+                revision: EmbeddingStore.revision, in: context))
+        EmbeddingStore.warmUp(openTaskIDs: [openID], in: context)
+        #expect(EmbeddingStore.cachedVector(for: "book flights") != nil)
+
+        EmbeddingStore.overflowMemoForTesting()
+        #expect(EmbeddingStore.cachedVector(for: "book flights") == nil)  // wiped
+
+        // The re-armed warm-up refills the memo from the persisted row. Before the
+        // fix, `warmedUp` stayed true after the wipe and this reload never happened
+        // again for the life of the process.
+        EmbeddingStore.warmUp(openTaskIDs: [openID], in: context)
+        #expect(EmbeddingStore.cachedVector(for: "book flights") != nil)
+
+        // And `persistedHashes` survived the wipe: persistFresh must not re-insert a
+        // row that already exists on disk.
+        EmbeddingStore.persistFresh(openTasks: [snapshot], in: context)
+        let rows = try context.fetch(NSFetchRequest<EmbeddingCache>(entityName: "EmbeddingCache"))
+        #expect(rows.count == 1)
+    }
 }

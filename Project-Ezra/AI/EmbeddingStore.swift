@@ -117,9 +117,27 @@ enum EmbeddingStore {
         lock.lock()
         defer { lock.unlock() }
         guard let vector = embedding.vector(for: text) else { return nil }
-        if memo.count >= memoCap { memo.removeAll(keepingCapacity: true) }
+        if memo.count >= memoCap { wipeMemoLocked() }
         memo[sourceHash(text)] = vector
         return vector
+    }
+
+    /// The cap-overflow wipe. It must also re-arm warm-up, or the wipe becomes
+    /// permanent: the memo's only bulk refill is `warmUp`, which is one-shot — with
+    /// `warmedUp` left true after a wipe, persisted vectors never reloaded and every
+    /// later capture re-ran its full fresh-embed budget for the life of the process.
+    /// `persistedHashes` deliberately survives — the rows still exist on disk;
+    /// forgetting them would make `persistFresh` insert duplicates. Caller holds `lock`.
+    nonisolated private static func wipeMemoLocked() {
+        memo.removeAll(keepingCapacity: true)
+        warmedUp = false
+    }
+
+    /// Test seam: force the cap-overflow wipe. `computeVector`'s trigger needs the
+    /// real NLEmbedding (absent under XCTest), so the overflow CONTRACT — wipe, then
+    /// reload from persisted rows — is pinned through this instead.
+    static func overflowMemoForTesting() {
+        lock.withLock { wipeMemoLocked() }
     }
 
     /// Similarity in [0, 1], reproducing the pre-cache scoring EXACTLY. Despite its
@@ -158,8 +176,11 @@ enum EmbeddingStore {
     /// whichever runs first does the work.
     static func warmUp(in context: NSManagedObjectContext) {
         guard !lock.withLock({ warmedUp }) else { return }
-        let open = TaskItem.fetchAll(in: context).filter { !$0.status.isResolved }
-        warmUp(openTaskIDs: Set(open.compactMap(\.uuid)), in: context)
+        // The change-invalidated snapshot cache, not a fresh fetchAll — this runs
+        // during the sheet-presentation animation, and the composer's first parse is
+        // about to read the same snapshot anyway.
+        let open = OpenTaskSnapshotCache.shared.snapshots(in: context)
+        warmUp(openTaskIDs: Set(open.map(\.id)), in: context)
     }
 
     static func warmUp(openTaskIDs: Set<UUID>, in context: NSManagedObjectContext) {
@@ -170,17 +191,22 @@ enum EmbeddingStore {
         else { return }
         let request = NSFetchRequest<EmbeddingCache>(entityName: "EmbeddingCache")
         let rows = (try? context.fetch(request)) ?? []
+        // Decode outside the lock, publish in ONE acquisition — the old shape took
+        // the lock per row, on the main thread, during sheet presentation.
+        var loaded: [(hash: String, vector: [Double])] = []
+        loaded.reserveCapacity(rows.count)
         for row in rows {
             let alive = row.taskID.map(openTaskIDs.contains) ?? false
             guard alive, row.revision == Int32(revision), let data = row.vector else {
                 context.delete(row)
                 continue
             }
-            let hash = row.sourceHash
-            let vector = decode(data)
-            lock.withLock {
-                memo[hash] = vector
-                persistedHashes.insert(hash)
+            loaded.append((row.sourceHash, decode(data)))
+        }
+        lock.withLock {
+            for entry in loaded {
+                memo[entry.hash] = entry.vector
+                persistedHashes.insert(entry.hash)
             }
         }
     }
