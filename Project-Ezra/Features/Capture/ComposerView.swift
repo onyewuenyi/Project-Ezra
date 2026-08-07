@@ -411,31 +411,11 @@ struct ComposerView: View {
     }
 
     /// The open working set as value snapshots, for reverse dependency detection
-    /// ("should anything already open wait on this new task?").
+    /// ("should anything already open wait on this new task?"). Served by the
+    /// change-invalidated cache — rolling parses read this per chained parse, and
+    /// rebuilding an identical set each time was the audit's A3.
     private var openTaskSnapshots: [OpenTaskSnapshot] {
-        let open = allTasks.filter { !$0.status.isResolved }
-        // Both hoisted out of the loop: the unresolved-id Set used to be rebuilt inside
-        // activeBlockers PER TASK (an O(N²) pass on the main thread, per parse), and
-        // each task's relationships blob was decoded twice (blockers + parent). One
-        // Set, one decode per task, every view derived from it.
-        let openIDs = Set(open.compactMap(\.uuid))
-        let titlesByID = Dictionary(
-            uniqueKeysWithValues: open.compactMap { task in task.uuid.map { ($0, task.title) } })
-        return open.compactMap { task in
-            guard let id = task.uuid else { return nil }
-            let rels = task.relationships
-            let active = TaskItem.activeBlockers(from: rels, openIDs: openIDs)
-            return OpenTaskSnapshot(
-                id: id,
-                title: task.title,
-                externalBlockerNotes: active.filter { $0.kind == .external }.compactMap(\.note),
-                category: task.category,
-                updatedAt: task.updatedAt,
-                dueDate: task.dueDate,
-                isBlocked: !active.isEmpty,
-                parentTitle: TaskItem.parentTaskID(from: rels).flatMap { titlesByID[$0] }
-            )
-        }
+        OpenTaskSnapshotCache.shared.snapshots(in: context)
     }
 
     /// The session's suppression set — loaded (and pruned) once, then reused for every
