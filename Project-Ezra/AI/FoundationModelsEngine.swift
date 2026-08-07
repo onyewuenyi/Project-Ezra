@@ -29,7 +29,13 @@ struct FoundationModelsEngine: AIEngine {
         let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        let session = Self.makeSession(context: context)
+        // A prewarmed single-use session when the pool's fingerprint still matches;
+        // cold construction otherwise. Either way the next parse's spare starts
+        // warming while this one generates.
+        let session = Self.sessionPool.take(
+            context: context,
+            fingerprint: .init(
+                instructions: Self.instructionText(for: context), roster: context.roster))
         let prompt = Self.prompt(for: trimmed, context: context)
 
         guard let onPartial else {
@@ -74,6 +80,27 @@ struct FoundationModelsEngine: AIEngine {
     /// updates/s, and everything downstream of a forward (mapping, resolver, owner
     /// proposal, merge, spring) runs on the main actor.
     static let partialThrottleSeconds: Double = 0.1
+
+    /// The capture session pool. The builder constructs the real session AND
+    /// prewarms the true prefix — instructions plus the static prompt head — which
+    /// the anonymous `ModelWarmup` session never covered.
+    static let sessionPool = CaptureSessionPool<LanguageModelSession> { context in
+        let session = makeSession(context: context)
+        session.prewarm(promptPrefix: Prompt(promptHead))
+        return session
+    }
+
+    /// Warm a capture session during the composer's presentation animation, so the
+    /// first parse of the session starts on a hot prefix. Called without
+    /// personalization (not yet loaded at present time) — still ~95% of the prefix;
+    /// a fingerprint miss at first take costs exactly what every parse used to.
+    static func prewarmCaptureSession() {
+        guard AppBrain.onDeviceModelAvailable() else { return }
+        let context = TriageContext()
+        sessionPool.prepare(
+            context: context,
+            fingerprint: .init(instructions: instructionText(for: context), roster: []))
+    }
 
     // MARK: - Household narrative
 
@@ -122,8 +149,12 @@ struct FoundationModelsEngine: AIEngine {
     /// The user prompt: the raw brain-dump, plus the open working set when
     /// present so the model can flag reverse dependencies (existing tasks that
     /// must wait on a new one). Capped — the context budget is small.
+    /// The static head of every capture prompt — the tail of the prewarmable prefix
+    /// (instructions + this), shared by `prompt(for:)` and the session pool builder.
+    static let promptHead = "Here is the user's raw brain-dump. Turn it into structured task intents:"
+
     private static func prompt(for text: String, context: TriageContext) -> String {
-        var prompt = "Here is the user's raw brain-dump. Turn it into structured task intents:\n\n\(text)"
+        var prompt = "\(promptHead)\n\n\(text)"
         if !context.candidates.isEmpty {
             let lines = context.candidates.map { "[\($0.id.uuidString)] \($0.title) — \($0.facts)" }
             prompt +=
@@ -135,29 +166,39 @@ struct FoundationModelsEngine: AIEngine {
         return prompt
     }
 
-    /// Sessions are per-call today (stateless), so personalization is plain
-    /// instruction text appended at creation; `LanguageModelSession
-    /// .DynamicInstructions` is the API to adopt when the session becomes
-    /// continuous. The resolve-person tool attaches only when a roster exists.
+    /// Sessions are single-use (stateless), served prewarmed by `sessionPool`;
+    /// personalization is plain instruction text appended at creation —
+    /// `LanguageModelSession.DynamicInstructions` is the API to adopt when the
+    /// session becomes continuous. The resolve-person tool attaches only when a
+    /// roster exists.
     private static func makeSession(context: TriageContext) -> LanguageModelSession {
-        var instructions = Self.instructions
-        if let personalization = context.personalization {
-            instructions += "\n\n" + personalization
-        }
+        let instructions = instructionText(for: context)
         guard !context.roster.isEmpty else {
             return LanguageModelSession(instructions: instructions)
         }
-        instructions += """
-
-
-            When the capture names a person, call the resolve_person tool once for that \
-            name and use the returned name verbatim as personReference. Do not call it \
-            for pronouns or when no person is named.
-            """
         return LanguageModelSession(
             tools: [ResolvePersonTool(roster: context.roster)],
             instructions: instructions
         )
+    }
+
+    /// The full instruction text for a context — the pool's fingerprint reads this,
+    /// so anything that changes what a session was built with MUST flow through here.
+    static func instructionText(for context: TriageContext) -> String {
+        var instructions = Self.instructions
+        if let personalization = context.personalization {
+            instructions += "\n\n" + personalization
+        }
+        if !context.roster.isEmpty {
+            instructions += """
+
+
+                When the capture names a person, call the resolve_person tool once for that \
+                name and use the returned name verbatim as personReference. Do not call it \
+                for pronouns or when no person is named.
+                """
+        }
+        return instructions
     }
 
     /// Map a partial snapshot to the candidates that are complete enough to

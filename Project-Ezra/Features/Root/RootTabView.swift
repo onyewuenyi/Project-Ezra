@@ -267,7 +267,7 @@ struct RootTabView: View {
             """
         let roster = familyMembers.filter { !$0.isRemoved }
             .map { RosterPerson(name: $0.name, relationship: $0.relationship.label) }
-        let drafts = await brain.triage(sample, roster: roster)
+        let drafts = await brain.triage(sample, roster: roster).drafts
         // `commit` is the confirm, so the seeded screens show a real working set.
         // Judgment calls arrive wearing their Needs Decision flag; low-confidence items
         // do NOT — the confirm is the review that flag was asking for.
@@ -309,7 +309,7 @@ struct RootTabView: View {
         print("engine: \(brain.status.description)")
         print("input: \(ramble.count) chars")
         let started = Date()
-        let drafts = await brain.triage(ramble)
+        let drafts = await brain.triage(ramble).drafts
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
         print("drafts: \(drafts.count)")
         print("wall clock: \(elapsed)ms")

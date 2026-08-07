@@ -70,7 +70,7 @@ struct OnboardingView: View {
         else { return }
         text = sample
         Task {
-            drafts = await brain.triage(sample)
+            drafts = await brain.triage(sample).drafts
             guard !drafts.isEmpty else { return }
             withAnimation(Motion.onboardReveal) { phase = .result }
         }
@@ -432,7 +432,7 @@ struct OnboardingView: View {
         focused = false
         foundNothing = false
         withAnimation(.easeInOut(duration: 0.3)) { phase = .settling }
-        let result = await brain.triage(text)
+        let result = await brain.triage(text).drafts
         // Nothing actionable found: return to the editor with the text intact rather
         // than revealing an empty "0 areas" result (input is never discarded) — and SAY
         // so, because an unexplained bounce back to the same screen is indistinguishable

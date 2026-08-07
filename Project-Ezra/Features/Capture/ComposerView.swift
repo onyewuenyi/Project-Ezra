@@ -295,6 +295,8 @@ struct ComposerView: View {
             parse.parseTask?.cancel()
             parse.parseTask = nil
             parse.burstStartedAt = nil
+            parse.preparedCandidates = []
+            parse.enrichedText = nil
             drafts = []
             lastParsedText = nil
             lastParseYieldedCandidates = false
@@ -360,6 +362,7 @@ struct ComposerView: View {
                 openTasks: openTasks,
                 suppressions: suppressions,
                 ownership: ownership,
+                preparedCandidates: parse.preparedCandidates,
                 onPartial: { partial in
                     // Streaming (device): candidates fill in while the model is still
                     // generating — including while the user keeps talking. Snapshots
@@ -375,15 +378,19 @@ struct ComposerView: View {
             )
             guard !Task.isCancelled, epoch == parse.parseEpoch else { return }
             parse.parseTask = nil
+            // This parse's retrieval becomes the NEXT parse's prompt candidates —
+            // the chain is how the model gets a candidate package without first-draft
+            // latency ever paying for retrieval (audit A1).
+            parse.preparedCandidates = result.candidates
             // Persist any title vectors retrieval computed fresh this pass — tiny rows
             // on the app's write context, post-debounce (never per keystroke). The
             // save rides the next commit; an abandoned capture just re-memoizes later.
             EmbeddingStore.persistFresh(openTasks: openTasks, in: context)
-            lastParseYieldedCandidates = !result.isEmpty
+            lastParseYieldedCandidates = !result.drafts.isEmpty
             // Preserve the user's in-place edits: a re-parse only replaces
             // candidates whose AI reading actually changed.
             Motion.withMotion(Motion.settle) {
-                drafts = merge(fresh: result, into: drafts)
+                drafts = merge(fresh: result.drafts, into: drafts)
             }
             lastParsedText = captured
             announceParseResult()
@@ -394,6 +401,14 @@ struct ComposerView: View {
             // Chain the follow-up immediately: the debounce's job — don't parse
             // mid-burst — has been done by the parse's own duration.
             if text.trimmingCharacters(in: .whitespacesAndNewlines) != captured {
+                startParse()
+            } else if result.suggestsEnrichment, parse.enrichedText != captured {
+                // Single-shot backstop: the burst produced no chain, so the model
+                // never saw candidates and duplicate/child proposals couldn't land.
+                // ONE re-parse over the same text with the now-ready package —
+                // bounded by the marker, and an enrichment run carries candidates so
+                // it can never suggest another.
+                parse.enrichedText = captured
                 startParse()
             }
         }
@@ -847,6 +862,12 @@ final class LiveParseState {
     /// When the current burst of unparsed input began — the max-wait clock. Cleared
     /// when a parse starts.
     var burstStartedAt: Date?
+    /// The last completed parse's retrieval set — the next parse's prompt
+    /// candidates (audit A1: candidates ride the chain).
+    var preparedCandidates: [RetrievalCandidate] = []
+    /// The text an enrichment re-parse already ran for, so the single-shot
+    /// backstop fires at most once per settled text.
+    var enrichedText: String?
     /// The learned-correction rules for this session (see `sessionRules`).
     var cachedRules: [LearnedRule]?
     /// The last mid-session park write, for the throttle.

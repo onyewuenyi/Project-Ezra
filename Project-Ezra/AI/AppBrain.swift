@@ -111,9 +111,25 @@ final class AppBrain {
     /// `resumeCapture`), so the sheet-presentation animation absorbs the cost —
     /// the same trick the Today sequence plays behind its Recap cover.
     static func prewarmCapture(in context: NSManagedObjectContext) {
-        ModelWarmup.prewarmSharedSession()
+        // The REAL prefix, not `ModelWarmup`'s anonymous session: a pooled capture
+        // session with the true instruction block and prompt head starts warming
+        // behind the sheet-presentation animation.
+        FoundationModelsEngine.prewarmCaptureSession()
         _ = EmbeddingStore.sentenceEmbedding
         EmbeddingStore.warmUp(in: context)
+    }
+
+    /// One completed live parse. `candidates` is the retrieval set this parse
+    /// awaited at its end — the chain hands it to the NEXT parse's prompt, which is
+    /// how the model gets a candidate package without first-draft latency ever
+    /// paying for retrieval (audit A1).
+    struct TriageRun {
+        var drafts: [TaskDraft] = []
+        var candidates: [RetrievalCandidate] = []
+        /// This parse ran candidate-blind on-device and retrieval found neighbours —
+        /// the composer chains ONE re-parse over the same text so duplicate/child
+        /// proposals can land on single-shot captures too.
+        var suggestsEnrichment = false
     }
 
     /// Run the raw capture through the active engine, then the deterministic
@@ -127,6 +143,11 @@ final class AppBrain {
     ///   the model AND applied deterministically by the resolver.
     /// - `openTasks`: the open working set — reverse dependency detection
     ///   ("should anything already open wait on this new task?").
+    /// - `preparedCandidates`: the candidate package for the MODEL PROMPT — the
+    ///   previous parse's retrieval, carried by the rolling chain. Empty = this
+    ///   parse goes candidate-blind and generation starts immediately (audit A1);
+    ///   this parse's own retrieval runs concurrently and comes back in the
+    ///   returned run for the next prompt.
     /// - `onPartial`: streaming seam — resolved partial candidates as the model
     ///   generates (device only; the heuristic is instant and never calls it).
     func triage(
@@ -136,37 +157,44 @@ final class AppBrain {
         openTasks: [OpenTaskSnapshot] = [],
         suppressions: [RelationshipSuppression] = [],
         ownership: OwnershipContext = .none,
+        preparedCandidates: [RetrievalCandidate] = [],
         onPartial: (@MainActor ([TaskDraft]) -> Void)? = nil
-    ) async -> [TaskDraft] {
+    ) async -> TriageRun {
         isProcessing = true
         defer { isProcessing = false }
         // The parse clock starts HERE — before retrieval — so the recorded latency is
         // what the user experiences from the debounce surviving, not just generation.
-        // Retrieval's own wall-clock is measured inside the detached task (it stays
-        // honest when Wave 2 makes retrieval concurrent with generation).
         let parseStarted = Date()
-        // Retrieve the slice of the graph most relevant to this capture — the candidate
-        // package the model uses for duplicate/child/blocks detection (the only valid ids).
-        // Detached: the ranking runs up to 21 sentence-embedding inferences, and they
-        // used to land on the main actor in the window right after the user's pause —
-        // exactly when typing resumes. Pure over value snapshots; results come back here.
-        let (candidates, retrievalMs) = await Task.detached(priority: .userInitiated) {
+        // Retrieval runs CONCURRENTLY with generation (audit A1): the model is
+        // prompted the moment the debounce survives, with whatever candidate package
+        // the CALLER prepared — the previous parse's retrieval, riding the rolling
+        // chain. The first parse of a burst goes candidate-blind (duplicate/child
+        // proposals are card refinements, not prerequisites), so first-draft latency
+        // no longer pays for up to 21 sentence-embedding inferences, and stops
+        // scaling with store size. This parse's retrieval lands before the FINAL
+        // resolve below — generation takes seconds, retrieval tens of milliseconds —
+        // and is returned for the next parse's prompt.
+        let retrievalTask = Task.detached(priority: .userInitiated) {
             let retrievalStarted = Date()
             let ranked = ContextRetrieval.candidates(matching: rawText, among: openTasks)
             return (ranked, Int(Date().timeIntervalSince(retrievalStarted) * 1000))
-        }.value
+        }
         let context = TriageContext(
             personalization: CorrectionProfile.instructionLines(learned),
             roster: roster,
             openTasks: openTasks,
-            candidates: candidates,
+            candidates: preparedCandidates,
             suppressions: suppressions
         )
         // Resolve intents → drafts and propose an owner for each — the one path both
-        // the streaming partials and the final result run through.
+        // the streaming partials and the final result run through. Partials resolve
+        // against the PREPARED candidates (what the model was actually shown); the
+        // final result resolves against prepared ∪ fresh, so the completed parse is
+        // never candidate-blind even on a burst's first run.
+        var gateCandidates = preparedCandidates
         func resolveAndGate(_ intents: [TaskIntent]) -> [TaskDraft] {
             var drafts = IntentResolver.resolve(
-                intents, rules: learned, openTasks: openTasks, candidates: candidates,
+                intents, rules: learned, openTasks: openTasks, candidates: gateCandidates,
                 suppressions: suppressions)
             Self.proposeOwners(to: &drafts, ownership: ownership)
             return drafts
@@ -206,8 +234,16 @@ final class AppBrain {
             ) { tee in
                 try await self.engine.triage(rawText: rawText, context: context, onPartial: tee)
             }
-            // Latency includes retrieval (the clock starts at parse start) — it is the
-            // user's wait, not the model's.
+            if case .cancelled = outcome {
+                // Debounce supersession — the caller already dropped this generation.
+                return TriageRun()
+            }
+            // Fold this parse's retrieval in before anything records or resolves —
+            // generation took seconds, so this await is effectively free.
+            let (fresh, retrievalMs) = await retrievalTask.value
+            mergeFresh(fresh, into: &gateCandidates)
+            // Latency includes retrieval and the fold (the clock starts at parse
+            // start) — it is the user's wait, not the model's.
             let latency = Int(Date().timeIntervalSince(parseStarted) * 1000)
             func recordCapture(_ outcome: ModelMetrics.Outcome) {
                 ModelMetrics.shared.record(
@@ -230,8 +266,7 @@ final class AppBrain {
                 recordCapture(.timedOut)
                 intents = []
             case .cancelled:
-                // Debounce supersession — the caller already dropped this generation.
-                return []
+                return TriageRun()  // handled above; keeps the switch total
             case .failed(let error):
                 recordCapture(.failed(Self.errorLabel(error)))
                 intents = []
@@ -253,8 +288,35 @@ final class AppBrain {
             } catch {
                 intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
             }
+            let (fresh, _) = await retrievalTask.value
+            mergeFresh(fresh, into: &gateCandidates)
         }
-        return resolveAndGate(intents)
+        let drafts = resolveAndGate(intents)
+        return TriageRun(
+            drafts: drafts,
+            candidates: gateCandidates,
+            // The enrichment backstop (single-shot captures): this parse ran
+            // candidate-blind on-device, retrieval found neighbours, and there are
+            // drafts to enrich — worth ONE chained re-parse with candidates in the
+            // prompt. An enrichment parse itself carries candidates, so it can never
+            // suggest another.
+            suggestsEnrichment: preparedCandidates.isEmpty && !gateCandidates.isEmpty
+                && status.isOnDevice && !drafts.isEmpty
+        )
+    }
+
+    /// Fold freshly-retrieved candidates over the prepared set, keeping any prepared
+    /// entry the fresh ranking no longer surfaces — the model could only have cited
+    /// ids from its PROMPT, and the resolver's anti-hallucination check must not
+    /// drop a legitimate claim because the ranking shifted under it mid-parse.
+    private func mergeFresh(
+        _ fresh: [RetrievalCandidate], into candidates: inout [RetrievalCandidate]
+    ) {
+        let prepared = candidates
+        candidates = fresh
+        for entry in prepared where !fresh.contains(where: { $0.id == entry.id }) {
+            candidates.append(entry)
+        }
     }
 
     // MARK: - Parking (the durable half of capture)
