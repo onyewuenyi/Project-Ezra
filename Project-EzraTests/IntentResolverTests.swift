@@ -201,6 +201,25 @@ struct IntentResolverTests {
         #expect(draft("Pay the rent", due: "tomorrow").dueDate == day(16))
     }
 
+    @Test("A judgment call never receives a proposed date — a spoken one still lands")
+    func judgmentCallSuppressesProposedDate() {
+        func draft(_ title: String, due: String? = nil) -> TaskDraft {
+            IntentResolver.resolve(
+                TaskIntent(
+                    title: title, category: "Admin", dateExpression: due, confidence: 0.9,
+                    isJudgmentCall: true, reasoning: ""), now: wednesday)
+        }
+        // "insurance" is a renewal signal, but deciding about it is a values call —
+        // a topic-word deadline on a decision is manufactured pressure, not help.
+        #expect(draft("Figure out if we should switch insurance").dueDate == nil)
+        #expect(draft("Figure out if we should switch insurance").dueReason == nil)
+        // The recurring-bill arm SURVIVES judgment: money leaves on a real cadence
+        // whether or not the call gets made.
+        #expect(draft("Decide whether to cancel the streaming subscription").dueDate != nil)
+        // The user's own date is theirs to set, judgment call or not.
+        #expect(draft("Decide about the insurance", due: "friday").dueDate != nil)
+    }
+
     @Test("A proposed date carries its reason; a spoken one carries none")
     func dueReasonOnlyForProposals() {
         func draft(_ title: String, due: String? = nil) -> TaskDraft {

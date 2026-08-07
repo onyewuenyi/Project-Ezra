@@ -266,9 +266,62 @@ private let evalSet: [EvalCase] = [
             ExpectedTask(titleContains: ["insurance"], expectDue: true)
         ]),
     EvalCase(
+        // Label corrected with the connective-aware splitter: this utterance always
+        // contained two actions — the single-task expectation was calibrated to the
+        // old splitter's inability to see "and also", not to the ramble itself.
         utterance: "text dad about the reunion and also book the campsite",
         expected: [
-            ExpectedTask(titleContains: ["dad"], category: "Family")
+            ExpectedTask(titleContains: ["dad"], category: "Family"),
+            ExpectedTask(titleContains: ["campsite"]),
+        ]),
+
+    // Dictated run-ons — the flagship spoken shape: no newlines, no short comma
+    // lists, items joined by breath-connectives. The old splitter returned ONE
+    // mega-task for every one of these.
+    EvalCase(
+        utterance:
+            "i need to renew my passport and then i need to book flights for the trip and also call mom about thanksgiving",
+        expected: [
+            ExpectedTask(titleContains: ["passport"], expectDue: true),
+            ExpectedTask(titleContains: ["flights"], category: "Travel"),
+            ExpectedTask(titleContains: ["mom"], category: "Family"),
+        ]),
+    EvalCase(
+        utterance: "pay rent and figure out if we should switch insurance",
+        expected: [
+            ExpectedTask(titleContains: ["rent"], category: "Finance", expectDue: true),
+            ExpectedTask(titleContains: ["insurance"], judgment: true),
+        ]),
+    EvalCase(
+        // Compound object and compound verb — the guard cases: neither may split.
+        utterance: "call mom and dad about the reunion",
+        expected: [
+            ExpectedTask(titleContains: ["mom", "dad"], category: "Family")
+        ]),
+    EvalCase(
+        utterance: "wash and fold the laundry",
+        expected: [
+            ExpectedTask(titleContains: ["laundry"], category: "Home")
+        ]),
+    EvalCase(
+        // Past the old 120-char comma cliff: this list is ~150 chars and must split
+        // exactly like a short one.
+        utterance:
+            "renew my passport before the trip, book the dentist appointment for both kids, pay the water bill before the late fee, return the amazon package to the ups store",
+        expected: [
+            ExpectedTask(titleContains: ["passport"], expectDue: true),
+            ExpectedTask(titleContains: ["dentist"]),
+            ExpectedTask(titleContains: ["water bill"], category: "Finance", expectDue: true),
+            ExpectedTask(titleContains: ["amazon"]),
+        ]),
+    EvalCase(
+        utterance:
+            "i need to schedule the oil change and then call the vet about rex's shots and i should probably email the landlord about the leak in the bathroom and also figure out whether we keep the storage unit because it's four hundred a month and we never go there",
+        expected: [
+            ExpectedTask(titleContains: ["oil change"], category: "Car"),
+            ExpectedTask(titleContains: ["vet"]),
+            ExpectedTask(titleContains: ["landlord"]),
+            ExpectedTask(titleContains: ["storage"], judgment: true),
         ]),
 ]
 
@@ -310,16 +363,26 @@ struct RambleEvalTests {
 
             for (draft, expected) in zip(drafts, evalCase.expected) {
                 let lowerTitle = draft.title.lowercased()
-                title.record(expected.titleContains.allSatisfy { lowerTitle.contains($0.lowercased()) })
+                // Name every miss — the aggregates say a floor moved; only the named
+                // case says WHY, and recalibration is supposed to be evidence-based.
+                func score(_ field: inout Score, _ label: String, _ hit: Bool) {
+                    field.record(hit)
+                    if !hit {
+                        print("  miss[\(label)] \"\(draft.title)\" ← \(evalCase.utterance.prefix(60))")
+                    }
+                }
+                score(
+                    &title, "title",
+                    expected.titleContains.allSatisfy { lowerTitle.contains($0.lowercased()) })
                 if let expectedCategory = expected.category {
-                    category.record(draft.category == expectedCategory)
+                    score(&category, "category", draft.category == expectedCategory)
                 }
-                judgment.record(draft.isJudgmentCall == expected.judgment)
+                score(&judgment, "judgment", draft.isJudgmentCall == expected.judgment)
                 if let expectedOwner = expected.owner {
-                    owner.record(draft.ownerName == expectedOwner)
+                    score(&owner, "owner", draft.ownerName == expectedOwner)
                 }
-                blocked.record((draft.blockedBy != nil) == expected.blocked)
-                due.record((draft.dueDate != nil) == expected.expectDue)
+                score(&blocked, "blocked", (draft.blockedBy != nil) == expected.blocked)
+                score(&due, "due", (draft.dueDate != nil) == expected.expectDue)
             }
         }
 
@@ -338,15 +401,17 @@ struct RambleEvalTests {
 
             """)
 
-        // Regression floors — calibrated just under observed first-run numbers.
-        #expect(segmentation.rate >= 0.75, "segmentation regressed: \(segmentation.display)")
-        #expect(title.rate >= 0.85, "title fidelity regressed: \(title.display)")
-        #expect(category.rate >= 0.60, "category accuracy regressed: \(category.display)")
-        #expect(judgment.rate >= 0.85, "judgment detection regressed: \(judgment.display)")
+        // Regression floors — calibrated just under observed numbers. Re-baselined
+        // upward with the connective-aware splitter (Segmentation.swift): observed
+        // segmentation/title/judgment/blocked/due all 100% and category 97% across 47
+        // cases including the dictated run-on set. Owner keeps its old floor — three
+        // samples is no basis for a tighter one.
+        #expect(segmentation.rate >= 0.95, "segmentation regressed: \(segmentation.display)")
+        #expect(title.rate >= 0.95, "title fidelity regressed: \(title.display)")
+        #expect(category.rate >= 0.90, "category accuracy regressed: \(category.display)")
+        #expect(judgment.rate >= 0.95, "judgment detection regressed: \(judgment.display)")
         #expect(owner.rate >= 0.60, "owner extraction regressed: \(owner.display)")
-        #expect(blocked.rate >= 0.80, "blocker detection regressed: \(blocked.display)")
-        // Re-baselined upward when due dates started being proposed from a task's
-        // nature as well as read from its wording — observed 48/48.
+        #expect(blocked.rate >= 0.95, "blocker detection regressed: \(blocked.display)")
         #expect(due.rate >= 0.95, "due detection regressed: \(due.display)")
     }
 }

@@ -52,9 +52,17 @@ enum IntentResolver {
         // is done" read as a passport renewal and got a two-week deadline), and a task
         // that can't start yet is precisely where a manufactured date becomes a false
         // Overdue. A spoken date still lands on a blocked task — that one the user meant.
+        // A JUDGMENT CALL narrows the proposal to the recurring-bill arm (the eval
+        // caught both halves of this line): "cancel the streaming subscription" keeps
+        // its month-end date — money leaves on a real cadence whether or not the call
+        // is made — while "figure out if we should switch insurance" gets nothing; a
+        // renewal/deadline arm firing on a decision's TOPIC word is manufactured
+        // pressure, not information.
         let proposedDue =
             spokenDate == nil && intent.blockerPhrase == nil
-            ? inferredDueDate(title: intent.title, now: now, words: titleWords) : nil
+            ? inferredDueDate(
+                title: intent.title, now: now, words: titleWords,
+                billArmOnly: intent.isJudgmentCall) : nil
         var draft = TaskDraft(
             title: intent.title,
             category: intent.category,
@@ -358,7 +366,7 @@ enum IntentResolver {
     /// The residual cost, accepted knowingly: `TaskItem.isStale` only fires on undated
     /// tasks, so anything that gets a proposed date leaves stale detection.
     static func inferredDueDate(
-        title: String, now: Date = Date(), words: Set<String>? = nil
+        title: String, now: Date = Date(), words: Set<String>? = nil, billArmOnly: Bool = false
     ) -> (date: Date, reason: String)? {
         let words = words ?? CorrectionProfile.significantWords(title)
         let cal = Calendar.current
@@ -369,6 +377,9 @@ enum IntentResolver {
             else { return nil }
             return (cal.startOfDay(for: lastDay), "Bills usually land at month end.")
         }
+        // The renewal/deadline arms fire on topic words alone — legitimate on an
+        // action, manufactured pressure on a judgment call (see `resolve`).
+        guard !billArmOnly else { return nil }
         if !renewalSignals.isDisjoint(with: words) {
             guard let date = cal.date(byAdding: .day, value: 14, to: cal.startOfDay(for: now))
             else { return nil }

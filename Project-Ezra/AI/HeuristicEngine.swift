@@ -83,29 +83,11 @@ struct HeuristicEngine: AIEngine {
 
     // MARK: - Item splitting
 
-    /// A pasted blob may be newline-, comma-, or bullet-separated. Normalize to
-    /// individual task lines and drop empties / obvious headers.
+    /// A capture may be newline-, comma-, bullet- or — the flagship case — spoken-
+    /// connective-separated ("…and then I need to…"). The real work lives in
+    /// `Segmentation`; this keeps the engine's public seam (and its tests) stable.
     static func splitIntoItems(_ text: String) -> [String] {
-        let separators = CharacterSet(charactersIn: "\n\r")
-        let rawLines = text.components(separatedBy: separators)
-        var items: [String] = []
-        for line in rawLines {
-            let trimmed =
-                line
-                .trimmingCharacters(in: .whitespaces)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "-•*·—▪◦> \t"))
-            guard trimmed.count > 1 else { continue }
-            // A single line may itself list several comma-separated errands.
-            if trimmed.contains(",") && trimmed.count < 120 {
-                let parts = trimmed.components(separatedBy: ",")
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    .filter { $0.count > 1 }
-                items.append(contentsOf: parts)
-            } else {
-                items.append(trimmed)
-            }
-        }
-        return items
+        Segmentation.items(from: text)
     }
 
     // MARK: - Per-item classification
@@ -218,9 +200,9 @@ struct HeuristicEngine: AIEngine {
     }
 
     private static let judgmentSignals = [
-        "should i", "quit", "cancel", "give up", "still want", "worth it",
-        "decide whether", "figure out if", "commit to", "break up", "move to",
-        "change careers", "is this still", "do i really",
+        "should i", "should we", "quit", "cancel", "give up", "still want", "worth it",
+        "decide whether", "figure out if", "figure out whether", "commit to", "break up",
+        "move to", "change careers", "is this still", "do i really",
     ]
 
     private static func isJudgmentCall(_ lower: String) -> Bool {
