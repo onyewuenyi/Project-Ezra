@@ -327,6 +327,23 @@ enum RambleEval {
                 ExpectedTask(titleContains: ["landlord"]),
                 ExpectedTask(titleContains: ["storage"], judgment: true),
             ]),
+        EvalCase(
+            // "after that" is a connective; "after <noun>" is a blocker. One ramble
+            // exercising both — the second item splits clean, the third stays blocked.
+            utterance:
+                "renew my passport and after that book flights for the trip, and book the hotel once the flights are booked",
+            expected: [
+                ExpectedTask(titleContains: ["passport"], expectDue: true),
+                ExpectedTask(titleContains: ["flights"], category: "Travel"),
+                ExpectedTask(titleContains: ["hotel"], blocked: true),
+            ]),
+        EvalCase(
+            // Spoken enumeration — ordinal openers strip, items verify.
+            utterance: "first call the dentist then i need to pay the water bill",
+            expected: [
+                ExpectedTask(titleContains: ["dentist"], category: "Health"),
+                ExpectedTask(titleContains: ["water bill"], category: "Finance", expectDue: true),
+            ]),
     ]
 
     // MARK: - Scoring

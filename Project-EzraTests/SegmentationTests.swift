@@ -66,6 +66,37 @@ struct SegmentationTests {
             Segmentation.items(from: "book flights after passport is done").count == 1)
     }
 
+    @Test("'after that' splits as a connective; 'after <noun>' stays a blocker — both directions")
+    func afterThatVersusBlockerAfter() {
+        // The connective form: the split's second item carries no phantom blocker.
+        let items = Segmentation.items(
+            from: "renew my passport and after that book flights for the trip")
+        #expect(items == ["renew my passport", "book flights for the trip"])
+        let second = HeuristicEngine.intent(from: items[1])
+        #expect(second.blockerPhrase == nil)
+
+        // The blocker form: no "after that" phrase present, so no split — and the
+        // dependency survives intact through the engine.
+        let blocked = Segmentation.items(from: "book flights after passport is done")
+        #expect(blocked.count == 1)
+        #expect(HeuristicEngine.intent(from: blocked[0]).blockerPhrase != nil)
+    }
+
+    @Test("'then i need to' splits with the lead-in consumed by the boundary")
+    func thenINeedToSplits() {
+        let items = Segmentation.items(
+            from: "call the dentist then i need to return the amazon package")
+        #expect(items == ["call the dentist", "return the amazon package"])
+    }
+
+    @Test("Ordinal openers strip only when the remainder verifies as an item")
+    func ordinalOpenersStripSafely() {
+        let items = Segmentation.items(from: "first call mom, second pay the rent")
+        #expect(items == ["call mom", "pay the rent"])
+        // "first aid kit" is a noun phrase — the ordinal must not eat its words.
+        #expect(Segmentation.items(from: "first aid kit for the car") == ["first aid kit for the car"])
+    }
+
     @Test("A trailing rationale clause stays attached to its judgment item")
     func rationaleStaysAttached() {
         let items = Segmentation.items(

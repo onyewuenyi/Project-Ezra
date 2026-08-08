@@ -72,7 +72,9 @@ enum Segmentation {
     /// shared position the LONGEST match wins, the same arm-order discipline as
     /// `IntentResolver.resolveDate` (", and then" before ", and" before " and ").
     private static let connectives: [String] = [
-        ", and then ", " and then ", ", and also ", " and also ", ", then ", ", also ",
+        ", and after that ", " and after that ", ", after that ", " after that ",
+        ", then i need to ", " then i need to ", ", and then ", " and then ",
+        ", and also ", " and also ", ", then ", ", also ",
         " also ", " oh and ", ", and ", ", plus ", " plus ", " and ", "; ",
     ]
 
@@ -234,6 +236,10 @@ enum Segmentation {
         "i want to ", "we need to ", "we have to ", "make sure to ",
         "make sure i ", "remember to ", "need to ", "i gotta ", "gotta ", "have to ",
         "try to ", "so basically ", "so i ", "oh and ", "also ", "then ", "to ",
+        // Spoken enumeration openers ("first call mom…") — like every lead-in they
+        // strip only when the remainder verifies as an item, so "first aid kit"
+        // keeps its words.
+        "first ", "second ", "third ", "lastly ", "finally ",
     ]
 
     /// Strip lead-in phrases while the remainder still reads as an item — a clause
