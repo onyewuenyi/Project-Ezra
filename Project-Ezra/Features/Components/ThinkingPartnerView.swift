@@ -4,8 +4,9 @@
 //
 //  The Thinking Partner expansion inside the detail's decision section (Decision Framing,
 //  P0). On demand it asks the on-device model to FRAME the choice — the options with
-//  their tradeoffs and the cost of waiting — shown calmly, no action buttons (framing
-//  doesn't decide; `resolveDecisionAndLog` stays the only clearer).
+//  their tradeoffs, the cost of waiting, and (when the facts clearly favor one) a
+//  grounded "best fit". Still no action buttons: the recommendation is content, and
+//  `resolveDecisionAndLog` stays the only clearer — the human decides.
 //
 //  Off-device this view is never DRAWN — the detail checks availability before rendering
 //  the section, so there is no button to tap that could vanish. That means `.failed` here
@@ -116,6 +117,29 @@ struct ThinkingPartnerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, Spacing.md)
                 }
+            }
+            // The grounded recommendation — rendered only when it names one of the
+            // framing's own options (`groundedRecommendation` drops anything else).
+            // Content, not a control: there is no button here, because resolving
+            // stays the human's tap.
+            if let best = framing.groundedRecommendation {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                        Image(systemName: "sparkles")
+                            .font(.glyphCaption())
+                            .foregroundStyle(Palette.accentFlat)
+                        Text("Best fit · \(best.label)")
+                            .font(.controlLabel)
+                            .foregroundStyle(Palette.primaryText)
+                    }
+                    if !best.why.isEmpty {
+                        Text(best.why)
+                            .supportingStyle()
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.leading, Spacing.md)
+                    }
+                }
+                .padding(.top, Spacing.xxs)
             }
             if !framing.costOfWaiting.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {

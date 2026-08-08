@@ -45,7 +45,7 @@ enum IntentResolver {
         // from the task's nature below — the two are not interchangeable downstream.
         let spokenDate = resolveDate(expression: intent.dateExpression, now: now)
         let workIntent =
-            intent.workIntent.flatMap { WorkIntent(rawValue: $0) }
+            intent.workIntent.flatMap { WorkIntent.decode($0.lowercased()) }
             ?? inferredWorkIntent(title: intent.title, words: titleWords)
         // A captured wait suppresses the proposal. Two reasons, one of which the eval
         // caught: the blocker's own words are IN the title ("book flights after passport
@@ -321,24 +321,24 @@ enum IntentResolver {
     ///    a naming, not a behaviour change.
     static func inferredWorkIntent(title: String, words: Set<String>? = nil) -> WorkIntent {
         let lower = title.lowercased()
-        // Phrases first: "figure out if" and "figure out how" are different questions
-        // and share a stem, so word-level matching can't separate them.
-        if decisionPhrases.contains(where: lower.contains) { return .decision }
+        // Choice-shaped wording is NOT a type any more (axis 2 is action | planning;
+        // Decision retired 2026-08-08). A choice is closest to figuring out an
+        // approach, so it lands `.planning` — and `DecisionShape` (the hoisted
+        // lexicon) is what actually summons the Thinking Partner, independent of
+        // this axis.
+        if DecisionShape.phrases.contains(where: lower.contains) { return .planning }
         if planningPhrases.contains(where: lower.contains) { return .planning }
         let words = words ?? CorrectionProfile.significantWords(title)
-        if !decisionWords.isDisjoint(with: words) { return .decision }
+        if !DecisionShape.words.isDisjoint(with: words) { return .planning }
         if !planningWords.isDisjoint(with: words) { return .planning }
         return .action
     }
 
     /// Deliberately kept separate from `focusedSignals` above (which shares several
     /// words): effort and type answer different questions, and collapsing them into one
-    /// vocabulary would make a tweak to either silently move the other.
-    private static let decisionPhrases = [
-        "should i", "should we", "figure out if", "figure out whether", "decide whether",
-        "pick between", "choose between", "worth it",
-    ]
-    private static let decisionWords: Set<String> = ["decide", "decision", "choose", "whether"]
+    /// vocabulary would make a tweak to either silently move the other. The decision
+    /// lexicon lives in `Models/DecisionShape.swift` — one vocabulary for every
+    /// consumer that asks "does this read as a choice?".
     private static let planningPhrases = [
         "figure out how", "break down", "map out", "think through", "work out how",
     ]

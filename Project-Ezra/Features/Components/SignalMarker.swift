@@ -19,7 +19,7 @@
 //  matters now", and `TaskRanking` already forces decisions to the top of the stack so
 //  the two rarely compete for the same row anyway.
 //
-//  What does NOT appear here is the task's TYPE. A `.decision` work-intent and the
+//  What does NOT appear here is the task's TYPE. Choice-shaped work and the
 //  `needsDecision` flag are different axes — one is what kind of work this is, the
 //  other is why it needs your eyes — and putting both in one glyph position would
 //  teach the user they are the same thing. Type differentiates in the detail, which is

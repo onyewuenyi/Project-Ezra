@@ -22,10 +22,20 @@ struct WorkIntentTests {
     func roundTrip() {
         let task = TaskItem(title: "x", status: .todo)
         #expect(task.workIntent == nil)
-        task.workIntent = .decision
-        #expect(task.workIntent == .decision)
+        task.workIntent = .planning
+        #expect(task.workIntent == .planning)
         task.workIntent = nil
         #expect(task.workIntent == nil)
+    }
+
+    @Test("Legacy stored \"decision\" reads as .planning — no wipe, no failure")
+    func legacyDecisionRemapsOnRead() {
+        // Rows written before the Decision type retired carry the raw string; the
+        // read-through remap is what makes the retirement additive-in-practice.
+        #expect(WorkIntent.decode("decision") == .planning)
+        #expect(WorkIntent.decode("action") == .action)
+        #expect(WorkIntent.decode("planning") == .planning)
+        #expect(WorkIntent.decode("waiting") == nil)  // gen-10 retirement stays nil
     }
 
     @Test("A draft's workIntent is stamped onto the created task at commit")
@@ -35,24 +45,25 @@ struct WorkIntentTests {
         var draft = TaskDraft(
             title: "Decide on the vendor", category: "Work", confidence: 0.9,
             autonomy: .silent, isJudgmentCall: false, reasoning: "")
-        draft.workIntent = .decision
+        draft.workIntent = .planning
         let created = brain.commit([draft], rawCapture: "", into: context)
-        #expect(created.first?.workIntent == .decision)
+        #expect(created.first?.workIntent == .planning)
     }
 
-    @Test("A .decision intent unlocks the Thinking Partner without fabricating the flag")
-    func intentUnlocksCapabilityGuardsFlag() {
+    @Test("Choice-shaped wording unlocks the Thinking Partner without fabricating the flag")
+    func wordingUnlocksCapabilityGuardsFlag() {
+        // Decision is not a type: the trigger is the wording (DecisionShape) or the
+        // flag, never axis 2.
         let task = TaskItem(title: "Choose a plan", status: .todo)
-        task.workIntent = .decision
         #expect(TaskCapabilities.available(for: task).contains(.thinkingPartner))
-        #expect(!task.needsDecision)  // the intent path never sets the flag
+        #expect(!task.needsDecision)  // the wording path never sets the flag
     }
 
     @Test("The needsDecision flag also unlocks the capability; re-stamping intent never clears it")
     func flagUnlocksAndSurvives() {
-        let task = TaskItem(title: "Figure it out", status: .todo, needsDecision: true)
+        let task = TaskItem(title: "Sort out the garage", status: .todo, needsDecision: true)
         #expect(TaskCapabilities.available(for: task).contains(.thinkingPartner))
-        task.workIntent = .action  // "re-classify" to a non-decision kind
+        task.workIntent = .action  // re-classification touches axis 2 only
         #expect(task.needsDecision)  // untouched — only resolveDecision clears the flag
     }
 

@@ -57,14 +57,14 @@ Three consequences, all deliberate:
 | `ownerID == nil` | That's mine | `claimAndLog` |
 | owned by someone else | **— none —** | |
 | has active blockers | Unblock | `unblock` |
-| `.todo` | Start · **Decide** · **Break it down** | `setStatus(.doing)` |
+| `.todo` | Start | `setStatus(.doing)` |
 | `.doing` | Mark done | `completeAndResurface` |
 
 The nil arm is the design, not an omission: someone else's task is not yours to advance — a button there is wrong by construction, and completing it would stamp *you* as the actor attesting their work. Its proxy moves ("Mark done for ‹name›", "Take it back") live in `TaskMoreMenu`, and the empty slot is reserved for **Nudge/Comment** once `HouseholdSync.isLive` flips.
 
 **Claim precedes unblock** — you take the thing before you clear its path.
 
-**Axis 2 shows up as the verb, never as its own control.** `.start` carries the `WorkIntent` as an associated value so the label and the mutation stay one value; a nil intent (heuristic path, or Apple Intelligence off/unavailable) reads "Start", so the voicing degrades invisibly. This is the whole answer to "give each type its own lifecycle" — one lifecycle, three voices. Per-type lifecycles would re-fuse axes 1/2/3 (see the `waiting` note below).
+**The verb never voices the type.** The intent-voiced verbs are all retired: `.planning`'s "Break it down" was removed for lying (every arm runs `setStatus(.doing)`), and `.decision`'s "Decide" retired with the Decision type itself (2026-08-08). `.start` carries no associated value; the answer to "give each type its own lifecycle" is still one lifecycle — now with one honest verb.
 
 **Start does not dismiss the detail.** The button relabels to "Mark done" in place, which is how the lifecycle teaches itself — no explanation, no new pixels. Only `.resolve` sets `dismissesDetail`.
 
@@ -97,8 +97,10 @@ The nil arm is the design, not an omission: someone else's task is not yours to 
 ## Axis 2 — Type
 
 ```swift
-enum WorkIntent: String { case action, decision, planning }
+enum WorkIntent: String { case action, planning }
 ```
+
+**`decision` is cut too** (2026-08-08). Choosing is not a kind of work the user should classify — it is a capability the system brings. Choice-shaped wording is noticed at read time by `DecisionShape` (the one decision lexicon, hoisted from the resolver), which — together with the `needsDecision` flag — is what summons the Thinking Partner. Stored `"decision"` values decode as `.planning` (`WorkIntent.decode`), additively, with no store wipe; nothing writes the raw value again.
 
 **`waiting` is cut.** It and the derived `blocked` flag were the same predicate on two axes — a task blocked on a person is both. External waits already store as an edge with a note and no target, so `blocked` covers it, and cutting it removes the type boundary a classifier would most reliably fumble.
 
@@ -113,16 +115,16 @@ A capability is **not** "the module for this work type". Each exists to reduce a
 | Friction | Capability | Trigger | You leave with |
 |---|---|---|---|
 | **Complexity** | Break this down | `BreakdownEligibility` — size and shape | *"I have smaller executable work."* |
-| **Uncertainty** | Thinking Partner | `.decision` **or** the `needsDecision` flag | *"I have clarity."* |
+| **Uncertainty** | Thinking Partner | the `needsDecision` flag **or** choice-shaped wording (`DecisionShape`) | *"I have clarity."* |
 | **Inertia** | Unstick | `StallDetector` — deferred or gone quiet | *"I'm moving again."* |
 
 That framing decides a real question. Because the breakdown reduces **complexity**, complexity triggers it — not `workIntent == .planning`, which would offer it to a 15-minute "plan birthday dinner" and withhold it from a genuinely multi-step "renew passport". `BreakdownEligibility` is an ordered ladder: large effort → compound title → planning intent *above a lower bar*. Intent alone is never sufficient.
 
-**Unstick is the router, not a fourth module.** It diagnoses *why* a task stalled and hands off: blocked → resolve the blocker; too big → Break this down; reads as a choice → set the kind, and the Thinking Partner appears; otherwise → do it · defer it · let it go. A big task that is *also* stalled gets **one** card — Unstick subsumes the breakdown and routes into it, because a bare "break this down" sitting above a "this keeps sliding" that says "break it into steps" is the same advice twice.
+**Unstick is the router, not a fourth module.** It diagnoses *why* a task stalled and hands off: blocked → resolve the blocker; too big → Break this down; reads as a choice → escalate it to a decision (`escalateToDecision()`, the axis-3 flag — a human act), and the decision section + Thinking Partner appear; otherwise → do it · defer it · let it go. A big task that is *also* stalled gets **one** card — Unstick subsumes the breakdown and routes into it, because a bare "break this down" sitting above a "this keeps sliding" that says "break it into steps" is the same advice twice.
 
 **Every card must be dismissable by its own actions.** `deferralCount` is the avoidance signal, and the rollover only ever *raises* it — so `touchHuman` clears it, making the count **consecutive rather than lifetime**. Without that reset, one task crossing the threshold would show "This keeps sliding" for the rest of its live life, surviving the very tap meant to dismiss it (every action Unstick offers routes through `touchHuman`). It also stops the `currentRelevance` pull-down from penalising a task the user has since picked back up. `carriedOverCount` — worked-but-unfinished — is deliberately **not** reset; the two answer different questions.
 
-**Nothing is offered on a resolved task.** The breakdown and stall triggers guard this themselves, but the decision arm cannot: `workIntent` is axis 2 and survives resolution by design (a decision you made was still a decision). So `TaskCapabilities.available` returns `[]` up front for a resolved task — otherwise a completed "Should we move to Lisbon?" would still offer to frame the choice, and spend a model call doing it.
+**Nothing is offered on a resolved task.** The breakdown and stall triggers guard this themselves, but the Thinking Partner arm cannot: a resolved task keeps its title and may keep its flag until resolution cleared it, so wording alone would still read as a choice. `TaskCapabilities.available` returns `[]` up front for a resolved task — otherwise a completed "Should we move to Lisbon?" would still offer to frame the choice, and spend a model call doing it.
 
 **Deterministic where it matters.** Every *trigger* is a pure function, so eligibility is answerable in the simulator and for every user with Apple Intelligence off. Only the *content* needs the model — which is why the Thinking Partner and the breakdown are absent off-device, while **Unstick renders identically** (its diagnosis is deterministic too; the model may only phrase it).
 
@@ -130,7 +132,7 @@ That framing decides a real question. Because the breakdown reduces **complexity
 
 **Every model call is bounded and cancellable** (`ModelDeadline` · `ModelResult` · `ModelRun`). A card's call gets 20s and a background re-classification 10s; whichever loses is cancelled. Swiping to a neighbouring task cancels in flight — keyed on `isActive`, **not** `.onDisappear`, because the pager keeps neighbours mounted. Because absence is settled up front, a failure reaching a card can only mean a real attempt that failed, so it offers *"That didn't finish · Try again"* rather than collapsing. `ModelResult` keeps `LanguageModelSession.GenerationError` out of SwiftUI entirely, and `ModelMetrics` records per-capability latency and outcomes into the DEBUG footer — local only, never transmitted — so the deadline is tuned on evidence.
 
-**The Thinking Partner does not recommend.** `DecisionFraming` returns options, per-option tradeoffs, and a cost-of-waiting line, with guides that forbid inventing options. There is no recommendation field, so "the AI frames, the human decides" holds by construction.
+**The Thinking Partner recommends — a deliberate reversal (2026-08-08) of "the AI frames, never recommends."** `DecisionFraming` returns options, per-option tradeoffs, a cost-of-waiting line, and a `recommendation` — contained three ways: the guides forbid inventing options; `groundedRecommendation` drops any recommendation that doesn't name one of the framing's own options verbatim (anti-hallucination at the read); and it is content with no button — `resolveDecision()` stays the only clearer, so the human still decides. An empty recommendation is an honest abstention, instructed as better than a coin flip dressed as advice.
 
 **Break this down commits, and that is its one difference.** Framing changes nothing; accepting a breakdown creates real child tasks born `.todo` with `.parent` edges, one reversible `"split"` entry, and a `currentRelevance` pull-down so the parent recedes while it has open steps. It never splits on its own.
 
@@ -138,7 +140,7 @@ That framing decides a real question. Because the breakdown reduces **complexity
 
 The *model's* classification is on-device only, and Apple Intelligence can be **off by user setting or unavailable by region** — not just absent on old hardware. Those users would otherwise get nil intent on every task, and no capability voiced by type.
 
-`IntentResolver.inferredWorkIntent` closes that gap: it backfills lexically at resolve time (decision/planning phrases, else `.action`), so the confirm card's kind chip is populated on every engine. It **never reads `isJudgmentCall`/`needsDecision`**, which would fuse axes 2 and 3 — test-enforced by `IntentResolverTests.workIntentIgnoresJudgmentFlag`. Its `.action` default is behaviourally identical to nil (same CTA verb, same capability set), so the backfill is a naming, not a behaviour change.
+`IntentResolver.inferredWorkIntent` closes that gap: it backfills lexically at resolve time (planning phrases — including choice-shaped wording, which lands `.planning` — else `.action`), so the confirm card's kind chip is populated on every engine. It **never reads `isJudgmentCall`/`needsDecision`**, which would fuse axes 2 and 3 — test-enforced by `IntentResolverTests.workIntentIgnoresJudgmentFlag`. Its `.action` default is behaviourally identical to nil (same CTA verb, same capability set), so the backfill is a naming, not a behaviour change.
 
 A model-supplied classification always wins over the backfill.
 

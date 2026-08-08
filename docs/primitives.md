@@ -99,7 +99,7 @@ Each system is a loop the user feels; each is listed with the primitives it comp
 
 ### S4 · Capabilities — help where the task is stuck
 *Complexity → Break it down · Uncertainty → Thinking Partner · Inertia → Unstick.*
-**Composes:** TaskCapabilities · BreakdownEligibility · StallDiagnosis · WorkIntent (axis 2) · ModelRun services (framing, breakdown) · Relationship (`.parent` on accept) · ChangeLog ("split").
+**Composes:** TaskCapabilities · BreakdownEligibility · StallDiagnosis · DecisionShape (the choice-wording lexicon — Decision retired from axis 2, 2026-08-08) · ModelRun services (framing incl. the grounded recommendation, breakdown) · Relationship (`.parent` on accept) · ChangeLog ("split").
 **Fallback:** triggers identical everywhere; model-authored cards absent off-device, Unstick renders identically.
 
 ### S5 · Learning — the correction loop

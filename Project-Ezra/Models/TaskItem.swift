@@ -76,12 +76,15 @@ enum AutonomyTier: String, Codable {
 /// The shape of work a task represents, classified by the model and cached — never
 /// a permanent stored fact. Refreshed on material title/notes edits and on
 /// structural change (gaining/losing a child or a blocker), so a "planning" task
-/// that gets decomposed doesn't stay "planning" forever. `.decision` is the one that
-/// unlocks the Thinking Partner — assigned ONLY when the task is genuinely choosing
-/// between options; it never reads or writes `needsDecision`.
+/// that gets decomposed doesn't stay "planning" forever.
+///
+/// **`.decision` is retired as a type** (2026-08-08): choosing is not a kind of work
+/// the user should have to classify — it is a capability the system brings. The
+/// Thinking Partner now triggers on the `needsDecision` flag or on choice-shaped
+/// wording (`DecisionShape`), and never on this axis. Neither case here reads or
+/// writes `needsDecision`.
 enum WorkIntent: String, Codable, CaseIterable, Identifiable {
     case action  // a concrete thing to do
-    case decision  // a choice between options
     case planning  // figuring out an approach / breaking something down
 
     var id: String { rawValue }
@@ -89,11 +92,20 @@ enum WorkIntent: String, Codable, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .action: return "Action"
-        case .decision: return "Decision"
         case .planning: return "Planning"
         }
     }
 
+    /// Decode a stored raw value, absorbing retired vocabulary. Additive-in-practice:
+    /// rows written before the retirement carry `"decision"`, and a wipe over a
+    /// raw-string vocabulary would be spending schema budget on a rename. A decision
+    /// to make is nearest to figuring out an approach, so legacy rows read as
+    /// `.planning`. Nothing may WRITE `"decision"` after this — the setter goes
+    /// through the two live cases only.
+    static func decode(_ raw: String) -> WorkIntent? {
+        if let intent = WorkIntent(rawValue: raw) { return intent }
+        return raw == "decision" ? .planning : nil
+    }
 }
 
 // MARK: - Owner origin (who established this ownership)
@@ -442,7 +454,7 @@ final class TaskItem: NSManagedObject {
     /// The task's cached work-intent classification; nil until classified (the
     /// heuristic path leaves it nil). Written only through `setWorkIntent`.
     var workIntent: WorkIntent? {
-        get { workIntentRaw.flatMap(WorkIntent.init(rawValue:)) }
+        get { workIntentRaw.flatMap(WorkIntent.decode) }
         set { workIntentRaw = newValue?.rawValue }
     }
 

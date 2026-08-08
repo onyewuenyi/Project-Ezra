@@ -4,9 +4,13 @@
 //
 //  The Thinking Partner (Decision Framing, P0). When a task is a genuine choice, the
 //  detail's decision section can, on demand, ask the on-device model to FRAME it — the
-//  options in play with their tradeoffs, and the cost of not deciding. It never decides
-//  and never persists anything: framing is generated fresh, shown, and discarded. The
-//  instructions forbid invention (the householdNarrative pattern); no tools.
+//  options in play with their tradeoffs, the cost of not deciding, and (since
+//  2026-08-08, a recorded reversal of "the AI frames, never recommends") which option
+//  best fits the given facts. The RECOMMENDATION is contained three ways: it must name
+//  one of the framing's own options verbatim (`groundedRecommendation` drops anything
+//  else), it must ground its why in the given facts, and it never persists or resolves
+//  — `resolveDecision()` stays the only clearer, so the human still decides.
+//  The instructions forbid invention (the householdNarrative pattern); no tools.
 //
 //  ⚠️ Device-verify: the `@Generable` framing and its latency. The simulator can't
 //  exercise it, so `frame` returns nil there and the UI shows the lighter card.
@@ -30,6 +34,31 @@ struct DecisionFraming: Sendable {
             "One plain sentence on the cost of NOT deciding — what waiting risks. Empty string if there is no real cost."
     )
     let costOfWaiting: String
+
+    @Guide(
+        description:
+            "The label of the ONE option above that best fits the given facts, copied exactly. Empty string when the facts don't clearly favor one."
+    )
+    let recommendation: String
+
+    @Guide(
+        description:
+            "One plain sentence on why that option fits, grounded only in the given facts. Empty when recommendation is empty."
+    )
+    let recommendationWhy: String
+
+    /// The recommendation, but only when it actually names one of this framing's own
+    /// options (case-insensitive). Anti-hallucination at the read: a recommendation
+    /// pointing at an option that doesn't exist is dropped whole, never rendered.
+    var groundedRecommendation: (label: String, why: String)? {
+        let trimmed = recommendation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+            let match = options.first(where: {
+                $0.label.caseInsensitiveCompare(trimmed) == .orderedSame
+            })
+        else { return nil }
+        return (match.label, recommendationWhy.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 }
 
 @Generable
@@ -76,7 +105,7 @@ struct DecisionContext: Sendable {
 
 struct DecisionFramingService {
     /// Frame a decision on demand, bounded by `ModelDeadline.cardSeconds`. Never
-    /// persisted, and it never recommends — see the instructions below.
+    /// persisted; it may recommend, and the human still resolves — see the header.
     ///
     /// Returns a `ModelResult` so the card can distinguish absence from failure: off
     /// device the Thinking Partner is not drawn at all, whereas a timed-out attempt owes
@@ -93,12 +122,17 @@ struct DecisionFramingService {
     private static let instructions = """
         You are a calm thinking partner helping someone see a decision clearly. You are
         given a task that is a genuine choice, plus its context. Lay out the OPTIONS in
-        play, each with its main tradeoff, and name the cost of not deciding.
+        play, each with its main tradeoff, name the cost of not deciding, and — when the
+        facts clearly favor one option — say which fits best and why.
 
         Hard rules:
         - Structure ONLY what the task and context imply. Never invent an option, a fact,
           a deadline, or a consequence that isn't there.
-        - You do NOT make the decision or recommend one — you frame it. No "you should".
+        - A recommendation must copy the label of one of YOUR OWN options exactly, and
+          its why must cite only the given facts. When the facts don't clearly favor
+          one option, leave recommendation empty — an honest "it's genuinely close" is
+          more useful than a coin flip dressed as advice.
+        - You never DECIDE — the person does. No pressure language.
         - Plain and steady. No pep talk, no exclamation marks, no emoji.
         - If there is genuinely no cost to waiting, return an empty costOfWaiting.
         """

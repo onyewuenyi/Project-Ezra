@@ -20,7 +20,7 @@
 //    escalation), and cold-start for Light (< 5 samples → the static default).
 //  - Attention substrate: an Urgent-signal task (leading `SignalMarker` on My Tasks +
 //    its boost in the stack), plus a per-task `WorkIntent` spread.
-//  - Decision Framing: a `.decision` work-intent task that is NOT a needsDecision judgment
+//  - Decision Framing: a choice-worded task that is NOT a needsDecision judgment
 //    call, so the detail shows the lighter Thinking Partner card ("A decision to make").
 //  - Capture Graph Awareness (persisted results of the confirm-card decisions): a parent
 //    task with `.parent` child sub-steps, a rejected duplicate ("Keeping both" —
@@ -168,13 +168,13 @@ enum TodayFixtures {
             effortMinutes: 15, createdAt: now.addingTimeInterval(-day), in: context)
 
         // MARK: Decision Framing — an intent-only decision (the lighter Thinking Partner card)
-        // A genuine choice that is NOT a needsDecision judgment call: `workIntent == .decision`
+        // A genuine choice that is NOT a needsDecision judgment call: choice-shaped wording
         // alone unlocks the Thinking Partner (the "A decision to make" card, no "Mark decided").
         let apartmentDecision = TaskItem(
             title: "Choose between the two apartment offers", category: "Personal", status: .todo,
             confidence: 0.9, reasoning: "Weighing the commute against the rent.", ownerID: me,
             effortMinutes: 30, createdAt: now.addingTimeInterval(-2 * day), in: context)
-        apartmentDecision.workIntent = .decision
+        apartmentDecision.workIntent = .planning
 
         // MARK: Capture Graph — a parent task with child sub-steps (`.parent` edges)
         // "Plan the Italy trip" is the umbrella; the three Travel tasks above become its
@@ -244,7 +244,7 @@ enum TodayFixtures {
             if task.workIntent == nil {
                 let title = task.title.lowercased()
                 if title.contains("decide") || title.contains("choose") || title.contains("whether") {
-                    task.workIntent = .decision
+                    task.workIntent = .planning
                 } else if ["plan", "draft", "schedule", "prep", "sort out"].contains(where: {
                     title.contains($0)
                 }) {

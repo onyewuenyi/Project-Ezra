@@ -22,7 +22,7 @@ import FoundationModels
 struct WorkIntentClassification: Sendable {
     @Guide(
         description:
-            "Exactly one of: action, decision, or planning. Use decision ONLY when the task is choosing between options."
+            "Exactly one of: action or planning. Use planning when the work is figuring out an approach, weighing options, or breaking something down."
     )
     let workIntent: String
 }
@@ -64,7 +64,9 @@ struct WorkIntentClassifier {
         }
         guard case .success(let result) = outcome else { return outcome.map { _ in .action } }
         let raw = result.workIntent.trimmingCharacters(in: .whitespaces).lowercased()
-        guard let intent = WorkIntent(rawValue: raw) else {
+        // `decode`, not `init(rawValue:)`: a model still answering the retired
+        // "decision" maps to `.planning` rather than reading as a failure.
+        guard let intent = WorkIntent.decode(raw) else {
             return .failed(ModelResult<WorkIntent>.noUsableOutput)
         }
         return .success(intent)
@@ -72,9 +74,10 @@ struct WorkIntentClassifier {
 
     private static let instructions = """
         You classify a single task by the KIND of work it represents: action (a concrete
-        thing to do), decision (a choice between options), or planning (figuring out an
-        approach or breaking something down). Answer with exactly one word.
-        Use "decision" ONLY when the task is genuinely choosing between options.
+        thing to do) or planning (figuring out an approach, weighing options, or breaking
+        something down). Answer with exactly one word.
+        There is NO "decision" kind: a choice to make classifies as planning — the app
+        notices choice-shaped work separately.
         There is NO "waiting" kind: being blocked is a separate axis the app derives
         from the task graph, so classify blocked work by what it actually is.
         There is NO "reference" kind either: a note worth keeping is still a task here,

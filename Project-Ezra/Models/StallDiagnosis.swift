@@ -97,14 +97,12 @@ enum StallDetector {
         return now.timeIntervalSince(task.humanTouchedAt) > quietThreshold
     }
 
-    /// Does the wording read as a choice? Reuses `IntentResolver`'s decision lexicon
-    /// rather than a second vocabulary — one place to widen when the wording changes.
-    ///
-    /// Note this reads the TITLE, never `isJudgmentCall` or `needsDecision`. Axis 2 and
-    /// axis 3 stay independent; a suggestion the user accepts goes through the human
-    /// `setWorkIntent` path, which is a person deciding, not the classifier reading a flag.
+    /// Does the wording read as a choice? Reads `DecisionShape` — the one decision
+    /// lexicon — and the TITLE only, never `isJudgmentCall` or `needsDecision`.
+    /// (Decision is no longer a work-intent; this rung's job is unchanged: a stalled
+    /// task worded as a choice hasn't moved because nobody made the call, and the
+    /// useful act is escalating it to a visible decision, a human act.)
     static func readsAsDecision(_ task: TaskItem) -> Bool {
-        task.workIntent != .decision
-            && IntentResolver.inferredWorkIntent(title: task.title) == .decision
+        DecisionShape.reads(title: task.title)
     }
 }

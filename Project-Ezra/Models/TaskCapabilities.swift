@@ -37,10 +37,12 @@ enum Capability: Hashable {
 enum TaskCapabilities {
     /// Everything this task should be offered, in render order.
     ///
-    /// - **Thinking Partner** when it is a genuine choice: the model classified
-    ///   `workIntent` as `.decision`, OR it carries the open `needsDecision` flag. These
-    ///   are independent — an intent never reads or writes the flag; this OR is
-    ///   composition, not conversion.
+    /// - **Thinking Partner** when it is a genuine choice: it carries the open
+    ///   `needsDecision` flag, OR its wording reads as a choice (`DecisionShape`).
+    ///   These are independent — the wording never reads or writes the flag; this OR
+    ///   is composition, not conversion. (Decision was a work-intent case until
+    ///   2026-08-08; choosing is a capability the system brings, not a kind of work
+    ///   the user classifies.)
     /// - **Break this down** when it is genuinely complex — see `BreakdownEligibility`.
     ///
     /// A task can qualify for both (a big decision is still a big task), and that is
@@ -62,7 +64,12 @@ enum TaskCapabilities {
         guard !task.status.isResolved else { return [] }
 
         var capabilities: [Capability] = []
-        if task.workIntent == .decision || task.needsDecision { capabilities.append(.thinkingPartner) }
+        // Choice-ness is the flag OR the wording — never the type (Decision retired
+        // from axis 2). The two stay independent: the flag is an obligation only
+        // `resolveDecision()` discharges; the wording is a lexical observation.
+        if task.needsDecision || DecisionShape.reads(title: task.title) {
+            capabilities.append(.thinkingPartner)
+        }
         let diagnosis = StallDetector.diagnose(task, among: tasks, now: now)
 
         // A big task that is ALSO stalled gets one card, not two. Unstick subsumes the

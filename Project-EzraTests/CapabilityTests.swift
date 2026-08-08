@@ -184,7 +184,7 @@ struct CapabilityTests {
     @Test("A big decision gets both — they answer different questions")
     func decisionAndBreakdownCompose() {
         let context = context()
-        let task = task("Should we move to Lisbon", effort: 120, intent: .decision, in: context)
+        let task = task("Should we move to Lisbon", effort: 120, intent: .planning, in: context)
         let capabilities = TaskCapabilities.available(for: task, among: [task])
         #expect(capabilities.contains(.thinkingPartner))
         #expect(capabilities.contains(.breakDown(.largeEffort)))
@@ -205,12 +205,12 @@ struct CapabilityTests {
         // decision), and `needsDecision` can too. Neither may reopen the Thinking
         // Partner on a settled task — it would offer to frame a choice already made,
         // and spend a model call doing it.
-        let done = task("Should we move to Lisbon", intent: .decision, in: context)
+        let done = task("Should we move to Lisbon", intent: .planning, in: context)
         done.needsDecision = true
         done.complete()
         #expect(TaskCapabilities.available(for: done, among: [done]).isEmpty)
 
-        let dropped = task("Should we get a dog", intent: .decision, in: context)
+        let dropped = task("Should we get a dog", intent: .planning, in: context)
         dropped.kill()
         #expect(TaskCapabilities.available(for: dropped, among: [dropped]).isEmpty)
     }

@@ -127,6 +127,7 @@ struct TaskStatusTests {
         // excluded from the workload systems, and removing it collapsed all five gates.
         #expect(WorkIntent(rawValue: "waiting") == nil)
         #expect(WorkIntent(rawValue: "reference") == nil)
-        #expect(Set(WorkIntent.allCases) == [.action, .decision, .planning])
+        #expect(WorkIntent(rawValue: "decision") == nil)  // retired type; decode() remaps
+        #expect(Set(WorkIntent.allCases) == [.action, .planning])
     }
 }

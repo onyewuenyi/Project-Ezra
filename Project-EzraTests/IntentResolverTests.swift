@@ -152,9 +152,11 @@ struct IntentResolverTests {
                     title: title, category: "Home", confidence: 0.9, isJudgmentCall: false,
                     reasoning: "", workIntent: engine))
         }
-        #expect(draft("Should I switch dentists").workIntent == .decision)
-        #expect(draft("Decide on the school").workIntent == .decision)
-        #expect(draft("Figure out if we can afford it").workIntent == .decision)
+        // Choice-shaped wording lands .planning — Decision retired from axis 2;
+        // DecisionShape (not the type) is what summons the Thinking Partner.
+        #expect(draft("Should I switch dentists").workIntent == .planning)
+        #expect(draft("Decide on the school").workIntent == .planning)
+        #expect(draft("Figure out if we can afford it").workIntent == .planning)
         #expect(draft("Plan the Lisbon trip").workIntent == .planning)
         #expect(draft("Figure out how to get there").workIntent == .planning)
         #expect(draft("Break down the move").workIntent == .planning)
@@ -168,8 +170,8 @@ struct IntentResolverTests {
     }
 
     /// Axes 2 and 3 answer different questions. If the backfill ever keys off the
-    /// judgment flag, an action-shaped judgment call starts reading as `.decision`
-    /// and the two axes are fused again.
+    /// judgment flag, an action-shaped judgment call starts reading as choice-shaped
+    /// work and the two axes are fused again.
     @Test("A judgment call with an action-shaped title still classifies as action")
     func workIntentIgnoresJudgmentFlag() {
         let draft = IntentResolver.resolve(

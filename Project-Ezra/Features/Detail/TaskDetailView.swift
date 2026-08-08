@@ -502,7 +502,14 @@ struct TaskDetailView: View {
                 diagnosis: diagnosis,
                 deferralCount: Int(task.deferralCount),
                 onBreakDown: { showBreakdown = true },
-                onMakeDecision: { setWorkIntent(.decision) },
+                // A human accepting the card's suggestion, so it escalates the axis-3
+                // flag (Decision is no longer a work-intent) — forced-top ranking, the
+                // decision section, and the Thinking Partner all follow from the flag.
+                // `touchHuman` keeps the Unstick rule: every action clears the stall.
+                onMakeDecision: {
+                    task.escalateToDecision()
+                    task.touchHuman()
+                },
                 onDoItNow: { applyStatus(.doing) },
                 onDefer: { setDue(dayOffset: 7) },
                 onKill: { applyStatus(.canceled) }

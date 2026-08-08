@@ -409,36 +409,26 @@ extension TaskItem {
 /// The single best next move for a task, derived from its lifecycle stage, its
 /// obstacles, and who owns it. Fuses what used to be two parallel switches (button
 /// title + behavior) into one value, so the label and the action can never drift
-/// apart — which is why `.start` carries its verb's input rather than letting a
-/// separate function compute the title.
+/// apart.
 enum RecommendedAction: Equatable {
     case claim  // take ownership of one handed back to the household
     case unblock  // drop the blockers holding it
-    case start(WorkIntent?)  // pick it up — .todo → .doing, voiced by the work's type
+    case start  // pick it up — .todo → .doing
     case resume  // pick it up AGAIN — .todo → .doing on a task with a closed `.doing` visit
     case resolve  // mark an in-flight task done
     case reopen  // bring a resolved task back
 
-    /// `.start` is the one CTA whose word comes from axis 2. The type never appears
-    /// as its own control — it manifests as the verb on the button already there.
-    /// A nil intent (heuristic path, or Apple Intelligence off/unavailable) reads
-    /// "Start", so the voicing degrades invisibly rather than going blank.
-    ///
     /// **The verb may only promise what this button actually does, which is move the
-    /// lifecycle.** `.planning` used to read "Break it down" and it was a lie: every
-    /// arm of `performRecommendedAction` runs `setStatus(.doing)`, so the most
-    /// prominent control on the screen promised a breakdown and started the task
-    /// instead. Breaking work into steps belongs to the `.breakDown` capability card,
-    /// which already renders itself whenever `BreakdownEligibility` says so — a CTA
-    /// duplicating it would either lie (as this did) or double-render the same offer.
-    ///
-    /// `.decision` keeps its verb because it stays true: the Thinking Partner frames
-    /// and never decides, so picking the task up IS how you start deciding.
+    /// lifecycle.** The intent-voiced verbs are gone, one at a time and for the same
+    /// reason: `.planning`'s "Break it down" was a lie (every arm runs
+    /// `setStatus(.doing)`; the breakdown belongs to its capability card), and
+    /// `.decision`'s "Decide" retired with the Decision type itself (2026-08-08 —
+    /// choosing is a capability the system brings, not a kind of work the button
+    /// voices). What remains is the truth: Start.
     var title: String {
         switch self {
         case .claim: return "That's mine"
         case .unblock: return "Unblock"
-        case .start(.decision): return "Decide"
         case .start: return "Start"
         case .resume: return "Resume"
         case .resolve: return "Mark done"
@@ -477,10 +467,9 @@ extension TaskItem {
         if let currentUserID, !isMine(currentUserID: currentUserID) { return nil }
         if hasActiveBlockers(among: tasks) { return .unblock }
         switch status {
-        // A task with a closed `.doing` visit has been here before. "Resume" outranks the
-        // intent verb because it is the more useful thing to know: you are picking
-        // something back up, not choosing what kind of work it is.
-        case .todo: return hasBeenStarted ? .resume : .start(workIntent)
+        // A task with a closed `.doing` visit has been here before — "Resume" says the
+        // more useful thing: you are picking something back up.
+        case .todo: return hasBeenStarted ? .resume : .start
         case .doing: return .resolve
         case .done, .canceled: return .reopen  // unreachable — `isResolved` caught these
         }

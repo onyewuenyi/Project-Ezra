@@ -280,9 +280,9 @@ struct FoundationModelsEngine: AIEngine {
           this task is the SAME as one of them (set duplicateOfID + duplicateConfidence) \
           or a STEP OF one of them (set childOfID + childConfidence). Copy the id EXACTLY \
           from CANDIDATES; use null when unsure. Never set both for one task.
-        - workIntent: what KIND of work this is — action, decision, or planning. \
-          Use "decision" ONLY when the task is genuinely choosing between options. There \
-          is no "reference" kind: a note worth keeping is still a task here.
+        - workIntent: what KIND of work this is — action or planning. A choice to \
+          make counts as planning (the app notices choice-shaped work separately). \
+          There is no "reference" kind: a note worth keeping is still a task here.
 
         If a line is a header, a note to self with no action, or empty, skip it.
         """
@@ -391,7 +391,7 @@ struct ExtractedTask {
 
     @Guide(
         description:
-            "What KIND of work this is — exactly one of: action, decision, or planning. Use decision ONLY when the task is choosing between options."
+            "What KIND of work this is — exactly one of: action or planning. A choice to make counts as planning."
     )
     let workIntent: String?
 

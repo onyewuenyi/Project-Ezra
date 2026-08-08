@@ -340,12 +340,12 @@ enum SampleFlowFixtures {
             createdAt: now, in: context)
         context.insert(pediatricianFollowUp)
         // A decision intent-only task → the lighter Thinking Partner card in the detail
-        // (`workIntent == .decision`, but NOT a needsDecision judgment call).
+        // (choice-shaped wording, but NOT a needsDecision judgment call).
         let vendorDecision = TaskItem(
             title: "Choose the wedding caterer", category: "Family", status: .todo, confidence: 0.9,
             reasoning: "Weighing menu against budget.", ownerID: you.uuid, effortMinutes: 30,
             createdAt: now, in: context)
-        vendorDecision.workIntent = .decision
+        vendorDecision.workIntent = .planning
         context.insert(vendorDecision)
         // A `.parent` edge: the mailing-address change is a STEP of the move (an edge is not
         // a status, so it keeps its dependency blocker too).
@@ -384,7 +384,7 @@ enum SampleFlowFixtures {
             if task.workIntent == nil {
                 let title = task.title.lowercased()
                 if ["decide", "choose", "figure out", "worth it"].contains(where: { title.contains($0) }) {
-                    task.workIntent = .decision
+                    task.workIntent = .planning
                 } else if ["plan", "schedule", "follow up", "reorganize", "prepare"].contains(where: {
                     title.contains($0)
                 }) {

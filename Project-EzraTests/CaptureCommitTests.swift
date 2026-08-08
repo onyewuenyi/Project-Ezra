@@ -459,7 +459,7 @@ struct CaptureCommitTests {
         var judgment = TaskDraft(
             title: "Should I quit the gym", category: "Health", confidence: 0.9,
             autonomy: .ask, isJudgmentCall: true, reasoning: "")
-        judgment.workIntent = .decision
+        judgment.workIntent = .planning
 
         let created = brain.commit([unsure, judgment], rawCapture: "", into: context)
         #expect(created.count == 2)

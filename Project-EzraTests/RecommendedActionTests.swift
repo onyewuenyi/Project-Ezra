@@ -44,7 +44,7 @@ struct RecommendedActionTests {
         let context = TestStore.makeContext()
         let task = mine(context)
         let action = task.recommendedAction(among: [task], currentUserID: me(context))
-        #expect(action == .start(.action))
+        #expect(action == .start)
         #expect(action?.title == "Start")
     }
 
@@ -102,10 +102,10 @@ struct RecommendedActionTests {
         #expect(task.status == .doing)
     }
 
-    @Test("Resume outranks the intent verb — picking it back up is the more useful fact")
+    @Test("Resume outranks Start — picking it back up is the more useful fact")
     func resumeBeatsIntentVoicing() {
         let context = TestStore.makeContext()
-        let task = mine(context, intent: .decision)
+        let task = mine(context, intent: .planning)
         let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         task.transition(to: .doing, now: t0)
         task.transition(to: .todo, now: t0.addingTimeInterval(3600))
@@ -125,21 +125,15 @@ struct RecommendedActionTests {
         #expect(inFlight.recommendedAction(among: [inFlight], currentUserID: me(context)) == .resolve)
     }
 
-    // MARK: - Intent voicing (axis 2 shows up as the verb, never as its own control)
+    // MARK: - The verb never voices the type (the intent-voiced verbs are all retired)
 
     @Test(
-        "The todo verb is voiced by work intent, and a nil intent degrades to Start",
-        arguments: [
-            (WorkIntent.action, "Start"),
-            (.decision, "Decide"),
-            // `.planning` reads "Start" now — see `planningReadsStart` for why the
-            // "Break it down" verb was removed rather than re-pointed.
-            (.planning, "Start"),
-        ])
-    func intentVoicesTheVerb(intent: WorkIntent, expected: String) {
+        "Every intent reads Start — 'Break it down' lied, and 'Decide' retired with the type",
+        arguments: [WorkIntent.action, .planning])
+    func everyIntentReadsStart(intent: WorkIntent) {
         let context = TestStore.makeContext()
         let task = mine(context, intent: intent)
-        #expect(task.recommendedAction(among: [task], currentUserID: me(context))?.title == expected)
+        #expect(task.recommendedAction(among: [task], currentUserID: me(context))?.title == "Start")
     }
 
     @Test("Nil intent (heuristic path / Apple Intelligence off) still reads Start")
@@ -147,7 +141,7 @@ struct RecommendedActionTests {
         let context = TestStore.makeContext()
         let task = mine(context, intent: nil)
         let action = task.recommendedAction(among: [task], currentUserID: me(context))
-        #expect(action == .start(nil))
+        #expect(action == .start)
         #expect(action?.title == "Start")
     }
 
@@ -169,7 +163,7 @@ struct RecommendedActionTests {
         task.ownerID = UUID()
         task.workIntent = .action
         // Hide the slot only when the owner is KNOWN to be someone else.
-        #expect(task.recommendedAction(among: [task], currentUserID: nil) == .start(.action))
+        #expect(task.recommendedAction(among: [task], currentUserID: nil) == .start)
     }
 
     // MARK: - Ordering
@@ -206,7 +200,7 @@ struct RecommendedActionTests {
     func onlyResolveDismisses() {
         #expect(RecommendedAction.resolve.dismissesDetail)
         for action: RecommendedAction in [
-            .claim, .unblock, .reopen, .start(nil), .start(.decision), .start(.planning),
+            .claim, .unblock, .reopen, .start, .resume,
         ] {
             #expect(action.dismissesDetail == false)
         }
