@@ -39,6 +39,10 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// The Unstick card's phrasing of its deterministic diagnosis — the inertia
     /// capability's voice. The diagnosis never comes from the model; only the sentence.
     case unstickNarration
+    /// The one concrete first move offered under the CTA the moment the user taps
+    /// Start — the execution system's activation-energy remover. Silence on any
+    /// non-success; the button behaves identically without it.
+    case kickoff
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -50,6 +54,7 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .householdNarrative: return "narrative"
         case .duplicateSweep: return "dupSweep"
         case .unstickNarration: return "unstick"
+        case .kickoff: return "kickoff"
         }
     }
 }

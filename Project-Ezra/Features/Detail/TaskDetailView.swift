@@ -62,6 +62,9 @@ struct TaskDetailView: View {
     /// One "offered" record per page VISIT — reset when the pager swipes away, so
     /// coming back counts as a fresh offer while idle re-renders count as nothing.
     @State private var offersRecorded = false
+    /// The kickoff line under the relabeled CTA, once it lands. Never persisted.
+    @State private var kickoffStep: String?
+    @State private var kickoffWork: Task<Void, Never>?
     @State private var actionPulse = 0
     @State private var showAllActivity = false
     /// Set when Unstick routes the user into the breakdown card, so the section can
@@ -154,6 +157,7 @@ struct TaskDetailView: View {
                 // Same reasoning for model work: the user has left this task, so a
                 // classification still running is spend with nobody waiting on it.
                 classifyWork?.cancel()
+                kickoffWork?.cancel()
                 // Leaving ends the visit; swiping back is a fresh offer.
                 offersRecorded = false
             } else {
@@ -800,22 +804,39 @@ struct TaskDetailView: View {
     /// control on screen offering something that isn't the user's to do. Its proxy
     /// actions live in `TaskMoreMenu`.
     private func footer(_ action: RecommendedAction) -> some View {
-        Button {
-            performPrimary(action)
-        } label: {
-            Text(action.title)
-                .font(.ctaLabel)
-                .foregroundStyle(Palette.onAccent)
-                // Start doesn't dismiss — it relabels to "Mark done" under the tap,
-                // so the lifecycle is taught by the button rather than documented.
-                // The transition is what makes that read as a state change rather
-                // than a redraw.
-                .contentTransition(.numericText())
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(Palette.accentGradient, in: Capsule())
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Button {
+                performPrimary(action)
+            } label: {
+                Text(action.title)
+                    .font(.ctaLabel)
+                    .foregroundStyle(Palette.onAccent)
+                    // Start doesn't dismiss — it relabels to "Mark done" under the tap,
+                    // so the lifecycle is taught by the button rather than documented.
+                    // The transition is what makes that read as a state change rather
+                    // than a redraw.
+                    .contentTransition(.numericText())
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(Palette.accentGradient, in: Capsule())
+            }
+            .buttonStyle(.pressableProminent)
+
+            // The kickoff line: the one concrete first move, under the button that just
+            // relabeled — the moment of commitment is when activation energy is highest.
+            // Shown only while the commitment is live; silence is the fallback.
+            if task.status == .doing, let step = kickoffStep {
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.glyphCaption())
+                        .foregroundStyle(Palette.accentFlat)
+                    Text(step)
+                        .supportingStyle()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .transition(.opacity)
+            }
         }
-        .buttonStyle(.pressableProminent)
     }
 
     private func performPrimary(_ action: RecommendedAction) {
@@ -825,11 +846,29 @@ struct TaskDetailView: View {
             unblocked = task.performRecommendedAction(action, among: allTasks, in: context)
         }
         context.saveChanges()
+        // The Start tap is the strongest "doing this now" signal in the app — the
+        // moment the kickoff line earns its fetch. Deterministic trigger, model
+        // content, silent fallback.
+        if action == .start || action == .resume { fetchKickoff() }
         // Only the resolving arm leaves the working set, and it is the only one that can
         // free dependents — so it is the only one that owes the user a way back.
         if action.dismissesDetail {
             offerUndo(verb: "Completed", unblocked: unblocked)
             onResolved()
+        }
+    }
+
+    /// Ask for the one concrete first move. Any non-success renders nothing — the
+    /// button already did its job, and an absent line is not an error to manage.
+    private func fetchKickoff() {
+        kickoffWork?.cancel()
+        let facts = KickoffFacts(task: task)
+        kickoffWork = Task {
+            if case .success(let step) = await KickoffService().firstStep(facts),
+                !step.isEmpty
+            {
+                Motion.withMotion(Motion.settle) { kickoffStep = step }
+            }
         }
     }
 
