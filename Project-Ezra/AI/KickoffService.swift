@@ -70,7 +70,8 @@ struct KickoffService {
     /// non-success renders nothing: silence is the fallback, not an error state.
     func firstStep(_ facts: KickoffFacts) async -> ModelResult<String> {
         let outcome = await ModelRun.perform(.kickoff, deadline: ModelDeadline.cardSeconds) {
-            let session = LanguageModelSession(instructions: Self.instructions)
+            let session = CapabilityProfiles.session(
+                instructions: Self.instructions, config: CapabilityProfiles.kickoff)
             return try await session.respond(
                 to: Self.prompt(facts), generating: KickoffStep.self
             ).content

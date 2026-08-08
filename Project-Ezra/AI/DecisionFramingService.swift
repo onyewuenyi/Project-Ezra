@@ -112,7 +112,8 @@ struct DecisionFramingService {
     /// the user a retry.
     func frame(_ context: DecisionContext) async -> ModelResult<DecisionFraming> {
         await ModelRun.perform(.decisionFraming, deadline: ModelDeadline.cardSeconds) {
-            let session = LanguageModelSession(instructions: Self.instructions)
+            let session = CapabilityProfiles.session(
+                instructions: Self.instructions, config: CapabilityProfiles.decisionFraming)
             return try await session.respond(
                 to: Self.prompt(for: context), generating: DecisionFraming.self
             ).content

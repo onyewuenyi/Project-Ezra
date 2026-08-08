@@ -57,7 +57,8 @@ struct WorkIntentClassifier {
     /// otherwise a systematically wrong prompt would look exactly like a quiet model.
     func classify(_ context: WorkIntentContext) async -> ModelResult<WorkIntent> {
         let outcome = await ModelRun.perform(.workIntent, deadline: ModelDeadline.backgroundSeconds) {
-            let session = LanguageModelSession(instructions: Self.instructions)
+            let session = CapabilityProfiles.session(
+                instructions: Self.instructions, config: CapabilityProfiles.workIntent)
             return try await session.respond(
                 to: Self.prompt(context), generating: WorkIntentClassification.self
             ).content

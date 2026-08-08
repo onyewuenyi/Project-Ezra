@@ -70,7 +70,8 @@ struct UnstickNarrationService {
         let outcome = await ModelRun.perform(
             .unstickNarration, deadline: ModelDeadline.cardSeconds
         ) {
-            let session = LanguageModelSession(instructions: Self.instructions)
+            let session = CapabilityProfiles.session(
+                instructions: Self.instructions, config: CapabilityProfiles.unstickNarration)
             return try await session.respond(
                 to: Self.prompt(facts), generating: UnstickNarration.self
             ).content

@@ -78,7 +78,8 @@ struct TaskBreakdownService {
     /// one-step "breakdown" is the task restated and there is nothing to accept.
     func steps(_ context: BreakdownContext) async -> ModelResult<[BreakdownStep]> {
         let outcome = await ModelRun.perform(.breakdown, deadline: ModelDeadline.cardSeconds) {
-            let session = LanguageModelSession(instructions: Self.instructions)
+            let session = CapabilityProfiles.session(
+                instructions: Self.instructions, config: CapabilityProfiles.breakdown)
             return try await session.respond(
                 to: Self.prompt(for: context), generating: TaskBreakdown.self
             ).content

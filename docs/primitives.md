@@ -73,6 +73,7 @@ The iOS 27 on-device model is itself treated as a primitive with named capabilit
 | **DuplicateSweep** | `AI/DuplicateSweep.swift` | Existing-pair dedupe: deterministic prefilter (embedding + lexical floors, suppression-aware, capped) → model judge via `ModelRun` → ≥0.85 kill-don't-delete merge, Inbox-logged, undo reopens + suppresses. The auto-accept invariant's destructive tier extended to existing pairs; absent off-device |
 | **PCC tier** | `AI/TodayPlanService.swift` | The stronger private tier for the hardest generations; absence reads as unavailability |
 | **Prewarm** | `AI/ModelWarmup.swift` + `CaptureSessionPool` | Cold-start amortized behind covers (Recap plays while the advisor reasons; capture warms its true instruction prefix at sheet-present) |
+| **CapabilityProfiles** | `AI/CapabilityProfiles.swift` | Per-capability session configs (temperature · reasoning level · output caps) on the `DynamicProfile` pattern — priors pinned by tests |
 
 ---
 
@@ -100,7 +101,7 @@ Each system is a loop the user feels; each is listed with the primitives it comp
 ### S4 · Capabilities — help where the task is stuck
 *Complexity → Break it down · Uncertainty → Thinking Partner · Inertia → Unstick.*
 **Composes:** TaskCapabilities · BreakdownEligibility · StallDiagnosis · DecisionShape (the choice-wording lexicon — Decision retired from axis 2, 2026-08-08) · ModelRun services (framing incl. the grounded recommendation, breakdown) · Relationship (`.parent` on accept) · ChangeLog ("split").
-**Fallback:** triggers identical everywhere; model-authored cards absent off-device, Unstick renders identically.
+**Fallback:** triggers identical everywhere; model-authored cards absent off-device, Unstick renders identically — minus voice (the template headline stays).
 
 ### S5 · Learning — the correction loop
 *Every confirm-card edit teaches; attention required goes down over time, never up.*
