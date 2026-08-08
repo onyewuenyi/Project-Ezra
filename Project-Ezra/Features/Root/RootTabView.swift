@@ -151,8 +151,32 @@ struct RootTabView: View {
                 await seedIfRequested()
             }
             await runCaptureDiagnosticsIfRequested()
+            await runRambleEvalIfRequested()
             await openCaptureIfRequested()
         }
+    }
+
+    /// Verification seam: `-RambleEval` runs the 47-case labeled eval set through the
+    /// ACTIVE engine and prints the per-field table + named misses to stdout — the
+    /// instrument that answers "how much better is on-device than the heuristic, per
+    /// field?" with data. On a heuristic host it reproduces the test suite's numbers
+    /// (the engine label makes that honest). Non-destructive: nothing commits, same
+    /// rule as `-CaptureDiagnostics`. DEBUG-only, like the fixture set it reads.
+    private func runRambleEvalIfRequested() async {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("-RambleEval") else { return }
+        print("=== RAMBLE EVAL ===")
+        print("engine: \(brain.status.description)")
+        do {
+            let report = try await RambleEval.score { utterance in
+                await brain.triage(utterance).drafts
+            }
+            print(report.table)
+        } catch {
+            print("eval failed: \(AppBrain.errorLabel(error))")
+        }
+        print("=== END RAMBLE EVAL ===")
+        #endif
     }
 
     /// Deterministic verification seam. Launch with `-OpenCapture ["text"]` to present
