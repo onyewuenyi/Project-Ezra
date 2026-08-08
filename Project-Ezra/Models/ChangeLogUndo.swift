@@ -75,6 +75,28 @@ enum ChangeLogUndo {
         case "completed", "killed":
             // Human resolution → reopen to the prior live status.
             task.reopenAndReblock(in: context, now: now)
+        case "mergedPair":
+            // A sweep merged two EXISTING tasks (kill-don't-delete): `task` is the
+            // winner; the loser's row never died, so reopening restores its
+            // identity, timeline, and edges outright. Undo-completeness: the exact
+            // absorbed note line comes off the winner (left alone if the user has
+            // since rewritten it — their words outrank the unwind), and the pair is
+            // SUPPRESSED — an unwound merge is a human "no", and the sweep must
+            // never re-propose it.
+            guard let payload = MergedPairPayload.decode(entry.oldValue),
+                let loserID = payload.loserID,
+                let loser = fetchAll(in: context).first(where: { $0.uuid == loserID })
+            else { return }
+            loser.reopenAndReblock(in: context, now: now)
+            if let notes = task.notes {
+                let kept = notes.split(separator: "\n", omittingEmptySubsequences: false)
+                    .filter { $0 != payload.noteLine }
+                    .joined(separator: "\n")
+                task.notes = kept.isEmpty ? nil : kept
+            }
+            if let winnerID = task.uuid {
+                SuppressionStore.recordRejectedPair(winnerID, loserID, in: context, now: now)
+            }
         case "assigned":
             // Restore the previous owner AND the previous origin — see the
             // undo-completeness note in the file header. An empty owner means it was

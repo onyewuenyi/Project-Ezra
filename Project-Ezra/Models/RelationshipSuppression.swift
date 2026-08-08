@@ -185,6 +185,24 @@ enum SuppressionStore {
         }
     }
 
+    /// Record a rejected duplicate-merge between two EXISTING tasks — the pair form
+    /// only, symmetric by construction. Written when a human UNDOES a sweep merge
+    /// (`ChangeLogUndo`'s "mergedPair" arm): the unwind is the "no", and the sweep
+    /// must never re-propose a pairing a human already took apart. The capture-form
+    /// writer above can't serve here — it requires a draft title, and neither task
+    /// is a draft.
+    static func recordRejectedPair(
+        _ a: UUID, _ b: UUID, in context: NSManagedObjectContext, now: Date = Date()
+    ) {
+        context.insert(
+            SuppressionRecord(
+                RelationshipSuppression(
+                    kind: .duplicateMerge,
+                    pairKey: RelationshipSuppression.symmetricKey(a, b),
+                    targetID: nil, normalizedTitle: nil, createdAt: now),
+                in: context))
+    }
+
     /// Record the user rejecting a parent link ("keep separate"): directional —
     /// "this draft is not a child of `parentID`" implies nothing about the reverse.
     static func recordRejectedParent(

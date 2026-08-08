@@ -10,7 +10,11 @@
 //  Deliberately narrow. Overdue/Stale/Blocking are derived on read (no bit-flip
 //  jobs needed), and anything with judgment attached is untouchable: the
 //  judgment-category rule means the AI never resolves a values call, and killing
-//  IS resolving. Silent-tier rules only.
+//  IS resolving. Silent-tier rules only — with ONE named exception that lives
+//  OUTSIDE this pass: `DuplicateSweep` (its own file) merges existing near-
+//  duplicate pairs at the capture-time destructive tier (model ≥0.85), reversibly
+//  and Inbox-logged, per the 2026-08-07 product decision — it shares only this
+//  file's hourly debounce, never its silent tier.
 //
 
 import Foundation
@@ -109,5 +113,9 @@ extension AppBrain {
         }
         defaults.set(now, forKey: key)
         BrainSweeps.run(in: context, now: now)
+        // The destructive-tier exception rides the same debounce but never the
+        // foreground: model judgments run behind a background deadline, hard-capped
+        // per run, and the whole pass is absent off-device.
+        Task { await DuplicateSweep.run(in: context, now: now) }
     }
 }

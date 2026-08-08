@@ -33,6 +33,9 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// join the seam — it previously constructed its session directly, which meant
     /// no deadline (a cold model hung the narrative task indefinitely) and no metrics.
     case householdNarrative
+    /// The existing-pair duplicate judge (`DuplicateSweep`) — background-tier,
+    /// hard-capped per run; the metrics row is how a wrong floor gets caught.
+    case duplicateSweep
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -42,6 +45,7 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .workIntent: return "workIntent"
         case .captureTriage: return "capture"
         case .householdNarrative: return "narrative"
+        case .duplicateSweep: return "dupSweep"
         }
     }
 }
