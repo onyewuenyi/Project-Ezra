@@ -36,6 +36,9 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// The existing-pair duplicate judge (`DuplicateSweep`) — background-tier,
     /// hard-capped per run; the metrics row is how a wrong floor gets caught.
     case duplicateSweep
+    /// The Unstick card's phrasing of its deterministic diagnosis — the inertia
+    /// capability's voice. The diagnosis never comes from the model; only the sentence.
+    case unstickNarration
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -46,6 +49,7 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .captureTriage: return "capture"
         case .householdNarrative: return "narrative"
         case .duplicateSweep: return "dupSweep"
+        case .unstickNarration: return "unstick"
         }
     }
 }

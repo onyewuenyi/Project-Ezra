@@ -511,6 +511,8 @@ struct TaskDetailView: View {
             UnstickView(
                 diagnosis: diagnosis,
                 deferralCount: Int(task.deferralCount),
+                narrationFacts: UnstickFacts(task: task, diagnosis: diagnosis, among: allTasks),
+                isActive: isActive,
                 onBreakDown: { unstickActed { showBreakdown = true } },
                 // A human accepting the card's suggestion, so it escalates the axis-3
                 // flag (Decision is no longer a work-intent) — forced-top ranking, the

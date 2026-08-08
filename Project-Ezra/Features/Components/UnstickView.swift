@@ -17,14 +17,24 @@ import SwiftUI
 struct UnstickView: View {
     let diagnosis: StallDiagnosis
     let deferralCount: Int
+    /// The facts for the voiced line — nil renders the deterministic headline only.
+    var narrationFacts: UnstickFacts? = nil
+    /// False once this page stops being the one on screen (the pager keeps neighbours
+    /// mounted, so `.onDisappear` never fires for a swiped-past page).
+    var isActive: Bool = true
     /// Route into the breakdown capability — the parent scrolls to / expands that card.
     let onBreakDown: () -> Void
-    /// Reclassify as a decision. A HUMAN act (the user accepting a suggestion), so it
-    /// goes through the logged, correctable `setWorkIntent` path.
+    /// Escalate to a decision. A HUMAN act (the user accepting the card's suggestion) —
+    /// the parent routes it through `escalateToDecision()` + `touchHuman()`.
     let onMakeDecision: () -> Void
     let onDoItNow: () -> Void
     let onDefer: () -> Void
     let onKill: () -> Void
+
+    /// The model's phrasing of the diagnosis, once it lands. The deterministic headline
+    /// renders immediately either way — narration is an upgrade, never a dependency,
+    /// which is what keeps "Unstick renders identically off-device" true minus voice.
+    @State private var narrated: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -37,11 +47,24 @@ struct UnstickView: View {
                     .foregroundStyle(Palette.primaryText)
             }
 
-            Text(diagnosis.headline(deferralCount: deferralCount))
+            Text(narrated ?? diagnosis.headline(deferralCount: deferralCount))
                 .supportingStyle()
                 .fixedSize(horizontal: false, vertical: true)
 
             actions
+        }
+        // `.task(id:)` is the cancellation seam: flipping `isActive` cancels the
+        // in-flight narration (the page was swiped past — the pager never unmounts it,
+        // so `.onDisappear` can't be the signal).
+        .task(id: isActive) {
+            guard isActive, narrated == nil, let facts = narrationFacts else { return }
+            if case .success(let sentence) = await UnstickNarrationService().narrate(facts),
+                !sentence.isEmpty
+            {
+                withAnimation(Motion.settle) { narrated = sentence }
+            }
+            // Every other arm: the deterministic headline stays. No retry — the
+            // template IS the content; an absent voice is not an error to manage.
         }
         .padding(Spacing.md)
         .background(
