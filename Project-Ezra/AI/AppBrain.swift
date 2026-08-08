@@ -271,6 +271,18 @@ final class AppBrain {
                 recordCapture(.failed(Self.errorLabel(error)))
                 intents = []
             }
+            // Token accounting, AFTER the outcome is recorded and never inside the
+            // user's wait: the exact prompt this parse sent, counted by the model's
+            // own tokenizer, against its context size — the evidence the chunking
+            // and context-budget decisions are designed on.
+            Task {
+                let prompt = FoundationModelsEngine.prompt(for: rawText, context: context)
+                guard let tokens = try? await SystemLanguageModel.default.tokenCount(for: prompt)
+                else { return }
+                ModelMetrics.shared.recordTokens(
+                    .captureTriage, promptTokens: tokens,
+                    contextSize: SystemLanguageModel.default.contextSize)
+            }
             // Model found nothing / timed out empty / failed → deterministic fallback,
             // exactly the degrade the old unbounded path promised.
             if intents.isEmpty {

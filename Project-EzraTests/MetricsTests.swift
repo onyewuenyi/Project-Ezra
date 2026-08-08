@@ -129,6 +129,16 @@ struct MetricsRecorderTests {
         #expect(line?.contains("7 partials") == true)
     }
 
+    @Test("Token accounting records separately and renders as used/context")
+    func tokenAccountingRenders() {
+        let metrics = ModelMetrics(defaults: freshDefaults())
+        metrics.record(.captureTriage, .success, latencyMs: 900)
+        metrics.recordTokens(.captureTriage, promptTokens: 812, contextSize: 4096)
+
+        let line = metrics.footerLines().first { $0.contains("capture") }
+        #expect(line?.contains("812/4096 tok") == true)
+    }
+
     @Test("A capability that reports no parse shape keeps its footer line unchanged")
     func parseShapeOmittedWhenUnreported() {
         let metrics = ModelMetrics(defaults: freshDefaults())

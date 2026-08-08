@@ -261,6 +261,10 @@ final class ModelMetrics {
         var lastRetrievalMs = -1
         var lastFirstPartialMs = -1
         var lastPartialCount = 0
+        /// Token accounting (iOS 26.4's `tokenCount(for:)`/`contextSize`) — the
+        /// evidence chunking and context budgets are designed against.
+        var lastPromptTokens = -1
+        var lastContextSize = -1
 
         var calls: Int { successes + salvaged + timeouts + failures }
         /// Calls that put usable output in front of the user, however they got there.
@@ -331,6 +335,16 @@ final class ModelMetrics {
         defaults.set(latencyMs, forKey: Key.lastLatencyMs(feature))
     }
 
+    /// Token accounting for the last call — recorded separately from the outcome
+    /// because the tokenizer runs AFTER the parse returns (an async count must never
+    /// sit inside the user's wait). In-memory only, like the parse-shape trio.
+    func recordTokens(_ feature: ModelFeature, promptTokens: Int, contextSize: Int) {
+        var entry = stats[feature] ?? Stats()
+        entry.lastPromptTokens = promptTokens
+        entry.lastContextSize = contextSize
+        stats[feature] = entry
+    }
+
     /// One line per capability that has actually been exercised, for the DEBUG footer.
     /// Features with no calls are omitted — an all-zero list is noise, not information.
     func footerLines() -> [String] {
@@ -350,6 +364,11 @@ final class ModelMetrics {
             }
             if entry.lastRetrievalMs >= 0 { line += " · retr \(entry.lastRetrievalMs)ms" }
             if entry.lastPartialCount > 0 { line += " · \(entry.lastPartialCount) partials" }
+            if entry.lastPromptTokens >= 0 {
+                line += " · \(entry.lastPromptTokens)"
+                if entry.lastContextSize > 0 { line += "/\(entry.lastContextSize)" }
+                line += " tok"
+            }
             if let error = entry.lastError { line += " · \(error)" }
             return line
         }

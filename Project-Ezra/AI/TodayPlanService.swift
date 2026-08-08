@@ -348,6 +348,20 @@ extension AppBrain {
             @unknown default: return "generationError"
             }
         }
+        // iOS 27's model-level error vocabulary — a second surface the new session
+        // APIs can throw from. Losing the case to a bare type name would blunt the
+        // one diagnostic the footer exists to sharpen.
+        if let m = error as? LanguageModelError {
+            switch m {
+            case .contextSizeExceeded(_): return "contextSizeExceeded"
+            case .rateLimited(_): return "rateLimited"
+            case .guardrailViolation(_): return "guardrailViolation"
+            case .refusal(_): return "refusal"
+            case .unsupportedCapability(_): return "unsupportedCapability"
+            case .unsupportedTranscriptContent(_): return "unsupportedTranscriptContent"
+            @unknown default: return "languageModelError"
+            }
+        }
         return String(describing: type(of: error))
     }
 

@@ -153,7 +153,10 @@ struct FoundationModelsEngine: AIEngine {
     /// (instructions + this), shared by `prompt(for:)` and the session pool builder.
     static let promptHead = "Here is the user's raw brain-dump. Turn it into structured task intents:"
 
-    private static func prompt(for text: String, context: TriageContext) -> String {
+    /// Internal (not private) so the caller can rebuild the exact prompt for token
+    /// accounting AFTER a parse completes — the tokenizer must never sit inside the
+    /// user's wait.
+    static func prompt(for text: String, context: TriageContext) -> String {
         var prompt = "\(promptHead)\n\n\(text)"
         if !context.candidates.isEmpty {
             let lines = context.candidates.map { "[\($0.id.uuidString)] \($0.title) — \($0.facts)" }
