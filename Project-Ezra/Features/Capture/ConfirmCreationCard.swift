@@ -69,6 +69,18 @@ struct ConfirmCreationList: View {
                 // are deliberately excluded (behaviorally stable — they route
                 // through DraftMerge keys and live fetches, never captured state).
                 .equatable()
+                // Swipe is the second remove affordance (the X button stays — it is
+                // the guaranteed and accessible path). OUTSIDE `.equatable()` so the
+                // closure doesn't disturb structural skipping; `allowsFullSwipe:
+                // false` because destroying a candidate with one flick is too cheap
+                // for a decisive act.
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        remove(draft)
+                    } label: {
+                        Label("Remove", systemImage: "xmark")
+                    }
+                }
                 .transition(
                     Motion.cardEntry.animation(
                         reduceMotion
