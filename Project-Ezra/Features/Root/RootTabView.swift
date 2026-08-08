@@ -10,6 +10,7 @@
 //
 
 import CoreData
+import FoundationModels
 import SwiftUI
 
 /// The one way any screen opens the global capture composer — injected by the
@@ -319,7 +320,53 @@ struct RootTabView: View {
                 + "· blockers: \(drafts.compactMap(\.blockedBy).count) "
                 + "· dated: \(drafts.compactMap(\.dueDate).count)")
         for line in ModelMetrics.shared.footerLines() { print("metrics: \(line)") }
+        await runContinuousDiagnosticsArm(ramble: ramble)
         print("=== END CAPTURE DIAGNOSTICS ===")
+    }
+
+    /// The A/B arm for the CONTINUOUS capture session (`CaptureConversation`): the
+    /// same ramble fed as three growing snapshots — the shape the rolling chain
+    /// produces — with per-turn wall-clock, draft counts, and token accounting. The
+    /// continuous session becomes the composer's default the day these numbers beat
+    /// the single-use baseline above on real hardware; until then it is measured,
+    /// not shipped (the capture-deadline precedent: tuned on evidence).
+    private func runContinuousDiagnosticsArm(ramble: String) async {
+        guard brain.status.isOnDevice else {
+            print("continuous: skipped (engine is not on-device)")
+            return
+        }
+        // Three prefixes at natural clause boundaries, ending with the full text —
+        // turn 1 initial, turns 2-3 suffix continuations.
+        let cuts = [ramble.count / 3, (ramble.count * 2) / 3, ramble.count]
+        let snapshots = cuts.map { String(ramble.prefix($0)) }
+        let conversation = CaptureConversation(context: TriageContext())
+        for (index, snapshot) in snapshots.enumerated() {
+            let turn = CaptureConversation.turn(
+                from: conversation.coveredText, to: snapshot)
+            let turnLabel: String
+            switch turn {
+            case .initial: turnLabel = "initial"
+            case .continuation(let suffix): turnLabel = "continuation(+\(suffix.count) chars)"
+            case .revision: turnLabel = "revision"
+            }
+            let started = Date()
+            do {
+                let intents = try await conversation.triage(
+                    rawText: snapshot, context: TriageContext(), onPartial: nil)
+                let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                let prompt = CaptureConversation.prompt(for: turn)
+                let tokens =
+                    (try? await SystemLanguageModel.default.tokenCount(for: prompt)) ?? -1
+                print(
+                    "continuous turn \(index + 1)/\(snapshots.count) [\(turnLabel)]: "
+                        + "\(intents.count) intents · \(elapsed)ms · prompt \(tokens) tok")
+            } catch {
+                let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                print(
+                    "continuous turn \(index + 1)/\(snapshots.count) [\(turnLabel)]: "
+                        + "FAILED after \(elapsed)ms · \(AppBrain.errorLabel(error))")
+            }
+        }
     }
 
     /// Deterministic verification seam. Launch with `-SeedFlowFixtures` to populate

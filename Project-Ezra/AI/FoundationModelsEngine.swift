@@ -208,7 +208,7 @@ struct FoundationModelsEngine: AIEngine {
     /// show: title + category present, everything else defaulted. Total and
     /// tiny by design — this is the only code that touches macro-generated
     /// `PartiallyGenerated` shapes.
-    private static func intents(fromPartial partial: TriageResult.PartiallyGenerated) -> [TaskIntent] {
+    static func intents(fromPartial partial: TriageResult.PartiallyGenerated) -> [TaskIntent] {
         (partial.tasks ?? []).compactMap { task in
             guard let title = task.title, !title.isEmpty else { return nil }
             let category =
