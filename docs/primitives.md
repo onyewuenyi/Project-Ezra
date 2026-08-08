@@ -43,6 +43,8 @@ A **primitive** here is a noun or seam that earns its existence by deleting bran
 | **Flags** (Blocked · Blocking · Overdue · Stale) | `TaskItem` reads | Attention conditions derived on read, never stored |
 | **TaskRanking / RankKey / currentRelevance** | `Models/TaskRanking.swift` | The strict-weak-order stack + the one live additive layer (±25) |
 | **IntentResolver** | `AI/IntentResolver.swift` | Deterministic intents→drafts: dates, owners, backfill, learned rules — the half both engines share |
+| **Segmentation** | `AI/Segmentation.swift` | Deterministic ramble→items: sentences, verb-gated spoken connectives, per-part commas, safe preamble strip — the heuristic path's parser AND the on-device timeout fallback's |
+| **OpenTaskSnapshotCache** | `AI/OpenTaskSnapshotCache.swift` | The open working set as value snapshots, rebuilt on change (objects-did-change, TaskItem-filtered) instead of on read |
 | **AutonomyPolicy** | `AI/AIEngine.swift` | silent / suggest / ask tiering; the judgment-call carve-out |
 | **TaskCapabilities** + **BreakdownEligibility** + **StallDiagnosis** | `Models/` | Which help a task is offered — complexity / uncertainty / inertia; all triggers pure |
 | **RecommendedAction** | `Models/TaskMutations.swift` | The single CTA, or none — lifecycle-driven |
@@ -64,9 +66,12 @@ The iOS 27 on-device model is itself treated as a primitive with named capabilit
 | **Guided generation** (`@Generable` + `@Guide`) | every FM service | Typed model output; no JSON parsing; device-verify on schema change |
 | **Streaming partials** (`streamResponse` + `PartialBox`) | capture, Today plan | Progressive candidates; deadline hits salvage the last viable partial |
 | **Tool calling** (`ResolvePersonTool`) | `AI/PersonalContextTools.swift` | Narrow, deterministic personal-context tools; attached only when useful |
-| **Instructions personalization** | `AI/CorrectionProfile.swift` | Learned corrections as per-call instruction lines (the `DynamicInstructions` path when sessions become continuous) |
+| **Instructions personalization** | `AI/CorrectionProfile.swift` | Learned corrections as per-call instruction lines — and as `DynamicInstructions` content in the continuous session |
+| **CaptureSessionPool** | `AI/CaptureSessionPool.swift` | Prewarmed single-use capture sessions, fingerprinted on instructions+roster; the REAL prefix (instructions + prompt head) warms behind the sheet animation |
+| **CaptureConversation** | `AI/CaptureConversation.swift` | The continuous capture session (iOS 27 `DynamicProfile`/`DynamicInstructions`/`historyTransform`): one session per composer session, each parse a TURN (full text → suffix-only continuations → revision), history bounded. **Measured-not-shipped** — the `-CaptureDiagnostics` A/B arm; default flips on device evidence |
+| **Token accounting** | `AI/Metrics.swift` + `tokenCount`/`contextSize` | Every on-device parse counts its exact prompt against the model's context (footer: `812/4096 tok`) — the evidence context budgets are designed on |
 | **PCC tier** | `AI/TodayPlanService.swift` | The stronger private tier for the hardest generations; absence reads as unavailability |
-| **Prewarm** | `AI/ModelWarmup.swift` | Cold-start amortized behind covers (Recap plays while the advisor reasons) |
+| **Prewarm** | `AI/ModelWarmup.swift` + `CaptureSessionPool` | Cold-start amortized behind covers (Recap plays while the advisor reasons; capture warms its true instruction prefix at sheet-present) |
 
 ---
 
@@ -76,9 +81,9 @@ Each system is a loop the user feels; each is listed with the primitives it comp
 
 ### S1 · Capture — the ramble pipeline (**the #1 system**)
 *Dump everything in one breath; leave with real, linked, owned tasks — one glance, one tap.*
-**Loop:** ramble (voice/text) → engine `triage` streams `TaskIntent`s → `IntentResolver` drafts + backfills every field → retrieval proposes edges (duplicate/child/blocks) → **Confirm** ("Add N") → `commit` creates tasks, writes Corrections, merges duplicates, links edges, suppresses rejections.
-**Composes:** AIEngine · TaskIntent/TaskDraft · TriageContext · ContextRetrieval · IntentResolver · OwnerProposer · AutonomyPolicy · Capture · Correction · Relationship/Suppression · ChangeLog.
-**Fallback:** `HeuristicEngine` — instant, deterministic; proposals and work-intent classification quietly absent.
+**Loop:** ramble (voice/text; a voice-first listening state — level meter, visible silence countdown, two-tone volatile/finalized transcript) → **rolling parse** (400ms debounce · 1.2s max-wait · chain-on-completion; a running parse is never cancelled by new input) → engine `triage` streams `TaskIntent`s on a pooled, prefix-warmed session — **candidates ride the chain** (the first parse of a burst prompts candidate-blind; retrieval runs concurrently and feeds the next parse's prompt; a single-shot capture chains one enrichment re-parse) → `IntentResolver` drafts + backfills every field → **Confirm** ("Add N") → `commit` creates tasks, writes Corrections, merges duplicates, links edges, suppresses rejections.
+**Composes:** AIEngine · TaskIntent/TaskDraft · TriageContext · ContextRetrieval · Segmentation · OpenTaskSnapshotCache · CaptureSessionPool · IntentResolver · OwnerProposer · AutonomyPolicy · Capture · Correction · Relationship/Suppression · ChangeLog.
+**Fallback:** `HeuristicEngine` — instant, deterministic, with the same connective-aware `Segmentation` (a dictated run-on splits, never a mega-task) and an honest low-confidence class (a never-verified line renders the "?" card state); proposals and work-intent classification quietly absent.
 
 ### S2 · Today — the advisor briefing
 *Once a day: "given everything I'm carrying, what should I actually do?"*
