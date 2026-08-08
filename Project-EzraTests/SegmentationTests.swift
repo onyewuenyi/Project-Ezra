@@ -99,6 +99,35 @@ struct SegmentationTests {
         #expect(items.count == 1)
     }
 
+    // MARK: - Preambles
+
+    @Test("A dash preamble strips when what follows is a verified item")
+    func dashPreambleStrips() {
+        let items = Segmentation.items(from: "ok brain dump time — renew my passport before the trip")
+        #expect(items == ["renew my passport before the trip"])
+    }
+
+    @Test("Filler openers strip when the remainder verifies as an item")
+    func fillerOpenersStrip() {
+        let items = Segmentation.items(from: "okay so um call the dentist about the kids")
+        #expect(items == ["call the dentist about the kids"])
+    }
+
+    @Test("An all-filler sentence is kept, never silently dropped")
+    func allFillerSentenceKept() {
+        // It becomes a card the user can delete — dimmed by the heuristic's
+        // low-confidence read — because invisible-and-gone is worse than
+        // visible-and-fixable (always-confirm).
+        let items = Segmentation.items(from: "okay so this week is a lot")
+        #expect(items.count == 1)
+    }
+
+    @Test("A real noun-phrase task never loses words to preamble stripping")
+    func nounPhraseTaskKeepsItsWords() {
+        let items = Segmentation.items(from: "daycare enrollment forms are due friday")
+        #expect(items == ["daycare enrollment forms are due friday"])
+    }
+
     @Test("A one-significant-word fragment folds into its left neighbour")
     func thinFragmentFolds() {
         // "and stuff" carries one significant word — junk as a standalone card.

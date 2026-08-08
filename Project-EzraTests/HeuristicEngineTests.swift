@@ -11,6 +11,27 @@
 import Testing
 @testable import Project_Ezra
 
+@Suite("Heuristic uncertainty (audit P3)")
+struct HeuristicUncertaintyTests {
+
+    @Test("A never-verified line scores under the uncertainty threshold")
+    func unverifiedLineReadsUncertain() {
+        // No action opener, no judgment shape, no strong category — the honest
+        // "not sure this is a task" class the confirm card dims with a "?".
+        let intent = HeuristicEngine.intent(from: "okay so this week is a lot")
+        #expect(intent.confidence < 0.5)
+        #expect(!intent.isJudgmentCall)
+    }
+
+    @Test("A verified item or a strong category hit never reads uncertain")
+    func verifiedLinesKeepTheirConfidence() {
+        #expect(HeuristicEngine.intent(from: "renew my passport").confidence >= 0.5)
+        // No action opener, but "oil change" is a strong Car signal.
+        #expect(
+            HeuristicEngine.intent(from: "oil change is overdue by two weeks").confidence >= 0.5)
+    }
+}
+
 @Suite("HeuristicEngine")
 struct HeuristicEngineTests {
 

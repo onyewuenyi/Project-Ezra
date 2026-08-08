@@ -42,13 +42,22 @@ struct ConfirmCreationList: View {
     /// candidate is a decisive act on a surface where everything else is a
     /// reversible edit; the animation alone left it oddly weightless.
     @State private var removals = 0
+    /// Ids already on screen — what tells an entering card its place in the batch,
+    /// so a multi-card arrival CASCADES instead of landing as one slab.
+    @State private var knownIDs: Set<UUID> = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // A parse that lands several cards at once staggers them by arrival order
+        // (`Motion.staggerStep`, the detail screen's idiom) — capped so a big paste
+        // doesn't turn into a slow reveal. Reduce Motion: no stagger.
+        let entering = drafts.map(\.id).filter { !knownIDs.contains($0) }
         // Lazy on purpose: a big paste renders only what's visible. Safe now that
         // `DraftMerge` keeps ids stable — under the old merge, per-partial identity
         // churn would have made laziness thrash instead of save.
         LazyVStack(spacing: Spacing.sm) {
             ForEach($drafts) { $draft in
+                let batchIndex = entering.firstIndex(of: draft.id) ?? 0
                 ConfirmCreationCard(
                     draft: $draft, ownerOptions: ownerOptions, rosterNames: rosterNames,
                     onAddToRoster: onAddToRoster, onRemove: { remove(draft) }
@@ -60,10 +69,18 @@ struct ConfirmCreationList: View {
                 // are deliberately excluded (behaviorally stable — they route
                 // through DraftMerge keys and live fetches, never captured state).
                 .equatable()
-                .transition(Motion.cardEntry)
+                .transition(
+                    Motion.cardEntry.animation(
+                        reduceMotion
+                            ? nil
+                            : Motion.settle.delay(Double(min(batchIndex, 5)) * Motion.staggerStep))
+                )
             }
         }
         .animation(Motion.settle, value: drafts.map(\.id))
+        .onChange(of: drafts.map(\.id), initial: true) { _, ids in
+            knownIDs = Set(ids)
+        }
         // Container semantics so VoiceOver announces the list as a group with its
         // size, rather than dropping the user into an unlabeled run of cards.
         .accessibilityElement(children: .contain)

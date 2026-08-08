@@ -81,7 +81,7 @@ enum Segmentation {
     /// continues — later boundaries in the same sentence still split.
     static func splitClauses(_ sentence: String) -> [String] {
         var clauses: [String] = []
-        var remaining = Substring(sentence)
+        var remaining = Substring(strippedPreamble(sentence))
         var searchFrom: Substring.Index?
 
         while let (range, connective) = earliestConnective(in: remaining, from: searchFrom) {
@@ -174,6 +174,53 @@ enum Segmentation {
 
     private static let judgmentOpeners: [String] = [
         "should i ", "should we ", "do i ", "do we ", "is it worth ",
+    ]
+
+    // MARK: - Preambles ("ok brain dump time — renew…" → "renew…")
+
+    /// Strip a spoken warm-up from the head of a sentence — but ONLY when what
+    /// remains is a verified item, so a real task can never lose its words. Two
+    /// contained forms: a dash/colon preamble ("ok brain dump time — renew the
+    /// passport") whose lead-up is short and verb-free, and a run of filler openers
+    /// ("okay so um renew the passport"). A sentence that is ALL filler ("okay so
+    /// this week is a lot") is returned untouched — it becomes a card the user can
+    /// delete, dimmed by the heuristic's low-confidence read, never silently
+    /// dropped (always-confirm: visible and fixable beats invisible and gone).
+    static func strippedPreamble(_ sentence: String) -> String {
+        // Dash/colon form: everything before the first separator is a short,
+        // verb-free warm-up and everything after starts an item.
+        for separator in [" — ", " – ", ": "] {
+            if let range = sentence.range(of: separator) {
+                let head = sentence[..<range.lowerBound]
+                let tail = trimItem(String(sentence[range.upperBound...]))
+                let headWords = head.split(separator: " ")
+                if headWords.count <= 4,
+                    !headWords.contains(where: { actionVerbs.contains($0.lowercased()) }),
+                    startsAnItem(strippedLeadIn(tail))
+                {
+                    return tail
+                }
+            }
+        }
+        // Filler-opener run: strip while the remainder verifies as an item.
+        var remaining = Substring(sentence)
+        var stripped = false
+        while let first = remaining.split(separator: " ").first,
+            fillerOpeners.contains(first.lowercased())
+        {
+            remaining = remaining.dropFirst(first.count).drop(while: { $0 == " " })
+            stripped = true
+        }
+        if stripped {
+            let candidate = trimItem(String(remaining))
+            if startsAnItem(strippedLeadIn(candidate)) { return candidate }
+        }
+        return sentence
+    }
+
+    private static let fillerOpeners: Set<String> = [
+        "ok", "okay", "alright", "so", "anyway", "um", "uh", "well", "right",
+        "honestly", "basically", "and", "yeah",
     ]
 
     // MARK: - Lead-ins ("i need to …" → the action itself)

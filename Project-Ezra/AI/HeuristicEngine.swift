@@ -100,6 +100,18 @@ struct HeuristicEngine: AIEngine {
         // Confidence: strong keyword hit → higher; generic line → medium; ambiguous → low.
         let confidence: Double = {
             if judgment { return 0.4 }
+            // A line that never verified as an item — no action opener, no judgment
+            // shape, no strong category signal — is this engine's honest "not sure
+            // this is a task" class, scored under the 0.5 line so the confirm
+            // card's designed uncertainty state ("?" + dim) finally renders on this
+            // path (the audit's P3 parity gap: the old floor made it unreachable).
+            // Confirming the card clears the low-confidence flag at commit (K2) —
+            // the human's review is the certainty the engine lacked.
+            if !Segmentation.startsAnItem(Segmentation.strippedLeadIn(line)),
+                !categoryIsStrong(lower)
+            {
+                return 0.45
+            }
             if category == "Admin" || category == "Errands" { return 0.6 }
             return categoryIsStrong(lower) ? 0.85 : 0.65
         }()
