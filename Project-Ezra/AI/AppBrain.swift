@@ -343,6 +343,7 @@ final class AppBrain {
     @discardableResult
     func park(
         _ drafts: [TaskDraft], rawCapture: String, source: CaptureSource,
+        imageRef: String? = nil,
         into existing: Capture?, in context: NSManagedObjectContext
     ) -> Capture? {
         let trimmed = rawCapture.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -360,6 +361,7 @@ final class AppBrain {
         if live == nil { context.insert(capture) }
         capture.rawText = trimmed
         capture.source = source
+        capture.imageRef = imageRef
         capture.parkedDrafts = drafts
         context.saveChanges()
         return capture
@@ -463,6 +465,7 @@ final class AppBrain {
     @discardableResult
     func commit(
         _ drafts: [TaskDraft], rawCapture: String, source: CaptureSource = .text,
+        imageRef: String? = nil,
         parked: Capture? = nil,
         into context: NSManagedObjectContext
     ) -> [TaskItem] {
@@ -474,10 +477,12 @@ final class AppBrain {
         if let parked {
             capture = parked
         } else {
-            capture = Capture(rawText: rawCapture, source: source, in: context)
+            capture = Capture(rawText: rawCapture, source: source, imageRef: imageRef, in: context)
             context.insert(capture)
         }
-        // Committed: no longer parked, and its derived drafts are spent.
+        // Committed: no longer parked, and its derived drafts are spent. The photo
+        // reference rides the event's provenance (or clears if the chip was removed).
+        capture.imageRef = imageRef
         capture.committedAt = Date()
         capture.parkedDrafts = nil
 

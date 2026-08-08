@@ -27,6 +27,7 @@
 //
 
 import CoreData
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -97,6 +98,15 @@ struct ComposerView: View {
     @State private var speech = SpeechCaptureService()
     /// True once dictation contributed to this capture — recorded on the Capture row.
     @State private var usedDictation = false
+    /// Image capture V1 (library → OCR → the normal text pipeline). The photo's
+    /// bytes live as a container file; `capturedImageRef` is what `Capture.imageRef`
+    /// persists. `usedImage` feeds provenance the same way `usedDictation` does.
+    @State private var photoItem: PhotosPickerItem?
+    @State private var capturedImageRef: String?
+    @State private var capturedThumb: UIImage?
+    @State private var usedImage = false
+    /// True while a picked photo is being read — the image button's busy state.
+    @State private var readingImage = false
     /// The text already present when dictation started; live transcript appends to it.
     @State private var dictationBase = ""
     /// Live-parse bookkeeping in a reference box, NOT observable on purpose: these
@@ -140,6 +150,8 @@ struct ComposerView: View {
                 Text("What's on your mind?")
                     .screenTitleStyle()
                     .padding(.top, Spacing.xs)
+
+                imageChip
 
                 composerField
                     .frame(minHeight: 120, maxHeight: drafts.isEmpty ? 240 : 160)
@@ -318,8 +330,13 @@ struct ComposerView: View {
             lastParsedText = nil
             lastParseYieldedCandidates = false
             // Nothing dictated survives an emptied field, so the Capture row must not
-            // keep claiming this was a voice capture.
+            // keep claiming this was a voice capture — nor an image one: an emptied
+            // field is the user erasing the thought, photo and all.
             usedDictation = false
+            if let ref = capturedImageRef { CaptureImageStore.delete(ref) }
+            capturedImageRef = nil
+            capturedThumb = nil
+            usedImage = false
             // The user emptied the field. Parking exists so an INTERRUPTION can't destroy a
             // thought — it must not resurrect one that was deliberately erased. Left alone,
             // the parked row keeps the deleted text and Today goes on advertising it as a
@@ -611,6 +628,13 @@ struct ComposerView: View {
     /// far more often than the old at-pause cadence and each park is an O(capture)
     /// encode plus a synchronous save. The thought is never at risk for longer than
     /// the throttle window, and the drafts are derived (resume re-parses `rawText`).
+    /// One provenance rule: voice outranks image outranks typing. Dictation is the
+    /// flagship input, and `.image` claims exactly the captures whose words came
+    /// from a photo without speech.
+    private var captureSource: CaptureSource {
+        usedDictation ? .voice : (usedImage ? .image : .text)
+    }
+
     private func parkIfUnfinished(force: Bool = false) {
         guard !drafts.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
@@ -621,7 +645,7 @@ struct ComposerView: View {
         }
         parse.lastParkAt = Date()
         parked = brain.park(
-            drafts, rawCapture: text, source: usedDictation ? .voice : .text,
+            drafts, rawCapture: text, source: captureSource, imageRef: capturedImageRef,
             into: parked, in: context)
     }
 
@@ -639,6 +663,14 @@ struct ComposerView: View {
         else { return }
         parked = resuming
         text = resuming.rawText
+        // A parked image capture restores its photo chip with its words.
+        if let ref = resuming.imageRef,
+            let image = UIImage(contentsOfFile: CaptureImageStore.url(for: ref).path)
+        {
+            capturedImageRef = ref
+            capturedThumb = image
+            usedImage = true
+        }
         if let restored = resuming.parkedDrafts, !restored.isEmpty {
             drafts = restored
         } else {
@@ -652,6 +684,9 @@ struct ComposerView: View {
         parse.debounceTask?.cancel()
         parse.parseTask?.cancel()
         parse.parseTask = nil
+        // Discard is the one destructive path — the photo goes with the thought.
+        if let ref = capturedImageRef { CaptureImageStore.delete(ref) }
+        capturedImageRef = nil
         if let parked { AppBrain.discard(parked, in: context) }
         parked = nil
         drafts = []
@@ -670,8 +705,8 @@ struct ComposerView: View {
         committed += 1
         // Adopt the parked row rather than creating a second one for the same event.
         brain.commit(
-            drafts, rawCapture: text, source: usedDictation ? .voice : .text, parked: parked,
-            into: context)
+            drafts, rawCapture: text, source: captureSource, imageRef: capturedImageRef,
+            parked: parked, into: context)
         // "Add N tasks" IS the Confirm-Creation moment, and `commit` IS the creation:
         // every field was visible and editable, and the tasks come into existence here,
         // born `.todo`. There is no second confirm step to run. (A judgment call's Needs
@@ -776,7 +811,88 @@ struct ComposerView: View {
     private var micRow: some View {
         HStack(spacing: Spacing.sm) {
             micButton
+            imageButton
             Spacer(minLength: 0)
+        }
+    }
+
+    /// Capture by photo — the third input mode. Library-only in V1 (`PhotosPicker`
+    /// is out-of-process, so no privacy prompt); the live camera is the recorded
+    /// fast-follow. Recognized text streams into the SAME field the keyboard and
+    /// the mic feed, so the rolling parse needs no new path.
+    private var imageButton: some View {
+        PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+            Label(readingImage ? "Reading…" : "Add a photo", systemImage: "photo")
+                .font(.controlLabel)
+                .foregroundStyle(readingImage ? Palette.accentFlat : Palette.primaryText)
+                .padding(.horizontal, Spacing.md)
+                .frame(height: 40)
+                .background(
+                    readingImage ? Palette.accentSoft : Palette.secondarySurface, in: Capsule()
+                )
+                .frame(minHeight: LayoutMetrics.hitTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        .disabled(readingImage)
+        .accessibilityLabel("Add a photo of a list or note")
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task {
+                await ingestPhoto(item)
+                photoItem = nil
+            }
+        }
+    }
+
+    /// Photo → file → thumbnail → OCR → the field. Losing any stage keeps the
+    /// earlier ones: a failed OCR still shows the thumbnail (the user sees the
+    /// photo landed and can type what it said); a failed file write still runs OCR
+    /// (the words must never be lost to a disk hiccup).
+    private func ingestPhoto(_ item: PhotosPickerItem) async {
+        readingImage = true
+        defer { readingImage = false }
+        guard let data = try? await item.loadTransferable(type: Data.self),
+            let image = UIImage(data: data), let cgImage = image.cgImage
+        else { return }
+        if let previous = capturedImageRef { CaptureImageStore.delete(previous) }
+        capturedImageRef = CaptureImageStore.save(data)
+        capturedThumb = image
+        usedImage = true
+        let recognized = (try? await ImageTextExtractor.text(from: cgImage)) ?? ""
+        guard !recognized.isEmpty else { return }
+        // Entering through `text` is the whole design: onChange → the rolling parse.
+        text = text.isEmpty ? recognized : text + "\n" + recognized
+    }
+
+    /// The picked photo, disclosed above the field — provenance the user can see
+    /// and remove. Removing the chip deletes the FILE and the provenance; the
+    /// recognized words stay in the field, where they are already the user's text.
+    @ViewBuilder private var imageChip: some View {
+        if let capturedThumb {
+            HStack(spacing: Spacing.xs) {
+                Image(uiImage: capturedThumb)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.small, style: .continuous))
+                Button {
+                    if let ref = capturedImageRef { CaptureImageStore.delete(ref) }
+                    capturedImageRef = nil
+                    self.capturedThumb = nil
+                    usedImage = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.glyphCaption())
+                        .foregroundStyle(Palette.mutedText)
+                        .frame(width: LayoutMetrics.hitTarget, height: LayoutMetrics.hitTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressableIcon)
+                .accessibilityLabel("Remove the photo")
+                Spacer(minLength: 0)
+            }
+            .transition(.opacity)
         }
     }
 

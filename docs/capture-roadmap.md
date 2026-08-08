@@ -57,25 +57,25 @@ only on demand, and scales past 12 candidates naturally.
 answers define the valid id set exactly as the pushed package did; suppression
 filtering stays at the resolver.
 
-## Phase B — Image capture (Vision OCR first)
+## Phase B — Image capture (Vision OCR first) — **V1 SHIPPED 2026-08-08**
 
-**What**: a photo/library affordance in the composer; V1 pipeline is a **Vision
-OCR pre-pass** feeding the recognized text into the EXISTING text pipeline
-(segmentation → resolver → confirm cards) — the deferred-list note already says
-"Vision-OCR first", and it means the whole downstream loop (cards, corrections,
-parking, eval) works unchanged, on-device AND on the heuristic path. The
-`Attachment` entity is confirmed in the schema for keeping the source image.
+**V1 (shipped)**: an "Add a photo" affordance beside the mic (library-only —
+`PhotosPicker` is out-of-process, zero new permissions); Vision OCR
+(`AI/ImageTextExtractor.swift`, `.accurate` + language correction) feeds the
+recognized text into the EXISTING text pipeline (segmentation → resolver →
+confirm cards), so the whole downstream loop works unchanged, on-device AND on
+the heuristic path. **Storage correction**: there is NO `Attachment` entity —
+an earlier note here claimed one was confirmed in the schema; the schema is
+frozen post-gen-10, and the shipped design is a container FILE
+(`Models/CaptureImageStore.swift`) with the long-persisted `Capture.imageRef`
+holding the filename. Provenance: voice > image > text; the thumbnail chip
+restores on resume; discard is the one path that deletes the file.
 
-**V2 (on-device only)**: image-in-prompt with the Vision-provided tools
-(`OCRTool`, `BarcodeReaderTool` — they live in the Vision framework, not
-FoundationModels; verified absent from the FM swiftinterface), letting the model
-read layout/context a flat OCR string loses (flyers, forms). Gated on device
-verification like every `@Generable`-adjacent change.
-
-**UI shape**: the composer's footer gains an image affordance beside the mic
-(both are "capture by other means"); a captured image shows as a thumbnail chip
-above the field while its text streams into the normal live-parse loop. No new
-confirm surface — the cards ARE the confirm, per the always-confirm invariant.
+**Fast-follows**: live camera (`NSCameraUsageDescription` + capture-session UI),
+and V2 image-in-prompt with the Vision-provided tools (`OCRTool` /
+`BarcodeReaderTool` — they live in the Vision framework, not FoundationModels;
+verified absent from the FM swiftinterface) so the model reads layout a flat
+OCR string loses (flyers, forms). Both device-verify-gated.
 
 ## Explicitly not planned
 
