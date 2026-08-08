@@ -150,3 +150,40 @@ struct MetricsRecorderTests {
         #expect(line?.contains("partials") == false)
     }
 }
+
+@MainActor
+@Suite("Capability-card outcomes")
+struct CapabilityMetricsTests {
+
+    private func freshDefaults() -> UserDefaults {
+        let name = "card-metrics-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    @Test("Offered and acted count independently and persist across instances")
+    func countersPersist() {
+        let defaults = freshDefaults()
+        let metrics = CapabilityMetrics(defaults: defaults)
+        metrics.recordOffered(.unstick)
+        metrics.recordOffered(.unstick)
+        metrics.recordActed(.unstick)
+        metrics.recordOffered(.thinkingPartner)
+
+        let reloaded = CapabilityMetrics(defaults: defaults)
+        #expect(reloaded.stats[.unstick] == .init(offered: 2, acted: 1))
+        #expect(reloaded.stats[.thinkingPartner] == .init(offered: 1, acted: 0))
+        #expect(reloaded.stats[.breakDown] == .init(offered: 0, acted: 0))
+    }
+
+    @Test("The footer line reads acted/offered and stays silent on a fresh install")
+    func footerLine() {
+        let metrics = CapabilityMetrics(defaults: freshDefaults())
+        #expect(metrics.footerLine == nil)  // no line beats a row of zeros
+        metrics.recordOffered(.thinkingPartner)
+        metrics.recordOffered(.breakDown)
+        metrics.recordActed(.breakDown)
+        #expect(metrics.footerLine == "cards: tp 0/1 · bd 1/1")
+    }
+}

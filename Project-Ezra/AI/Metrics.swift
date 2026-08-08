@@ -383,3 +383,91 @@ final class ModelMetrics {
         static func lastError(_ f: ModelFeature) -> String { "model.\(f.rawValue).lastError" }
     }
 }
+
+// MARK: - Capability-card outcomes (does anyone USE these cards?)
+
+/// Whether a capability card is ACTED ON, per kind — the half `ModelMetrics` can't see.
+/// That class measures whether the *model* worked; this one measures whether the *offer*
+/// did. An ignored card costs attention on every render, and every S4 threshold
+/// (the 60/30-minute breakdown bars, deferral ≥ 3, the subsumption rules) is currently
+/// a guess — these counters are the evidence they get tuned or pruned on.
+///
+/// Local-only, never transmitted, same charter as `ModelMetrics`: this exists so the
+/// offer heuristics are argued from numbers, not intuition. Offered = the card rendered
+/// on an ACTIVE page (once per visit — the pager keeps neighbours mounted, and a
+/// mounted neighbour nobody looked at is not an offer). Acted = any of the card's own
+/// actions tapped.
+@MainActor
+final class CapabilityMetrics {
+    static let shared = CapabilityMetrics()
+
+    /// The card kinds, deliberately flattened from `Capability` (which carries per-case
+    /// payloads): the question here is "which OFFER", not "which diagnosis".
+    enum Kind: String, CaseIterable {
+        case thinkingPartner
+        case breakDown
+        case unstick
+
+        var label: String {
+            switch self {
+            case .thinkingPartner: return "tp"
+            case .breakDown: return "bd"
+            case .unstick: return "un"
+            }
+        }
+    }
+
+    struct Stats: Equatable {
+        var offered = 0
+        var acted = 0
+    }
+
+    private let defaults: UserDefaults
+    private(set) var stats: [Kind: Stats] = [:]
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        for kind in Kind.allCases {
+            stats[kind] = Stats(
+                offered: defaults.integer(forKey: Key.offered(kind)),
+                acted: defaults.integer(forKey: Key.acted(kind)))
+        }
+    }
+
+    func recordOffered(_ kind: Kind) {
+        stats[kind, default: Stats()].offered += 1
+        defaults.set(stats[kind]?.offered ?? 0, forKey: Key.offered(kind))
+    }
+
+    func recordActed(_ kind: Kind) {
+        stats[kind, default: Stats()].acted += 1
+        defaults.set(stats[kind]?.acted ?? 0, forKey: Key.acted(kind))
+    }
+
+    /// One DEBUG-footer line: `cards: tp 3/9 · bd 1/7 · un 4/5` (acted/offered).
+    /// Nil when nothing has ever been offered — no line beats a row of zeros.
+    var footerLine: String? {
+        let parts = Kind.allCases.compactMap { kind -> String? in
+            guard let entry = stats[kind], entry.offered > 0 else { return nil }
+            return "\(kind.label) \(entry.acted)/\(entry.offered)"
+        }
+        guard !parts.isEmpty else { return nil }
+        return "cards: " + parts.joined(separator: " · ")
+    }
+
+    private enum Key {
+        static func offered(_ k: Kind) -> String { "cards.\(k.rawValue).offered" }
+        static func acted(_ k: Kind) -> String { "cards.\(k.rawValue).acted" }
+    }
+}
+
+extension Capability {
+    /// The telemetry bucket this offer lands in — diagnosis payloads flattened away.
+    var metricsKind: CapabilityMetrics.Kind {
+        switch self {
+        case .thinkingPartner: return .thinkingPartner
+        case .breakDown: return .breakDown
+        case .unstick: return .unstick
+        }
+    }
+}

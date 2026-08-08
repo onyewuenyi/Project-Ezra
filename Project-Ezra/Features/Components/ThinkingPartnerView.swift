@@ -78,8 +78,10 @@ struct ThinkingPartnerView: View {
         }
     }
 
-    /// Start (or restart) a framing, replacing any run already in flight.
+    /// Start (or restart) a framing, replacing any run already in flight. Engaging IS
+    /// the acted-on signal for this card — the framing has no other button.
     private func start() {
+        CapabilityMetrics.shared.recordActed(.thinkingPartner)
         work?.cancel()
         work = Task { await think() }
     }

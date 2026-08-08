@@ -169,6 +169,13 @@ struct InboxView: View {
                 Text(line)
                     .metadataStyle()
             }
+            // Offer-vs-acted per capability card (acted/offered) — whether the OFFER
+            // worked, the half the model metrics can't see. Silent until a card has
+            // been offered.
+            if let cards = CapabilityMetrics.shared.footerLine {
+                Text(cards)
+                    .metadataStyle()
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Spacing.lg)

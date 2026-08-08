@@ -169,6 +169,12 @@ struct SettingsView: View {
                     Text(line)
                         .metadataStyle()
                 }
+                // Offer-vs-acted per capability card (acted/offered) — whether the
+                // OFFER worked, the half the model metrics can't see.
+                if let cards = CapabilityMetrics.shared.footerLine {
+                    Text(cards)
+                        .metadataStyle()
+                }
                 #endif
             }
             .frame(maxWidth: .infinity, alignment: .leading)

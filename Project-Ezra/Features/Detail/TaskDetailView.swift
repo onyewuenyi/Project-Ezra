@@ -59,6 +59,9 @@ struct TaskDetailView: View {
     @State private var showAddPerson = false
     @State private var newPersonName = ""
     @State private var appeared = false
+    /// One "offered" record per page VISIT — reset when the pager swipes away, so
+    /// coming back counts as a fresh offer while idle re-renders count as nothing.
+    @State private var offersRecorded = false
     @State private var actionPulse = 0
     @State private var showAllActivity = false
     /// Set when Unstick routes the user into the breakdown card, so the section can
@@ -122,6 +125,7 @@ struct TaskDetailView: View {
             if isActive, capabilities.contains(.thinkingPartner) {
                 ModelWarmup.prewarmSharedSession()
             }
+            if isActive { recordCapabilityOffers() }
             // Work changes shape. A parent whose last step just completed elsewhere is
             // no longer planning work, and nothing else would notice — resolution
             // happens on rows, in Today, and on other devices, none of which can run an
@@ -150,6 +154,12 @@ struct TaskDetailView: View {
                 // Same reasoning for model work: the user has left this task, so a
                 // classification still running is spend with nobody waiting on it.
                 classifyWork?.cancel()
+                // Leaving ends the visit; swiping back is a fresh offer.
+                offersRecorded = false
+            } else {
+                // `.task` ran at mount, when a pager neighbour wasn't active yet —
+                // becoming the page on screen is the moment the cards become an offer.
+                recordCapabilityOffers()
             }
         }
         .onDisappear {
@@ -501,18 +511,20 @@ struct TaskDetailView: View {
             UnstickView(
                 diagnosis: diagnosis,
                 deferralCount: Int(task.deferralCount),
-                onBreakDown: { showBreakdown = true },
+                onBreakDown: { unstickActed { showBreakdown = true } },
                 // A human accepting the card's suggestion, so it escalates the axis-3
                 // flag (Decision is no longer a work-intent) — forced-top ranking, the
                 // decision section, and the Thinking Partner all follow from the flag.
                 // `touchHuman` keeps the Unstick rule: every action clears the stall.
                 onMakeDecision: {
-                    task.escalateToDecision()
-                    task.touchHuman()
+                    unstickActed {
+                        task.escalateToDecision()
+                        task.touchHuman()
+                    }
                 },
-                onDoItNow: { applyStatus(.doing) },
-                onDefer: { setDue(dayOffset: 7) },
-                onKill: { applyStatus(.canceled) }
+                onDoItNow: { unstickActed { applyStatus(.doing) } },
+                onDefer: { unstickActed { setDue(dayOffset: 7) } },
+                onKill: { unstickActed { applyStatus(.canceled) } }
             )
         }
     }
@@ -522,8 +534,37 @@ struct TaskDetailView: View {
     /// `proposed` is the full set the model offered, so each deselection is recorded as
     /// a `Correction` — the user telling the classifier it over-reached is exactly the
     /// signal the correction loop wants, and it exists nowhere else.
+    /// Record each capability the page is actually SHOWING as an offer — mirroring the
+    /// render gates, so an off-device breakdown (omitted whole) never counts as offered.
+    /// The telemetry answers "does anyone use these cards?"; counting cards nobody was
+    /// shown would answer a different, flattering question.
+    /// Every Unstick action funnels here: one "acted" record, then the move itself.
+    private func unstickActed(_ action: () -> Void) {
+        CapabilityMetrics.shared.recordActed(.unstick)
+        action()
+    }
+
+    private func recordCapabilityOffers() {
+        guard !offersRecorded else { return }
+        offersRecorded = true
+        for capability in capabilities {
+            switch capability {
+            case .thinkingPartner:
+                let flagged = task.needsDecision && !task.status.isResolved
+                if flagged || modelAvailable {
+                    CapabilityMetrics.shared.recordOffered(.thinkingPartner)
+                }
+            case .breakDown:
+                if modelAvailable { CapabilityMetrics.shared.recordOffered(.breakDown) }
+            case .unstick:
+                CapabilityMetrics.shared.recordOffered(.unstick)
+            }
+        }
+    }
+
     private func accept(_ steps: [BreakdownStep], proposed: [BreakdownStep]) {
         guard !steps.isEmpty else { return }
+        CapabilityMetrics.shared.recordActed(.breakDown)
         actionPulse += 1
         Motion.withMotion(Motion.decide) {
             task.splitInto(steps, in: context)
@@ -591,9 +632,10 @@ struct TaskDetailView: View {
     /// knowing why any of it was offered.
     ///
     /// The Thinking Partner appears when the task is a genuine decision (the
-    /// `needsDecision` flag OR a `.decision` work-intent). A flagged decision shows the
-    /// full card (reason + "Mark decided" + framing); an intent-only decision shows the
-    /// lighter card (framing, no flag fabricated, no clear button).
+    /// `needsDecision` flag OR choice-shaped wording — `DecisionShape`). A flagged
+    /// decision shows the full card (reason + "Mark decided" + framing); a
+    /// wording-only decision shows the lighter card (framing, no flag fabricated,
+    /// no clear button).
     @ViewBuilder
     private var decisionSection: some View {
         let flagged = task.needsDecision && !task.status.isResolved
