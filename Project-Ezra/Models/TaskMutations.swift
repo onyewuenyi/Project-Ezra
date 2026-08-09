@@ -736,14 +736,31 @@ extension TaskItem {
     }
 
     /// The human explicitly making a judgment call, logged for the Inbox feed — the
-    /// UI counterpart to `resolveDecision()` (which had no surface until now). Undo
-    /// re-escalates. Only clears the flag (`resolveDecision`), nothing else.
-    func resolveDecisionAndLog(in context: NSManagedObjectContext, now: Date = Date()) {
+    /// UI counterpart to `resolveDecision()`. Undo re-escalates.
+    ///
+    /// `choice` is WHAT was decided — the option the user tapped on the Thinking
+    /// Partner. Before this, the answer was discarded: the trail said "you decided
+    /// something" and the something was gone (the July finding, aggravated once the
+    /// framing started naming a Best fit). The choice now lands in the entry's
+    /// `detail` AND on the task's notes — the outcome lives on the task, not only in
+    /// the trail. The exact appended line rides `newValue` so the undo arm can strip
+    /// precisely it (undo-completeness: an arm restores every field its action wrote).
+    func resolveDecisionAndLog(
+        in context: NSManagedObjectContext, now: Date = Date(), choice: String? = nil
+    ) {
         resolveDecision(now: now)
+        var appendedLine: String?
+        if let choice, !choice.isEmpty {
+            let line = "Decided → \(choice)"
+            appendedLine = line
+            notes = notes.map { $0.isEmpty ? line : $0 + "\n" + line } ?? line
+        }
         context.insert(
             ChangeLogEntry(
                 summary: "Decided “\(title)”",
+                detail: choice.map { "Chose: \($0)" },
                 action: "decided",
+                newValue: appendedLine,
                 initiatedBy: .human,
                 isReversible: true,
                 taskTitle: title,

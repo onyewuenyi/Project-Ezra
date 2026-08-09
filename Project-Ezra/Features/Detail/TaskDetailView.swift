@@ -666,7 +666,22 @@ struct TaskDetailView: View {
                 }
                 if modelAvailable {
                     ThinkingPartnerView(
-                        context: DecisionContext(task: task, among: allTasks), isActive: isActive)
+                        context: DecisionContext(task: task, among: allTasks),
+                        isActive: isActive,
+                        // Flagged: deciding happens on the option, and the answer is
+                        // kept. Wording-only: the one escalation, pin-to-top (a human
+                        // act through the same seam Unstick's folded rung used).
+                        onDecide: flagged ? { choice in markDecided(choice: choice) } : nil,
+                        onEscalate: flagged
+                            ? nil
+                            : {
+                                actionPulse += 1
+                                Motion.withMotion(Motion.decide) {
+                                    task.escalateToDecision()
+                                    task.touchHuman()
+                                }
+                                context.saveChanges()
+                            })
                 }
                 if flagged {
                     Button {
@@ -703,9 +718,11 @@ struct TaskDetailView: View {
             : "Ezra wasn't confident enough to file this cleanly. Take a look and set it straight."
     }
 
-    private func markDecided() {
+    private func markDecided(choice: String? = nil) {
         actionPulse += 1
-        Motion.withMotion(Motion.decide) { task.resolveDecisionAndLog(in: context) }
+        Motion.withMotion(Motion.decide) {
+            task.resolveDecisionAndLog(in: context, choice: choice)
+        }
         context.saveChanges()
     }
 

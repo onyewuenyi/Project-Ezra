@@ -103,6 +103,32 @@ struct InboxFeedTests {
         #expect(task.needsDecision)
     }
 
+    @Test("Deciding WITH a choice keeps the answer — log detail, notes line, undo-complete")
+    func decidedChoiceIsKept() throws {
+        let context = context()
+        let task = TaskItem(
+            title: "Switch insurance?", status: .todo, confidence: 0.95, isJudgmentCall: true,
+            needsDecision: true)
+        task.notes = "Compare by Friday"
+        context.insert(task)
+
+        task.resolveDecisionAndLog(in: context, choice: "Switch providers")
+        #expect(!task.needsDecision)
+        // The outcome lives ON the task, not only in the trail…
+        #expect(task.notes == "Compare by Friday\nDecided → Switch providers")
+
+        let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
+        let decided = try #require(entries.first { $0.action == "decided" })
+        // …and the trail says WHAT was chosen, not just that something was.
+        #expect(decided.detail == "Chose: Switch providers")
+
+        // Undo restores every field the action wrote: the flag comes back AND exactly
+        // the appended line leaves the notes — the user's own note survives.
+        ChangeLogUndo.revert(decided, in: context)
+        #expect(task.needsDecision)
+        #expect(task.notes == "Compare by Friday")
+    }
+
     @Test("A 'filed' entry is informational — no Undo button, so no false rejection signal")
     func filedIsNotReversible() throws {
         let context = context()

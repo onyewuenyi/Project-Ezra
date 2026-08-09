@@ -22,6 +22,13 @@ struct ThinkingPartnerView: View {
     /// MOUNTED, so `.onDisappear` never fires for a swiped-past page — this is the only
     /// signal that the user has moved on, and an in-flight generation must stop.
     var isActive: Bool = true
+    /// Deciding happens ON the option (the recommendation is the decision surface):
+    /// present only for FLAGGED tasks, where there is an open decision to resolve.
+    /// The framing itself never executes anything — these are the human's taps.
+    var onDecide: ((String) -> Void)? = nil
+    /// Wording-only tasks (no flag) instead get one quiet escalation: pin the task to
+    /// the top of the stack as a visible decision. Same human seam Unstick used.
+    var onEscalate: (() -> Void)? = nil
 
     @State private var phase: Phase = .idle
     @State private var work: Task<Void, Never>?
@@ -113,6 +120,16 @@ struct ThinkingPartnerView: View {
                         Text(option.label)
                             .font(.controlLabel)
                             .foregroundStyle(Palette.primaryText)
+                        // The decision surface IS the option list: one tap resolves
+                        // the flag and records WHICH option won. Quiet by design —
+                        // the emphasized affordance lives on the Best fit below.
+                        if let onDecide {
+                            Spacer(minLength: Spacing.xs)
+                            Button("Decide") { onDecide(option.label) }
+                                .font(.controlLabel)
+                                .foregroundStyle(Palette.accentFlat)
+                                .buttonStyle(.pressableLink)
+                        }
                     }
                     Text(option.tradeoff)
                         .supportingStyle()
@@ -133,6 +150,18 @@ struct ThinkingPartnerView: View {
                         Text("Best fit · \(best.label)")
                             .font(.controlLabel)
                             .foregroundStyle(Palette.primaryText)
+                        // The pre-highlighted default — one tap from recommendation to
+                        // resolution, never auto-executed. The human decides.
+                        if let onDecide {
+                            Spacer(minLength: Spacing.xs)
+                            Button("Decide this") { onDecide(best.label) }
+                                .font(.controlLabel)
+                                .foregroundStyle(Palette.onAccent)
+                                .padding(.horizontal, Spacing.sm)
+                                .padding(.vertical, 3)
+                                .background(Palette.accentFlat, in: Capsule())
+                                .buttonStyle(.pressableLink)
+                        }
                     }
                     if !best.why.isEmpty {
                         Text(best.why)
@@ -141,6 +170,20 @@ struct ThinkingPartnerView: View {
                             .padding(.leading, Spacing.md)
                     }
                 }
+                .padding(.top, Spacing.xxs)
+            }
+            // Wording-only tasks (no open flag) get the escalation instead: pin it to
+            // the top of the stack as a visible decision — the power Unstick's folded
+            // choice rung used to carry, now living where the choice is framed.
+            if onDecide == nil, let onEscalate {
+                Button {
+                    onEscalate()
+                } label: {
+                    Label("Pin to top as a decision", systemImage: "pin")
+                        .font(.controlLabel)
+                        .foregroundStyle(Palette.accentFlat)
+                }
+                .buttonStyle(.pressableLink)
                 .padding(.top, Spacing.xxs)
             }
             if !framing.costOfWaiting.isEmpty {

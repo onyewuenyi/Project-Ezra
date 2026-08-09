@@ -104,8 +104,16 @@ enum ChangeLogUndo {
             let previous = TaskItem.decodeOwnership(entry.oldValue)
             task.claim(ownerID: previous.ownerID, among: fetchAll(in: context), origin: previous.origin)
         case "decided":
-            // The human's "Mark decided" re-escalates to the open decision.
+            // The human's "Mark decided" re-escalates to the open decision — and if the
+            // decide carried a CHOICE, the exact appended notes line comes back out
+            // (undo-completeness: the action wrote it, so the arm removes it). Spare a
+            // note the user has since rewritten: strip only an exact-line match.
             task.escalateToDecision()
+            if let appendedLine = entry.newValue, let notes = task.notes {
+                let lines = notes.components(separatedBy: "\n").filter { $0 != appendedLine }
+                let restored = lines.joined(separator: "\n")
+                task.notes = restored.isEmpty ? nil : restored
+            }
         case "unblocked":
             // Restore every edge the force-unblock dropped — tracked and external, human
             // and inferred alike — through the graph's own write primitive so the DEBUG
