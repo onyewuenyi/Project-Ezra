@@ -108,14 +108,21 @@ struct TaskDetailView: View {
                 descriptionSection.rise(5, appeared, reduceMotion)
                 whySection.rise(6, appeared, reduceMotion)
                 activitySection.rise(7, appeared, reduceMotion)
-                // Conditioned here rather than inside `footer` so a task with no
-                // honest next move (a reference, or someone else's work) doesn't
-                // leave the VStack holding spacing for an absent button.
-                if let action = task.recommendedAction(among: allTasks, currentUserID: currentUserID) {
-                    footer(action).rise(6, appeared, reduceMotion)
-                }
             }
             .padding(Spacing.lg)
+        }
+        // The recommended action stays persistently available — a product decision,
+        // not a layout preference: on exactly the busy tasks where guidance matters
+        // (decision card + breakdown + unstick + timeline), the one accented control
+        // must not scroll out of reach. Conditioned here so a task with no honest
+        // next move (someone else's work) collapses the inset entirely, and hidden
+        // while a field is being edited — a pinned CTA over the keyboard is noise.
+        .safeAreaInset(edge: .bottom) {
+            if focusedField == nil,
+                let action = task.recommendedAction(among: allTasks, currentUserID: currentUserID)
+            {
+                footer(action)
+            }
         }
         .background(Palette.background)
         .scrollDismissesKeyboard(.interactively)
@@ -129,6 +136,10 @@ struct TaskDetailView: View {
                 ModelWarmup.prewarmSharedSession()
             }
             if isActive { recordCapabilityOffers() }
+            // A task re-entered mid-flight gets its first move too — the commitment is
+            // still live, and the bar it renders in is now always on screen. Bounded
+            // (60-token cap) and silent on any non-success, like the tap path.
+            if isActive, task.status == .doing, kickoffStep == nil { fetchKickoff() }
             // Work changes shape. A parent whose last step just completed elsewhere is
             // no longer planning work, and nothing else would notice — resolution
             // happens on rows, in Today, and on other devices, none of which can run an
@@ -164,6 +175,7 @@ struct TaskDetailView: View {
                 // `.task` ran at mount, when a pager neighbour wasn't active yet —
                 // becoming the page on screen is the moment the cards become an offer.
                 recordCapabilityOffers()
+                if task.status == .doing, kickoffStep == nil { fetchKickoff() }
             }
         }
         .onDisappear {
@@ -820,6 +832,9 @@ struct TaskDetailView: View {
     /// someone else resolves to nil upstream — better no button than the most accented
     /// control on screen offering something that isn't the user's to do. Its proxy
     /// actions live in `TaskMoreMenu`.
+    /// The pinned action bar: solid surface (glass never carries primary text), a
+    /// full-bleed top hairline, and the kickoff line riding under the button — the
+    /// user's eyes are already there when it lands.
     private func footer(_ action: RecommendedAction) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             Button {
@@ -853,6 +868,14 @@ struct TaskDetailView: View {
                 }
                 .transition(.opacity)
             }
+        }
+        .padding(.horizontal, Spacing.lg)
+        .padding(.top, Spacing.sm)
+        .padding(.bottom, Spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.background)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Palette.border).frame(height: 0.5)
         }
     }
 
