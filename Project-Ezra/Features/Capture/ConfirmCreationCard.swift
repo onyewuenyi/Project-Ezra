@@ -224,12 +224,12 @@ struct ConfirmCreationCard: View, Equatable {
                 // vanish at commit. Recede-but-live is a promise the commit can't keep;
                 // one tap on "Keep both" brings them back.
                 Group {
-                    kindChip
                     categoryChip
                     dueChip
                     ownerChip
                     urgentChip
                     effortChip
+                    kindChip
                     if draft.blockedBy != nil { blockerChip }
                     ForEach(draft.blocks, id: \.id) { dependent in
                         dependentChip(dependent)
@@ -412,10 +412,11 @@ struct ConfirmCreationCard: View, Equatable {
     /// What KIND of work this is (axis 2). It leads the row on purpose: "what sort of
     /// thing is this" reads ahead of "what area of life does it belong to".
     ///
-    /// It is here at all because this classification is not cosmetic — it voices the
-    /// detail's primary CTA and decides which capability the task is offered. Stamping
-    /// it silently at commit made a field with real consequences the only one the
-    /// confirm glance didn't show.
+    /// Present because the classification is still consequential — it biases the
+    /// breakdown's planning rung and is a learnable correction field — but DEMOTED to
+    /// the end of the row (2026-08-08): it no longer voices the CTA or gates any
+    /// capability (Decision retired from axis 2; the partner keys on flag/wording).
+    /// Presence, not primacy — first position belongs to category · due · owner.
     private var kindChip: some View {
         Menu {
             ForEach(WorkIntent.allCases) { intent in

@@ -47,9 +47,19 @@ struct UnstickView: View {
                     .foregroundStyle(Palette.primaryText)
             }
 
-            Text(narrated ?? diagnosis.headline(deferralCount: deferralCount))
+            // The voice ADDS a line, never replaces one: the template headline is
+            // stable ground the user may already be reading — swapping text under a
+            // reader is the one thing calm software doesn't do. The narrated
+            // specifics fade in beneath.
+            Text(diagnosis.headline(deferralCount: deferralCount))
                 .supportingStyle()
                 .fixedSize(horizontal: false, vertical: true)
+            if let narrated {
+                Text(narrated)
+                    .supportingStyle()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
+            }
 
             actions
         }
