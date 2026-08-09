@@ -76,8 +76,18 @@ enum StallDetector {
     /// Suppressed for a task that already carries `needsDecision`: the decision section
     /// is already saying something more specific, and two cards competing to explain the
     /// same task is exactly the clutter the surface refuses.
+    /// - Parameter suppressChoiceRung: **one intervention per problem.** The same
+    ///   lexicon that fires `.reallyADecision` also summons the Thinking Partner, so
+    ///   whenever the partner card is actually VISIBLE this rung is a duplicate —
+    ///   the same advice twice, the clutter the tooBig subsumption exists to prevent.
+    ///   The caller (the render layer, which knows whether the partner is drawn —
+    ///   absence is a render-layer decision) passes `true` to fold the rung through
+    ///   to the next diagnosis. Off-device, where the partner card isn't drawn, the
+    ///   default keeps the escalate arm alive. A pure parameter; the trigger stays
+    ///   view-free.
     static func diagnose(
-        _ task: TaskItem, among tasks: [TaskItem], now: Date = Date()
+        _ task: TaskItem, among tasks: [TaskItem], now: Date = Date(),
+        suppressChoiceRung: Bool = false
     ) -> StallDiagnosis? {
         guard task.status.isLive else { return nil }
         guard !(task.needsDecision && !task.status.isResolved) else { return nil }
@@ -87,7 +97,7 @@ enum StallDetector {
         // do something about; `dying` is the honest fallback when none applies.
         if task.hasActiveBlockers(among: tasks) { return .blocked }
         if let reason = BreakdownEligibility.evaluate(task, among: tasks) { return .tooBig(reason) }
-        if readsAsDecision(task) { return .reallyADecision }
+        if !suppressChoiceRung, readsAsDecision(task) { return .reallyADecision }
         return .dying
     }
 

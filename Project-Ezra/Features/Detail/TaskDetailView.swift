@@ -601,9 +601,15 @@ struct TaskDetailView: View {
         context.saveChanges()
     }
 
-    /// Everything this task is offered, computed once per body evaluation.
+    /// Everything this task is offered, computed once per body evaluation. The render
+    /// layer tells the trigger whether the partner card is actually drawn (flag path,
+    /// or wording + model), so Unstick's choice rung folds when it would duplicate it
+    /// — and survives off-device, where the partner card that replaces it is absent.
     private var capabilities: [Capability] {
-        TaskCapabilities.available(for: task, among: allTasks)
+        let partnerVisible =
+            (task.needsDecision && !task.status.isResolved) || modelAvailable
+        return TaskCapabilities.available(
+            for: task, among: allTasks, partnerCardVisible: partnerVisible)
     }
 
     /// Whether a model exists to produce card CONTENT. The capability triggers stay

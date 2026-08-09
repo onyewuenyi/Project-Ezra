@@ -251,4 +251,30 @@ struct CapabilityTests {
         // The worked-but-unfinished counter answers a different question and survives.
         #expect(task.carriedOverCount == 0)
     }
+    @Test("One intervention per problem: with the partner card visible, the choice rung folds")
+    func choiceRungFoldsUnderPartner() {
+        let context = context()
+        // Choice-worded, stalled (quiet past the threshold), unblocked, not flagged —
+        // the exact task that used to get the same advice twice.
+        let task = task("Decide whether to switch schools", in: context)
+        task.deferralCount = 4
+
+        let capabilities = TaskCapabilities.available(
+            for: task, among: [task], partnerCardVisible: true)
+        #expect(capabilities.contains(.thinkingPartner))
+        #expect(capabilities.contains(.unstick(.dying)))  // folded through, card survives
+        #expect(!capabilities.contains(.unstick(.reallyADecision)))
+    }
+
+    @Test("Off-device (partner not drawn) the choice rung survives — the escalate arm stays")
+    func choiceRungSurvivesWithoutPartner() {
+        let context = context()
+        let task = task("Decide whether to switch schools", in: context)
+        task.deferralCount = 4
+
+        let capabilities = TaskCapabilities.available(
+            for: task, among: [task], partnerCardVisible: false)
+        #expect(capabilities.contains(.unstick(.reallyADecision)))
+    }
 }
+

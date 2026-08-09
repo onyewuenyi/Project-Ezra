@@ -53,8 +53,14 @@ enum TaskCapabilities {
     /// - Parameters:
     ///   - tasks: the working set, for the has-children and blocked checks.
     ///   - now: injected so the staleness half of the stall trigger is testable.
+    ///   - partnerCardVisible: whether the Thinking Partner card will actually be
+    ///     DRAWN (the flag path, or wording + a model to frame with). The render
+    ///     layer owns that answer; passing it here keeps the one-intervention-per-
+    ///     problem rule pure — Unstick's choice rung folds through when the partner
+    ///     is already saying the same thing.
     static func available(
-        for task: TaskItem, among tasks: [TaskItem] = [], now: Date = Date()
+        for task: TaskItem, among tasks: [TaskItem] = [], now: Date = Date(),
+        partnerCardVisible: Bool = false
     ) -> [Capability] {
         // Nothing is offered on a settled task. The other two triggers guard this
         // themselves, but the decision arm cannot: `workIntent` is axis 2 and survives
@@ -70,7 +76,8 @@ enum TaskCapabilities {
         if task.needsDecision || DecisionShape.reads(title: task.title) {
             capabilities.append(.thinkingPartner)
         }
-        let diagnosis = StallDetector.diagnose(task, among: tasks, now: now)
+        let diagnosis = StallDetector.diagnose(
+            task, among: tasks, now: now, suppressChoiceRung: partnerCardVisible)
 
         // A big task that is ALSO stalled gets one card, not two. Unstick subsumes the
         // breakdown here and routes into it, because the useful thing to say is *why*
