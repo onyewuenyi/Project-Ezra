@@ -39,5 +39,9 @@ struct RambleEvalTests {
         #expect(report.owner.rate >= 0.60, "owner extraction regressed: \(report.owner.display)")
         #expect(report.blocked.rate >= 0.95, "blocker detection regressed: \(report.blocked.display)")
         #expect(report.due.rate >= 0.95, "due detection regressed: \(report.due.display)")
+        // Kind is INTERNAL (no user correction exists since 2026-08-11), so this floor
+        // is the field's whole trust story — an AI-owned field earns trust through
+        // evaluation, not invisibility. Observed 11/11 on the labeled subset.
+        #expect(report.kind.rate >= 0.90, "kind classification regressed: \(report.kind.display)")
     }
 }

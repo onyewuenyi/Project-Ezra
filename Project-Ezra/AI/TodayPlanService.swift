@@ -91,6 +91,11 @@ enum TodayPlanInstructions {
         matters today, put it in priority order, and keep it to only what's worth
         doing — a short, honest plan beats a long one.
 
+        The candidate list is already in the system's current priority order — built
+        from deadlines, blockers, relevance, and the person's explicit urgency
+        signals. Treat that ordering as a strong prior; deviate when the facts
+        justify it.
+
         Return: a one-line headline; the chosen actions (each a task id from the list
         plus one grounded line); the tradeoff (what you're setting aside and why); and
         the risks (what's overdue, blocked, or undecided that could bite).
@@ -101,6 +106,14 @@ enum TodayPlanInstructions {
         - Reason only from the given facts (due/overdue, blocks, decision, effort).
         - If a task is marked "in progress", the person already committed to it —
           prefer finishing that over starting something new.
+        - "planning work" means the task needs approach-forming rather than direct
+          execution. Compose a day that makes progress — concrete actions carry
+          momentum, and a planning task is best placed where there is room to think.
+          This is a consideration, not a rule; choose several planning tasks when the
+          candidates genuinely warrant it.
+        - "set aside N×" means the task has resisted execution enough to deserve
+          deliberate reconsideration — consider naming one such task. Never treat it
+          as a demand to re-plan it, and never scold.
         - Plain and steady. No pep talk, no exclamation marks, no emoji.
         """
 }

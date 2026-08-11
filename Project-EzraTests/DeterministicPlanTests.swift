@@ -72,3 +72,44 @@ struct DeterministicPlanTests {
         #expect(req.fallbackCount == 3)  // default 5, clamped to 3 candidates
     }
 }
+
+@MainActor
+@Suite("Advisor-only facts — internal signals never become UI")
+struct PromptOnlyFactsTests {
+
+    private func snapshot(
+        intent: WorkIntent? = nil, deferrals: Int32 = 0
+    ) -> PlanTaskSnapshot {
+        let context = TestStore.makeContext()
+        let task = TaskItem(title: "Sort the garage", status: .todo, in: context)
+        task.workIntent = intent
+        task.deferralCount = deferrals
+        return PlanTaskSnapshot.from(task, among: [task], now: Date())!
+    }
+
+    @Test("Planning classification reaches the advisor prompt, never the display line")
+    func planningIsPromptOnly() {
+        let snap = snapshot(intent: .planning)
+        #expect(snap.promptOnlyFacts == ["planning work"])
+        #expect(!snap.factLine.contains("planning"))
+        #expect(snap.promptLine(index: 1).contains("planning work"))
+    }
+
+    @Test("Deferral is a bounded band: 2 and 3 speak, 1 and 4+ stay silent")
+    func deferralBandIsBounded() {
+        #expect(snapshot(deferrals: 1).promptOnlyFacts == nil)
+        #expect(snapshot(deferrals: 2).promptOnlyFacts == ["set aside 2×"])
+        #expect(snapshot(deferrals: 3).promptOnlyFacts == ["set aside 3×"])
+        // 4+ is StallDiagnosis/Unstick territory — the advisor never sees escalating
+        // pressure, so defer → re-plan → defer can't become a loop.
+        #expect(snapshot(deferrals: 4).promptOnlyFacts == nil)
+        #expect(!snapshot(deferrals: 4).promptLine(index: 1).contains("set aside"))
+    }
+
+    @Test("An action task with no deferrals carries no internal signals at all")
+    func cleanTaskHasNone() {
+        let snap = snapshot(intent: .action)
+        #expect(snap.promptOnlyFacts == nil)
+        #expect(snap.promptLine(index: 1) == "1. [\(snap.id.uuidString)] Sort the garage")
+    }
+}

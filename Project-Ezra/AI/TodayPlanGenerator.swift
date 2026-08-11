@@ -39,7 +39,14 @@ struct PlanTaskSnapshot: Sendable, Codable, Hashable {
     /// Titles of the open tasks that wait on this one (the reverse edge).
     let blocksTitles: [String]
     let effortMinutes: Int?
+    /// The DISPLAY facts — user-visible: they back the deterministic fallback's line
+    /// and the validated backfill. Calm, observable, never machinery.
     let facts: [String]
+    /// Advisor-only facts — internal reasoning signals the model may weigh but the
+    /// user never sees ("planning work", "set aside N×"). Internal signals must not
+    /// become accidental UI just because the system reasons about them. Optional so
+    /// day-cache rows written before this decode as nil (no shape break).
+    let promptOnlyFacts: [String]?
 
     /// Build a snapshot from a live task, computing its observable facts against the
     /// working set and an injected `now`. Nil when the task has no stable id.
@@ -69,18 +76,33 @@ struct PlanTaskSnapshot: Sendable, Codable, Hashable {
         for title in blocksTitles { facts.append("blocks ‘\(title)’") }
         if let effort = task.effortMinutes, effort > 0 { facts.append("~\(effort) min") }
 
+        // Advisor-only signals. "planning work" = axis 2's internal classification
+        // (a signal for composing the day, never a quota). The deferral fact is a
+        // BOUNDED intervention: only the 2–3 band reaches the advisor — 0–1 is normal
+        // ranking, and 4+ is StallDiagnosis/Unstick territory, so escalating advisor
+        // pressure never becomes a defer → re-plan → defer loop.
+        var promptOnly: [String] = []
+        if task.workIntent == .planning { promptOnly.append("planning work") }
+        if (2...3).contains(task.deferralCount) {
+            promptOnly.append("set aside \(task.deferralCount)×")
+        }
+
         return PlanTaskSnapshot(
             id: id, title: task.title, category: task.category, dueDate: task.dueDate,
             overdueDays: overdueDays, needsDecision: needsDecision, blocksTitles: blocksTitles,
-            effortMinutes: task.effortMinutes, facts: facts)
+            effortMinutes: task.effortMinutes, facts: facts,
+            promptOnlyFacts: promptOnly.isEmpty ? nil : promptOnly)
     }
 
-    /// The facts as one calm line — the deterministic fallback's per-action line.
+    /// The DISPLAY facts as one calm line — the deterministic fallback's per-action
+    /// line. Reads `facts` only, never the advisor-only signals.
     var factLine: String { facts.joined(separator: " · ") }
 
-    /// The prompt row: `1. [uuid] Title — due today · ~15 min`.
+    /// The prompt row: `1. [uuid] Title — due today · ~15 min · planning work`.
+    /// The advisor sees display facts PLUS the internal signals.
     func promptLine(index: Int) -> String {
-        let suffix = facts.isEmpty ? "" : " — \(factLine)"
+        let promptFacts = facts + (promptOnlyFacts ?? [])
+        let suffix = promptFacts.isEmpty ? "" : " — \(promptFacts.joined(separator: " · "))"
         return "\(index). [\(id.uuidString)] \(title)\(suffix)"
     }
 }

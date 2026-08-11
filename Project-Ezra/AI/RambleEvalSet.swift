@@ -30,6 +30,10 @@ enum RambleEval {
         var judgment: Bool = false
         var owner: String? = nil
         var blocked: Bool = false
+        /// The kind the pipeline should classify (axis 2, INTERNAL since 2026-08-11 —
+        /// no user correction exists, so this floor is the field's whole trust story).
+        /// Nil = unlabeled, unscored; label where the reading is unambiguous.
+        var kind: WorkIntent? = nil
         /// True when the pipeline should land a date — either because the utterance says
         /// one, or because the task's own nature carries a real deadline the user rarely
         /// bothers to speak (rent, a renewal, a filing). The second kind is
@@ -51,17 +55,17 @@ enum RambleEval {
         EvalCase(
             utterance: "renew my passport",
             expected: [
-                ExpectedTask(titleContains: ["passport"], category: "Travel", expectDue: true)
+                ExpectedTask(titleContains: ["passport"], category: "Travel", kind: .action, expectDue: true)
             ]),
         EvalCase(
             utterance: "pay the water bill",
             expected: [
-                ExpectedTask(titleContains: ["water bill"], category: "Finance", expectDue: true)
+                ExpectedTask(titleContains: ["water bill"], category: "Finance", kind: .action, expectDue: true)
             ]),
         EvalCase(
             utterance: "call mom back",
             expected: [
-                ExpectedTask(titleContains: ["mom"], category: "Family")
+                ExpectedTask(titleContains: ["mom"], category: "Family", kind: .action)
             ]),
         EvalCase(
             utterance: "pick up the dry cleaning",
@@ -71,7 +75,7 @@ enum RambleEval {
         EvalCase(
             utterance: "schedule a dentist appointment",
             expected: [
-                ExpectedTask(titleContains: ["dentist"], category: "Health")
+                ExpectedTask(titleContains: ["dentist"], category: "Health", kind: .action)
             ]),
         EvalCase(
             utterance: "oil change is overdue",
@@ -86,7 +90,7 @@ enum RambleEval {
         EvalCase(
             utterance: "finish the Q3 deck",
             expected: [
-                ExpectedTask(titleContains: ["deck"], category: "Work")
+                ExpectedTask(titleContains: ["deck"], category: "Work", kind: .action)
             ]),
         EvalCase(
             utterance: "return the amazon package",
@@ -96,7 +100,7 @@ enum RambleEval {
         EvalCase(
             utterance: "book a haircut",
             expected: [
-                ExpectedTask(titleContains: ["haircut"], category: "Personal")
+                ExpectedTask(titleContains: ["haircut"], category: "Personal", kind: .action)
             ]),
         EvalCase(
             utterance: "renew car registration at the dmv",
@@ -116,7 +120,7 @@ enum RambleEval {
         EvalCase(
             utterance: "buy groceries",
             expected: [
-                ExpectedTask(titleContains: ["groceries"], category: "Home")
+                ExpectedTask(titleContains: ["groceries"], category: "Home", kind: .action)
             ]),
         EvalCase(
             utterance: "email the client about the invoice",
@@ -143,17 +147,17 @@ enum RambleEval {
         EvalCase(
             utterance: "should I quit the gym",
             expected: [
-                ExpectedTask(titleContains: ["gym"], judgment: true)
+                ExpectedTask(titleContains: ["gym"], judgment: true, kind: .planning)
             ]),
         EvalCase(
             utterance: "figure out if the side project is still worth it",
             expected: [
-                ExpectedTask(titleContains: ["side project"], judgment: true)
+                ExpectedTask(titleContains: ["side project"], judgment: true, kind: .planning)
             ]),
         EvalCase(
             utterance: "decide whether to switch schools",
             expected: [
-                ExpectedTask(titleContains: ["schools"], judgment: true)
+                ExpectedTask(titleContains: ["schools"], judgment: true, kind: .planning)
             ]),
         EvalCase(
             utterance: "cancel the streaming subscription",
@@ -180,7 +184,7 @@ enum RambleEval {
         EvalCase(
             utterance: "book flights after passport is done",
             expected: [
-                ExpectedTask(titleContains: ["flights"], category: "Travel", blocked: true)
+                ExpectedTask(titleContains: ["flights"], category: "Travel", blocked: true, kind: .action)
             ]),
         EvalCase(
             utterance: "send the deck once the numbers are final",
@@ -368,6 +372,7 @@ enum RambleEval {
         var owner = Score()
         var blocked = Score()
         var due = Score()
+        var kind = Score()
         var caseCount = 0
 
         var table: String {
@@ -381,6 +386,7 @@ enum RambleEval {
             owner         \(owner.display)
             blocked       \(blocked.display)
             due           \(due.display)
+            kind          \(kind.display)
             ────────────────────────────────────────────────
 
             """
@@ -431,6 +437,9 @@ enum RambleEval {
                 }
                 score(&report.blocked, "blocked", (draft.blockedBy != nil) == expected.blocked)
                 score(&report.due, "due", (draft.dueDate != nil) == expected.expectDue)
+                if let expectedKind = expected.kind {
+                    score(&report.kind, "kind", draft.workIntent == expectedKind)
+                }
             }
         }
         return report
