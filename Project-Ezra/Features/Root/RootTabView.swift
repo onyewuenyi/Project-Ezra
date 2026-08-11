@@ -333,6 +333,20 @@ struct RootTabView: View {
         print("=== CAPTURE DIAGNOSTICS ===")
         print("engine: \(brain.status.description)")
         print("input: \(ramble.count) chars")
+        // The provisional arm FIRST — it is what the user now sees, and the gap
+        // between these two numbers is the whole instant-capture claim, in one
+        // re-runnable line. Also printed at three input lengths, because the
+        // coalesce window is tuned on how this scales, not on how it reads once.
+        for cut in [ramble.count / 3, (ramble.count * 2) / 3, ramble.count] {
+            let slice = String(ramble.prefix(cut))
+            let started = Date()
+            let provisional = AppBrain.provisionalDrafts(slice)
+            let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+            print(
+                "provisional @\(cut) chars: \(provisional.count) drafts · \(elapsed)ms "
+                    + "· owners \(provisional.compactMap(\.ownerName).count) "
+                    + "· dated \(provisional.compactMap(\.dueDate).count)")
+        }
         let started = Date()
         let drafts = await brain.triage(ramble).drafts
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)

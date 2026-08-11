@@ -265,6 +265,17 @@ final class ModelMetrics {
         /// evidence chunking and context budgets are designed against.
         var lastPromptTokens = -1
         var lastContextSize = -1
+        /// Text change → a card on screen, for the FIRST card of a capture. The
+        /// instant-capture claim, measured: nothing measured it before, and the
+        /// deterministic branch recorded nothing at all. `source` names the producer
+        /// ("prov"/"partial"/"model") — a drift back to "model" is the signal the
+        /// provisional pass has broken.
+        var lastFirstCardMs = -1
+        var lastFirstCardSource: String?
+        /// One provisional pass's cost — segmentation + resolve + owner proposal, on
+        /// the thread the keyboard shares. The number the coalesce window is tuned on.
+        var lastProvisionalMs = -1
+        var provisionalPasses = 0
 
         var calls: Int { successes + salvaged + timeouts + failures }
         /// Calls that put usable output in front of the user, however they got there.
@@ -345,6 +356,24 @@ final class ModelMetrics {
         stats[feature] = entry
     }
 
+    /// Time-to-first-card for a capture, recorded at the ONE place cards reach the
+    /// screen. In-memory like the parse-shape trio: it tunes in-session behavior and
+    /// the record path already pays five synchronous defaults writes.
+    func recordCapturePaint(firstCardMs: Int, source: String) {
+        var entry = stats[.captureTriage] ?? Stats()
+        entry.lastFirstCardMs = firstCardMs
+        entry.lastFirstCardSource = source
+        stats[.captureTriage] = entry
+    }
+
+    /// One provisional pass's own cost — the evidence behind the coalesce window.
+    func recordProvisionalPass(latencyMs: Int) {
+        var entry = stats[.captureTriage] ?? Stats()
+        entry.lastProvisionalMs = latencyMs
+        entry.provisionalPasses += 1
+        stats[.captureTriage] = entry
+    }
+
     /// One line per capability that has actually been exercised, for the DEBUG footer.
     /// Features with no calls are omitted — an all-zero list is noise, not information.
     func footerLines() -> [String] {
@@ -364,6 +393,14 @@ final class ModelMetrics {
             }
             if entry.lastRetrievalMs >= 0 { line += " · retr \(entry.lastRetrievalMs)ms" }
             if entry.lastPartialCount > 0 { line += " · \(entry.lastPartialCount) partials" }
+            // The instant-capture numbers, first because they are what the user feels.
+            if entry.lastFirstCardMs >= 0 {
+                line += " · card \(entry.lastFirstCardMs)ms"
+                if let source = entry.lastFirstCardSource { line += "(\(source))" }
+            }
+            if entry.lastProvisionalMs >= 0 {
+                line += " · prov \(entry.lastProvisionalMs)ms ×\(entry.provisionalPasses)"
+            }
             if entry.lastPromptTokens >= 0 {
                 line += " · \(entry.lastPromptTokens)"
                 if entry.lastContextSize > 0 { line += "/\(entry.lastContextSize)" }

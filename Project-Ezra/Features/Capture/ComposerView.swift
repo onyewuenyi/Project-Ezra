@@ -146,15 +146,27 @@ struct ComposerView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: Spacing.md) {
-                Text("What's on your mind?")
-                    .screenTitleStyle()
-                    .padding(.top, Spacing.xs)
+            // Tighter once candidates exist: every point of vertical spacing here is a
+            // point the card can't use to show a field.
+            VStack(alignment: .leading, spacing: drafts.isEmpty ? Spacing.md : Spacing.sm) {
+                // The prompt is an EMPTY-STATE invitation: once candidates exist it has
+                // done its job, and on a keyboard-up sheet its ~60pt is the difference
+                // between a card that shows its fields and one clipped mid-chip.
+                if drafts.isEmpty {
+                    Text("What's on your mind?")
+                        .screenTitleStyle()
+                        .padding(.top, Spacing.xs)
+                        .transition(.opacity)
+                }
 
                 imageChip
 
                 composerField
-                    .frame(minHeight: 120, maxHeight: drafts.isEmpty ? 240 : 160)
+                    // Once tasks have taken shape, the TASK is the subject — the raw
+                    // text stays visible and editable but yields its room. It used to
+                    // hold 160pt while the card list got ~80pt with the keyboard up,
+                    // which is why a single card rendered clipped mid-title.
+                    .frame(minHeight: 72, maxHeight: drafts.isEmpty ? 240 : 76)
                     // The field yields room to the cards it produced — but it EASES
                     // instead of snapping. It used to lose 80pt in one frame the
                     // instant the first candidate landed, resizing under the cursor
@@ -233,8 +245,14 @@ struct ComposerView: View {
                 if !transcript.isEmpty { usedDictation = true }
                 scheduleSilenceStop()
             }
-            // The live loop: every text change re-triages after a short debounce.
+            // The live loop, two producers. The provisional pass paints cards from the
+            // deterministic pipeline NOW; the model parse keeps its rolling cadence and
+            // upgrades those cards in place when it lands.
             .onChange(of: text) { _, _ in
+                if drafts.isEmpty, parse.firstCardClockStartedAt == nil {
+                    parse.firstCardClockStartedAt = Date()
+                }
+                renderProvisional()
                 scheduleTriage()
             }
             .onChange(of: speech.state) { _, state in
@@ -253,6 +271,7 @@ struct ComposerView: View {
                 speech.stop()
                 parse.silenceTask?.cancel()
                 parse.debounceTask?.cancel()
+                parse.provisionalTask?.cancel()
                 parse.parseTask?.cancel()
                 // The backstop that makes this whole phase worth having: a swipe-down,
                 // a phone call, anything that tears the sheet down mid-thought leaves
@@ -310,8 +329,66 @@ struct ComposerView: View {
     private static let maxParseDeferralSeconds: TimeInterval = 1.2
     private static let parkThrottleSeconds: TimeInterval = 2
 
-    /// The input edge of the loop: debounce quiet gaps, bound continuous bursts by
-    /// `maxParseDeferralSeconds` — and never disturb a parse that is already
+    /// The PROVISIONAL pass's floor — and it is not a debounce. Leading-edge: the
+    /// first input of a capture renders at once, which is the entire feature; only
+    /// continuous input (dictation's ~12Hz hypotheses) is coalesced, at the same
+    /// ~10 updates/s ceiling the streamed partials already use. A debounce here
+    /// would delay the first card, which is precisely the latency this removes.
+    private static let provisionalCoalesceSeconds: TimeInterval = 0.08
+
+    /// The instant answer, painted before any model runs. Coalesced on the leading
+    /// edge (the first input fires immediately) and skipped outright when the text
+    /// hasn't actually changed — dictation re-emits identical hypotheses.
+    private func renderProvisional() {
+        let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !captured.isEmpty, captured != parse.lastProvisionalText else { return }
+        let elapsed = parse.lastProvisionalAt.map { Date().timeIntervalSince($0) } ?? .infinity
+        guard elapsed >= Self.provisionalCoalesceSeconds else {
+            // Trailing edge: one sleeping pass, cancel-and-replace, so a burst still
+            // ends on the newest text rather than the last one that beat the floor.
+            parse.provisionalTask?.cancel()
+            parse.provisionalTask = Task {
+                try? await Task.sleep(
+                    for: .seconds(Self.provisionalCoalesceSeconds - elapsed))
+                guard !Task.isCancelled else { return }
+                runProvisional()
+            }
+            return
+        }
+        runProvisional()
+    }
+
+    private func runProvisional() {
+        let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !captured.isEmpty else { return }
+        let started = Date()
+        // `sessionRules()` is the one prep this path keeps — it's cached for the whole
+        // session and it's the parity requirement (learned corrections must apply to
+        // the instant card too). Ownership stays `.none`: the proposer early-outs
+        // until sync ships, and its snapshot is exactly the store read this path forbids.
+        let fresh = AppBrain.provisionalDrafts(captured, learned: sessionRules())
+        parse.lastProvisionalAt = Date()
+        parse.lastProvisionalText = captured
+        ModelMetrics.shared.recordProvisionalPass(
+            latencyMs: Int(Date().timeIntervalSince(started) * 1000))
+        applyDrafts(
+            DraftMerge.mergeProvisional(fresh: fresh, into: drafts, removed: removedDrafts),
+            source: "prov")
+    }
+
+    /// The ONE place cards reach the screen — which is what makes the
+    /// time-to-first-card number honest rather than three approximations of it.
+    private func applyDrafts(_ next: [TaskDraft], source: String) {
+        let wasEmpty = drafts.isEmpty
+        Motion.withMotion(Motion.settle) { drafts = next }
+        guard wasEmpty, !next.isEmpty, let started = parse.firstCardClockStartedAt else { return }
+        ModelMetrics.shared.recordCapturePaint(
+            firstCardMs: Int(Date().timeIntervalSince(started) * 1000), source: source)
+        parse.firstCardClockStartedAt = nil
+    }
+
+    /// The input edge of the MODEL loop: debounce quiet gaps, bound continuous bursts
+    /// by `maxParseDeferralSeconds` — and never disturb a parse that is already
     /// streaming (its candidates are landing on screen; a follow-up chains the
     /// moment it completes instead).
     private func scheduleTriage() {
@@ -326,6 +403,9 @@ struct ComposerView: View {
             parse.burstStartedAt = nil
             parse.preparedCandidates = []
             parse.enrichedText = nil
+            parse.provisionalTask?.cancel()
+            parse.lastProvisionalText = nil
+            parse.firstCardClockStartedAt = nil
             drafts = []
             lastParsedText = nil
             lastParseYieldedCandidates = false
@@ -404,10 +484,9 @@ struct ComposerView: View {
                     // snapshot hasn't reached yet are KEPT (only a completed parse
                     // may drop a card).
                     guard epoch == self.parse.parseEpoch else { return }
-                    Motion.withMotion(Motion.settle) {
-                        self.drafts = self.merge(
-                            fresh: partial, into: self.drafts, keepingUnmatched: true)
-                    }
+                    self.applyDrafts(
+                        self.merge(fresh: partial, into: self.drafts, keepingUnmatched: true),
+                        source: "partial")
                 }
             )
             guard !Task.isCancelled, epoch == parse.parseEpoch else { return }
@@ -423,9 +502,17 @@ struct ComposerView: View {
             lastParseYieldedCandidates = !result.drafts.isEmpty
             // Preserve the user's in-place edits: a re-parse only replaces
             // candidates whose AI reading actually changed.
-            Motion.withMotion(Motion.settle) {
-                drafts = merge(fresh: result.drafts, into: drafts)
-            }
+            //
+            // A parse is authoritative only about the text it READ. If the user kept
+            // typing or talking, the provisional cards for sentences this parse never
+            // saw must ride at the tail rather than be dropped — the chained follow-up
+            // below drops them for real once it has read the whole thing. This refines
+            // the old contract ("only a completed parse may drop a card") to "only a
+            // completed parse over the CURRENT text may drop a card".
+            let textMoved = text.trimmingCharacters(in: .whitespacesAndNewlines) != captured
+            applyDrafts(
+                merge(fresh: result.drafts, into: drafts, keepingUnmatched: textMoved),
+                source: "model")
             lastParsedText = captured
             announceParseResult()
             // Park as soon as there is something worth keeping, not only on dismiss —
@@ -682,6 +769,7 @@ struct ComposerView: View {
         speech.stop()
         parse.parseEpoch += 1
         parse.debounceTask?.cancel()
+        parse.provisionalTask?.cancel()
         parse.parseTask?.cancel()
         parse.parseTask = nil
         // Discard is the one destructive path — the photo goes with the thought.
@@ -700,6 +788,7 @@ struct ComposerView: View {
         speech.stop()
         parse.parseEpoch += 1
         parse.debounceTask?.cancel()
+        parse.provisionalTask?.cancel()
         parse.parseTask?.cancel()
         parse.parseTask = nil
         committed += 1
@@ -1048,6 +1137,15 @@ final class LiveParseState {
     var cachedRules: [LearnedRule]?
     /// The last mid-session park write, for the throttle.
     var lastParkAt: Date?
+    /// The provisional (instant) pass's bookkeeping: when it last ran, the sleeping
+    /// trailing-edge pass, and the trimmed text it last read — dictation re-emits
+    /// identical hypotheses, and re-segmenting the same string is pure cost.
+    var lastProvisionalAt: Date?
+    var provisionalTask: Task<Void, Never>?
+    var lastProvisionalText: String?
+    /// When the current capture's first input landed on an empty card list — the
+    /// time-to-first-card clock, cleared the moment a card is painted.
+    var firstCardClockStartedAt: Date?
     /// The single silence-timeout in flight; cancelled and replaced on every
     /// transcript delta, cancelled outright on stop/disappear.
     var silenceTask: Task<Void, Never>?

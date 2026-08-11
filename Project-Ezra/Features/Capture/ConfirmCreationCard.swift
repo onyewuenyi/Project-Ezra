@@ -60,7 +60,10 @@ struct ConfirmCreationList: View {
                 let batchIndex = entering.firstIndex(of: draft.id) ?? 0
                 ConfirmCreationCard(
                     draft: $draft, ownerOptions: ownerOptions, rosterNames: rosterNames,
-                    onAddToRoster: onAddToRoster, onRemove: { remove(draft) }
+                    onAddToRoster: onAddToRoster, onRemove: { remove(draft) },
+                    // One candidate gets the whole surface — the single-task capture
+                    // is the fast path, and it should read like a task, not a row.
+                    presentation: drafts.count == 1 ? .hero : .listRow
                 )
                 // Structural skipping, explicitly: the card holds closures, so
                 // SwiftUI would otherwise rebuild every card's body on every list
@@ -128,6 +131,13 @@ struct ConfirmCreationCard: View, Equatable {
     /// name becomes a member from here: an explicit human tap, never a silent mint.
     var onAddToRoster: ((String) -> Void)? = nil
     let onRemove: () -> Void
+    /// How much room this card has. `.listRow` is the dense multi-candidate shape;
+    /// `.hero` is the single-task confirm — the fast path's own surface, where there
+    /// is vertical room to show every field at once instead of hiding most of them
+    /// behind a horizontal scroller (the audit's K3, closed for this case).
+    var presentation: Presentation = .listRow
+
+    enum Presentation { case listRow, hero }
 
     /// The due chip's three shortcuts cover the common cases; anything else needs a real
     /// calendar, and making the user commit first and fix it in the detail is the kind of
@@ -139,7 +149,7 @@ struct ConfirmCreationCard: View, Equatable {
     /// call site) and `showDatePicker` is view storage SwiftUI tracks itself.
     static func == (lhs: ConfirmCreationCard, rhs: ConfirmCreationCard) -> Bool {
         lhs.draft == rhs.draft && lhs.ownerOptions == rhs.ownerOptions
-            && lhs.rosterNames == rhs.rosterNames
+            && lhs.rosterNames == rhs.rosterNames && lhs.presentation == rhs.presentation
     }
 
     /// Low confidence is a VISUAL state, never a queue: the candidate appears
@@ -161,7 +171,7 @@ struct ConfirmCreationCard: View, Equatable {
                         .transition(.opacity)
                 }
                 TextField("Task", text: titleBinding, axis: .vertical)
-                    .font(.taskTitle)
+                    .font(presentation == .hero ? .sectionHeader : .taskTitle)
                     .foregroundStyle(Palette.primaryText)
                     .textInputAutocapitalization(.sentences)
 
@@ -212,7 +222,43 @@ struct ConfirmCreationCard: View, Equatable {
     // Every metadata field renders — pre-filled when the AI extracted or inferred
     // it, an add-affordance otherwise. The confirm glance only works if the user
     // can SEE every field the task will carry (creation-confirmation spec).
-    private var chipRow: some View {
+    @ViewBuilder private var chipRow: some View {
+        if presentation == .hero {
+            // One card, one glance: every field visible at once. The scroller below
+            // exists because a dense list row has no width to spare — a hero card
+            // does, and hiding the owner behind a fold is how a wrong assignment
+            // survives the one moment it was cheap to catch.
+            FlowLayout(spacing: Spacing.xs, lineSpacing: Spacing.xs) {
+                chipContent
+            }
+        } else {
+            scrollingChipRow
+        }
+    }
+
+    @ViewBuilder private var chipContent: some View {
+        duplicateChip
+        childChip
+        // When the card will MERGE, its own fields are moot — recede them so the
+        // merge chip is the clear headline, and DISABLE them so the recede means
+        // what it shows.
+        Group {
+            categoryChip
+            dueChip
+            ownerChip
+            urgentChip
+            effortChip
+            kindChip
+            if draft.blockedBy != nil { blockerChip }
+            ForEach(draft.blocks, id: \.id) { dependent in
+                dependentChip(dependent)
+            }
+        }
+        .opacity(mergeAccepted ? 0.4 : 1)
+        .disabled(mergeAccepted)
+    }
+
+    private var scrollingChipRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Spacing.xs) {
                 duplicateChip

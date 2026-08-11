@@ -27,7 +27,12 @@ The reliable loop for building and visually verifying this app. Requires the **X
    ```bash
    SIM="iPhone 17 Pro"; BID="amanze-studios.Project-Ezra"
    xcrun simctl bootstatus "$SIM" -b 2>/dev/null || true
-   APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Project-Ezra.app" -path "*Debug-iphonesimulator*" | head -1)
+   # NOTE the Index.noindex exclusion: the indexer builds its own copy of the .app
+   # WITHOUT a bundle ID, and `find` returns it often enough to matter. Installing it
+   # fails with "Missing bundle ID" — or worse, silently installs a stale binary and
+   # you debug a build that isn't yours. Always exclude it.
+   APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Project-Ezra.app" \
+     -path "*Build/Products/Debug-iphonesimulator*" -not -path "*Index.noindex*" | head -1)
    xcrun simctl terminate "$SIM" "$BID" 2>/dev/null || true
    xcrun simctl uninstall "$SIM" "$BID" 2>/dev/null || true    # clean state; omit to keep data
    xcrun simctl install "$SIM" "$APP"
