@@ -61,7 +61,12 @@ private struct RevealEntrance: ViewModifier {
                     withAnimation(Motion.fade) { arrived = true }
                     return
                 }
-                arrived = false
+                // NOTE: no `arrived = false` reset first. Setting it false and true in
+                // the same async turn coalesces into a single transaction — SwiftUI sees
+                // only the final value and the animation never plays. It also isn't
+                // needed: `arrived` starts false, and on a restructure the cards that are
+                // genuinely new get fresh state (so they cascade) while survivors stay
+                // put — which is the better behaviour anyway. Only what changed moves.
                 withAnimation(Motion.heroSettle.delay(delay)) { arrived = true }
             }
     }
