@@ -346,4 +346,64 @@ struct DraftMergeTests {
 
         #expect(merged[0].edgeProposals[0].decision == .accepted)
     }
+
+    // MARK: - Enrichment never reinterprets
+
+    /// The hard rule behind the reveal: once the user is reading a set, the model may
+    /// only fill it in. These are the three ways enrichment could betray that.
+
+    @Test("Enrichment fills fields in without changing the count or the order")
+    func enrichmentIsAdditiveOnly() {
+        let shown = [draft("Renew passport"), draft("Call mom"), draft("Buy diapers")]
+        let due = Date(timeIntervalSince1970: 1_800_000_000)
+        var richer = draft("Renew my passport", aiTitle: "Renew my passport", dueDate: due)
+        richer.id = shown[0].id
+
+        let result = DraftMerge.enrich([richer], onto: shown, removed: none)
+
+        #expect(result.drafts.count == 3)
+        #expect(result.drafts.map(\.id) == shown.map(\.id))
+        #expect(!result.structureDisagreed)
+        #expect(result.drafts[0].dueDate == due)
+        // The untouched cards are exactly as the user last read them.
+        #expect(result.drafts[1].title == "Call mom")
+        #expect(result.drafts[2].title == "Buy diapers")
+    }
+
+    @Test("A model that splits differently cannot add a card to what is on screen")
+    func enrichmentCannotAddCards() {
+        let shown = [draft("Renew passport and call mom")]
+        let split = [draft("Renew passport"), draft("Call mom")]
+
+        let result = DraftMerge.enrich(split, onto: shown, removed: none)
+
+        #expect(result.drafts.count == 1)
+        #expect(result.drafts[0].id == shown[0].id)
+        // Overruled, and recorded — the trust predicate is tuned on this number.
+        #expect(result.structureDisagreed)
+    }
+
+    @Test("A model that joins differently cannot drop or reorder a card")
+    func enrichmentCannotDropOrReorderCards() {
+        let shown = [draft("Book flights"), draft("Renew passport"), draft("Call mom")]
+        // The model comes back with one joined card, in the opposite order.
+        let joined = [draft("Call mom"), draft("Renew passport and book flights")]
+
+        let result = DraftMerge.enrich(joined, onto: shown, removed: none)
+
+        // Identity and order are the invariant — three cards, the same three, in the
+        // order the user read them. Titles are NOT pinned here: a retitle is enrichment
+        // (the model tightening its own reading), which is the half we want to keep.
+        #expect(result.drafts.count == 3)
+        #expect(result.drafts.map(\.id) == shown.map(\.id))
+    }
+
+    @Test("An empty model result leaves the revealed set exactly as it was")
+    func enrichmentWithNothingChangesNothing() {
+        let shown = [draft("Renew passport"), draft("Call mom")]
+        let result = DraftMerge.enrich([], onto: shown, removed: none)
+        #expect(result.drafts == shown)
+        #expect(!result.structureDisagreed)
+    }
+
 }

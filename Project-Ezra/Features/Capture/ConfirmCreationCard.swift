@@ -235,9 +235,11 @@ struct ConfirmCreationCard: View, Equatable {
                 : draft.title)
     }
 
-    // Every metadata field renders — pre-filled when the AI extracted or inferred
-    // it, an add-affordance otherwise. The confirm glance only works if the user
-    // can SEE every field the task will carry (creation-confirmation spec).
+    // A REVISION of the creation-confirmation spec's "the glance only works if the user
+    // can SEE every field the task will carry": every field is now reachable in ONE TAP,
+    // and the glance shows what's consequential. Rendering all eight made the two chips
+    // that carried information look exactly like the six that were empty invitations —
+    // which is the opposite of a glance, and the reason the old rule defeated itself.
     @ViewBuilder private var chipRow: some View {
         // Both presentations now WRAP: the horizontal scroller existed because every
         // chip always rendered, and a dense row had no width for eight of them. Showing

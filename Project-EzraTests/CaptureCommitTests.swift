@@ -409,6 +409,21 @@ struct CaptureCommitTests {
         #expect(CommitSummary(created: 0, mergedTitles: []).isEmpty)
     }
 
+    @Test("The post-dismiss toast says only what the ✓ receipt couldn't")
+    func residualMessageIsMergeOnly() {
+        // A plain creation is fully reported by the Create moment's ✓ — repeating the
+        // count in a toast ends the arc twice.
+        #expect(CommitSummary(created: 5, mergedTitles: []).messageBeyondReceipt == nil)
+        #expect(CommitSummary(created: 0, mergedTitles: []).messageBeyondReceipt == nil)
+        // A merge is the one outcome the count leaves open — name the target.
+        #expect(
+            CommitSummary(created: 2, mergedTitles: ["Renew passport"]).messageBeyondReceipt
+                == "Merged into “Renew passport”")
+        #expect(
+            CommitSummary(created: 0, mergedTitles: ["a", "b"]).messageBeyondReceipt
+                == "2 merged into existing tasks")
+    }
+
     // MARK: - Owner resolution (the chip must not promise what commit can't deliver)
 
     @Test("An owner name absent from the roster commits UNOWNED — the no-mint policy")

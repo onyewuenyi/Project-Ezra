@@ -4,13 +4,30 @@ Written 2026-08-07, after the deep-dive program (audit waves 1–8) and the iOS 
 Foundation Models adoption tier landed. This records the two phases that are
 PLANNED but deliberately not implemented, and why the device gate comes first.
 
+## Superseded in part by the Ramble re-architecture (2026-08-11)
+
+Ramble became a four-phase arc — quiet capture, a single orb while the model
+works, one composed reveal, a ✓ receipt — and the live parse was deleted (see
+`docs/PRD.md` §6 and the CLAUDE.md invariant). Two consequences for what follows:
+
+- **The headline number changed.** Time-to-first-partial is no longer a product
+  metric: nothing is rendered mid-generation any more, by design. Measure **time
+  to trustworthy result** instead — submit → stable confirmation (`confirm Xms`
+  in the DEBUG footer, with its `local`/`model` source), then enrichment
+  separately. A faster first partial that the user never sees buys nothing.
+- **Streaming is still worth having, for a different reason.** Partials feed the
+  salvage path (a deadline hit reveals the last viable partial) rather than the
+  screen. Phases A and B below are unaffected — both are about what the model
+  can *reach*, not about when the user sees it.
+
 ## The standing device gate (blocks both phases)
 
 Everything below assumes numbers only Charles's iPhone can produce
 (`-CaptureDiagnostics`, phone unlocked for launch; build/install headless):
 
-1. **Single-use baseline**: time-to-first-partial, `retr` ms, partial count,
-   prompt tokens vs context size, drafts-at-deadline — the post-A1 numbers.
+1. **Single-use baseline**: submit→confirm ms (and its source), `retr` ms,
+   partial count, prompt tokens vs context size, drafts-at-deadline — the
+   post-A1 numbers. (Was time-to-first-partial; see the note above.)
 2. **Continuous A/B arm**: per-turn wall-clock / intents / prompt tokens for the
    three-snapshot run. The continuous session (`AI/CaptureConversation.swift`)
    becomes the composer's default **only** if its turns beat the baseline and the

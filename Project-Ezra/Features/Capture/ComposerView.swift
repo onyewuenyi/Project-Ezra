@@ -212,19 +212,33 @@ struct ComposerView: View {
                 // (synthetic taps are blocked on this host). `-NoSubmit` stays on the
                 // canvas for the capture-phase shot. Never fires in normal runs.
                 #if DEBUG
-                    if resuming != nil, !text.isEmpty,
-                        !ProcessInfo.processInfo.arguments.contains("-NoSubmit")
-                    {
-                        Task {
-                            try? await Task.sleep(for: .milliseconds(250))
-                            submit()
-                        }
+                if resuming != nil, !text.isEmpty,
+                    !ProcessInfo.processInfo.arguments.contains("-NoSubmit")
+                {
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(250))
+                        submit()
                     }
+                }
                 #endif
             }
             // The orb's reassurance line — long work must read as calm, never as stuck.
             .onChange(of: phase) { _, newPhase in
                 showReassurance = false
+                // The last unreachable beat: `-AutoCreate` taps Create for us, so the
+                // ✓ receipt and the return-to-where-you-were can be verified headlessly
+                // like every other phase. The receipt keeps its real duration — a seam
+                // that slowed it down would be verifying something we don't ship.
+                #if DEBUG
+                if newPhase == .confirm, !drafts.isEmpty,
+                    ProcessInfo.processInfo.arguments.contains("-AutoCreate")
+                {
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(400))
+                        createTasks()
+                    }
+                }
+                #endif
                 guard newPhase == .understanding else { return }
                 Task {
                     try? await Task.sleep(for: .seconds(Self.reassuranceAfterSeconds))
@@ -393,18 +407,12 @@ struct ComposerView: View {
     /// didn't claim keep what they have; model drafts that claim nothing are dropped and
     /// counted, so local-vs-model structural disagreement is visible rather than guessed.
     private func enrich(with fresh: [TaskDraft]) {
-        guard !fresh.isEmpty else { return }
-        let before = drafts
-        let merged = merge(fresh: fresh, into: before)
-        // The invariant, enforced at the seam rather than trusted: enrichment may not
-        // change the count or the order of what the user is already reading.
-        let kept = before.map { existing in
-            merged.first(where: { $0.id == existing.id }) ?? existing
-        }
-        if merged.count != before.count {
-            ModelMetrics.shared.recordStructureDisagreement()
-        }
-        Motion.withMotion(Motion.fade) { drafts = kept }
+        // The invariant lives in `DraftMerge.enrich` — a pure function, so "enrichment
+        // may not change the count or the order of what the user is already reading" is
+        // property-tested rather than trusted to this call site.
+        let result = DraftMerge.enrich(fresh, onto: drafts, removed: removedDrafts)
+        if result.structureDisagreed { ModelMetrics.shared.recordStructureDisagreement() }
+        Motion.withMotion(Motion.fade) { drafts = result.drafts }
         if let submittedAt {
             ModelMetrics.shared.recordEnrichment(
                 latencyMs: Int(Date().timeIntervalSince(submittedAt) * 1000))
@@ -549,7 +557,9 @@ struct ComposerView: View {
 
     /// The submit affordance — the deliberate handoff.
     private var rambleButton: some View {
-        Button { submit() } label: {
+        Button {
+            submit()
+        } label: {
             HStack(spacing: Spacing.xs) {
                 Image(systemName: "sparkle")
                 Text("Ramble").font(.ctaLabel)
@@ -628,7 +638,9 @@ struct ComposerView: View {
         }
 
         VStack(spacing: Spacing.sm) {
-            Button { createTasks() } label: {
+            Button {
+                createTasks()
+            } label: {
                 Text(createTitle)
                     .font(.ctaLabel)
                     .foregroundStyle(Palette.onAccent)
@@ -683,7 +695,6 @@ struct ComposerView: View {
                 .matchedGeometryEffect(id: "voice", in: voiceMorph)
         }
     }
-
 
     /// Speak the outcome of a completed parse. The composer's whole promise is that
     /// candidates appear as you talk — visible motion a screen-reader user got no

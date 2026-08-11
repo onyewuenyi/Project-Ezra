@@ -37,14 +37,18 @@ struct UndoNotice: Identifiable, Equatable {
 
 extension View {
     /// Floats the undo pill above the content's bottom edge (inside the safe area,
-    /// so it sits above the tab bar and never covers it).
-    func undoNotice(_ notice: Binding<UndoNotice?>) -> some View {
-        modifier(UndoNoticeModifier(notice: notice))
+    /// so it sits above the tab bar and never covers it). Pass `bottomInset` when the
+    /// modifier is applied ABOVE the tab bar in the hierarchy rather than inside a tab:
+    /// there the safe area no longer accounts for the floating bar, and the pill lands
+    /// on top of the tab labels.
+    func undoNotice(_ notice: Binding<UndoNotice?>, bottomInset: CGFloat = 0) -> some View {
+        modifier(UndoNoticeModifier(notice: notice, bottomInset: bottomInset))
     }
 }
 
 private struct UndoNoticeModifier: ViewModifier {
     @Binding var notice: UndoNotice?
+    var bottomInset: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
@@ -86,7 +90,7 @@ private struct UndoNoticeModifier: ViewModifier {
         .overlay { Capsule().strokeBorder(Palette.border, lineWidth: 0.5) }
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
         .padding(.horizontal, Spacing.lg)
-        .padding(.bottom, Spacing.xs)
+        .padding(.bottom, Spacing.xs + bottomInset)
     }
 }
 

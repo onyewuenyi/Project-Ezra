@@ -173,4 +173,41 @@ struct SegmentationTests {
         let items = Segmentation.items(from: "call mom, dad too")
         #expect(items == ["call mom", "dad too"])
     }
+
+    // MARK: - The trust predicate (what may be revealed without the model)
+
+    /// `structureIsCertain` is the gate between "show it now" and "wait behind the orb".
+    /// It answers one question: did the split come from punctuation and layout the USER
+    /// typed, or from an inference about prose? Only the former may be presented as the
+    /// answer — a guess shown as truth is the one thing the reveal cannot survive.
+
+    @Test("Typed structure is certain — lines, bullets, and a comma list")
+    func typedStructureIsCertain() {
+        #expect(Segmentation.structureIsCertain("Renew passport\nCall mom\nBuy diapers"))
+        #expect(Segmentation.structureIsCertain("- Renew passport\n- Call mom"))
+        #expect(Segmentation.structureIsCertain("Buy milk, call mom, book flights"))
+    }
+
+    @Test("A single thought is certain however it is phrased")
+    func oneItemIsAlwaysCertain() {
+        #expect(Segmentation.structureIsCertain("renew my passport"))
+        #expect(Segmentation.structureIsCertain("figure out whether we should book the hotel"))
+        #expect(Segmentation.structureIsCertain(""))
+    }
+
+    @Test("Connective prose is NOT certain — that split is an inference, so it waits")
+    func connectiveProseIsUncertain() {
+        #expect(!Segmentation.structureIsCertain("renew my passport and call mom"))
+        #expect(
+            !Segmentation.structureIsCertain(
+                "i need to renew my passport and then book flights and also call mom"))
+    }
+
+    @Test("explicitItems reads punctuation only — it never splits a connective")
+    func explicitItemsIgnoreConnectives() {
+        #expect(Segmentation.explicitItems(from: "renew my passport and call mom").count == 1)
+        #expect(Segmentation.explicitItems(from: "Renew passport\nCall mom").count == 2)
+        #expect(Segmentation.explicitItems(from: "Buy milk, call mom").count == 2)
+    }
+
 }

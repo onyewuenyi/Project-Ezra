@@ -64,7 +64,7 @@ The iOS 27 on-device model is itself treated as a primitive with named capabilit
 | **TriageContext** | `AI/AIEngine.swift` | Per-call personal context: learned instructions, roster, retrieval candidates, suppressions |
 | **ModelRun / ModelDeadline / ModelResult / ModelMetrics** | `AI/ModelRun.swift` et al. | The one call seam: availability, deadline, cancellation, salvage, error vocabulary, local metrics — a service is only its prompt and its parsing |
 | **Guided generation** (`@Generable` + `@Guide`) | every FM service | Typed model output; no JSON parsing; device-verify on schema change |
-| **Streaming partials** (`streamResponse` + `PartialBox`) | capture, Today plan | Progressive candidates; deadline hits salvage the last viable partial |
+| **Streaming partials** (`streamResponse` + `PartialBox`) | capture, Today plan | Deadline hits salvage the last viable partial. **Capture no longer renders partials** — since the Ramble re-architecture the composer shows no structure before the reveal, so partials feed salvage only, never the screen |
 | **Tool calling** (`ResolvePersonTool`) | `AI/PersonalContextTools.swift` | Narrow, deterministic personal-context tools; attached only when useful |
 | **Instructions personalization** | `AI/CorrectionProfile.swift` | Learned corrections as per-call instruction lines — and as `DynamicInstructions` content in the continuous session |
 | **CaptureSessionPool** | `AI/CaptureSessionPool.swift` | Prewarmed single-use capture sessions, fingerprinted on instructions+roster; the REAL prefix (instructions + prompt head) warms behind the sheet animation |

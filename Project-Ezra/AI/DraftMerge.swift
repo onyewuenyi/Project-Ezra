@@ -194,6 +194,34 @@ enum DraftMerge {
         return result
     }
 
+    /// Enrichment onto a set the user is ALREADY READING — the whole of "progressively
+    /// enrich; never progressively reinterpret", as a pure function so the rule can be
+    /// property-tested instead of trusted.
+    ///
+    /// The model's richer read (tightened titles, dates, owners, edge proposals) is
+    /// merged in, but the structure on screen wins absolutely: the result is rebuilt
+    /// from `shown`, in `shown`'s order, one entry per shown draft. A model that split
+    /// or joined differently cannot add a card, drop a card, or move one. That is not a
+    /// nicety — the reveal is the product's claim to have understood, and a set that
+    /// re-counts itself after the user has read it retracts the claim.
+    ///
+    /// `structureDisagreed` reports (for DEBUG metrics) that the model's structure
+    /// differed and was overruled, so the trust predicate can be tuned on evidence. It
+    /// merges with `keepingUnmatched: true` for that measurement alone: without it, a
+    /// model that simply had nothing new to say about a card would drop it from the
+    /// merge and be recorded as having disagreed about the structure — which would make
+    /// the one number that tunes the trust predicate mostly false positives.
+    static func enrich(
+        _ fresh: [TaskDraft], onto shown: [TaskDraft], removed: RemovedDraftSet
+    ) -> (drafts: [TaskDraft], structureDisagreed: Bool) {
+        guard !fresh.isEmpty else { return (shown, false) }
+        let merged = merge(fresh: fresh, into: shown, removed: removed, keepingUnmatched: true)
+        let kept = shown.map { existing in
+            merged.first(where: { $0.id == existing.id }) ?? existing
+        }
+        return (kept, merged.count != shown.count)
+    }
+
     /// Pass A / B / C′ for the additive merge. C′ is Pass C with the roles swapped —
     /// a MODEL card claiming this provisional candidate's clause — so a retitle is
     /// recognised from both directions and the provisional pass can't add a duplicate

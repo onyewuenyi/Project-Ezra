@@ -108,8 +108,10 @@ struct RootTabView: View {
         .tint(Palette.accentFlat)
         .overlay(alignment: .bottomTrailing) { captureButton }
         // The confirm's receipt. It renders HERE, not in the composer, because the sheet
-        // is already gone by the time there is anything to report.
-        .undoNotice($commitNotice)
+        // is already gone by the time there is anything to report — which also puts it
+        // ABOVE the floating tab bar, so it needs the same tuned inset the FAB uses or
+        // it prints across the tab labels.
+        .undoNotice($commitNotice, bottomInset: Spacing.xxl)
         .environment(\.openCapture, { presentComposer(resuming: nil) })
         .environment(\.resumeCapture, { capture in presentComposer(resuming: capture) })
         .environment(\.openInbox, { selection = 1 })
@@ -180,12 +182,13 @@ struct RootTabView: View {
     }
 
     /// Deterministic verification seam. Launch with `-OpenCapture ["text"]` to present
-    /// the composer at launch (add `-NoSubmit` to stay on the capture canvas) — the one capture surface no other arg could reach
+    /// the composer at launch — the one capture surface no other arg could reach
     /// (synthetic taps are blocked here, and the composer only opens from a tap). With
-    /// a text argument the seam parks that text as a `Capture` and RESUMES it, which
-    /// re-parses through the full live loop (`restoreIfResuming` → `scheduleTriage`) —
-    /// so the streaming/rolling parse is observable in a screenshot without a keyboard.
-    /// Never fires in normal runs.
+    /// a text argument the seam parks that text as a `Capture` and RESUMES it, and the
+    /// composer submits it for us, so every phase of the Ramble arc is screenshot-
+    /// reachable headlessly. Two companion flags pick which one you land on:
+    /// `-NoSubmit` holds the capture canvas, and `-AutoCreate` taps Create so the ✓
+    /// receipt and the return are reachable too. Never fires in normal runs.
     private func openCaptureIfRequested() async {
         let args = ProcessInfo.processInfo.arguments
         guard let flag = args.firstIndex(of: "-OpenCapture") else { return }
@@ -215,15 +218,20 @@ struct RootTabView: View {
         composerSession = ComposerSession(resuming: capture)
     }
 
-    /// Show the receipt for a confirm that just happened, once. Deliberately no Undo
-    /// button: undoing a batch means deleting the created tasks AND reversing each merge
-    /// AND unwinding the blocker edges commit wrote onto OTHER tasks — a half-honest
-    /// version of that is worse than none, so per-item Undo stays in the Inbox where it
-    /// already works, and this notice claims nothing about it.
+    /// Show the receipt for a confirm that just happened, once — and ONLY for what the
+    /// composer's own ✓ moment couldn't say. The count is delivered in the sheet now
+    /// ("5 tasks added"), so re-announcing it here made the arc end twice; a merge
+    /// target still needs naming, because that is the one thing the count leaves open.
+    ///
+    /// Deliberately no Undo button: undoing a batch means deleting the created tasks AND
+    /// reversing each merge AND unwinding the blocker edges commit wrote onto OTHER
+    /// tasks — a half-honest version of that is worse than none, so per-item Undo stays
+    /// in the Inbox where it already works, and this notice claims nothing about it.
     private func presentCommitNotice() {
         guard let summary = brain.lastCommitSummary, !summary.isEmpty else { return }
         brain.lastCommitSummary = nil  // consumed — a dismiss reports its own commit only
-        commitNotice = UndoNotice(message: summary.message)
+        guard let message = summary.messageBeyondReceipt else { return }
+        commitNotice = UndoNotice(message: message)
     }
 
     /// The persistent Capture action: a circular accent-gradient button in the

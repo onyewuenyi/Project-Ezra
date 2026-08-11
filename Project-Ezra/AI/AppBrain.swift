@@ -967,6 +967,18 @@ struct CommitSummary: Equatable {
         }
         return parts.joined(separator: " · ")
     }
+
+    /// What the Create moment's ✓ receipt ("5 tasks added") CANNOT say — nil when the
+    /// count is the whole story. A toast that repeats the confirmation the user just
+    /// watched is noise; a merge is different, because "where did my thought go?" is a
+    /// question the count leaves open and only the target's name answers.
+    var messageBeyondReceipt: String? {
+        guard !mergedTitles.isEmpty else { return nil }
+        switch mergedTitles.count {
+        case 1: return "Merged into “\(mergedTitles[0])”"
+        default: return "\(mergedTitles.count) merged into existing tasks"
+        }
+    }
 }
 
 // MARK: - Merge snapshot (undo resurrection)
