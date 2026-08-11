@@ -114,6 +114,12 @@ enum TodayPlanInstructions {
         - "set aside N×" means the task has resisted execution enough to deserve
           deliberate reconsideration — consider naming one such task. Never treat it
           as a demand to re-plan it, and never scold.
+        - Two tools exist: task_details (extra detail on ONE candidate) and
+          yesterday_outcome (what happened yesterday). Consult them only when weighing
+          a candidate — a few calls at most; the candidate lines usually suffice.
+        - This is a LIVE day: you may receive follow-up turns as it changes
+          ("SINCE THIS MORNING: …"). Always return the complete plan for the rest of
+          the day — never only the changes.
         - Plain and steady. No pep talk, no exclamation marks, no emoji.
         """
 }
@@ -123,6 +129,13 @@ enum TodayPlanInstructions {
 enum TodayPlanPrompt {
     static func body(for request: TodayPlanRequest) -> String {
         var lines: [String] = []
+        // A recompose turn leads with what changed. With the session alive this rides
+        // on top of the morning transcript; after a process restart it IS the
+        // continuity. Either way the response contract is the same: a complete plan.
+        if let delta = request.deltaContext {
+            lines.append(delta)
+            lines.append("Return the COMPLETE updated plan for the rest of today.")
+        }
         lines.append("COMPLETED TODAY SO FAR: \(request.recapCount)")
         lines.append("CANDIDATE TASKS (choose from these ids only):")
         for (index, snapshot) in request.candidates.enumerated() {
@@ -200,17 +213,17 @@ enum TodayPlanSession {
 
 // MARK: - Model generators
 
-/// The on-device tier: `SystemLanguageModel`, a stateless per-call session with the
-/// live advisor instructions, streamed.
+/// The on-device tier: the per-day `AdvisorSession` (profile-backed, tooled,
+/// transcript-carrying), streamed. The session is the whole point — see
+/// `AdvisorSession.swift`'s header.
 struct OnDevicePlanGenerator: TodayPlanGenerator {
     let tier: PlanTier = .onDevice
+    let session: AdvisorSession
 
     func generate(
         _ request: TodayPlanRequest, onPartial: (@MainActor (GeneratedPlan) -> Void)?
     ) async throws -> GeneratedPlan {
-        let session = LanguageModelSession(instructions: TodayPlanInstructions.text(for: request))
-        return try await TodayPlanSession.generate(
-            session: session, request: request, tier: tier, onPartial: onPartial)
+        try await session.respond(request: request, onPartial: onPartial)
     }
 }
 
@@ -252,10 +265,12 @@ extension AppBrain {
         let start = Date()
         for tier in chain {
             do {
-                let generated = try await Self.run(tier: tier, request: request, onPartial: onPartial)
+                let generated = try await run(tier: tier, request: request, onPartial: onPartial)
                 let latencyMs = Int(Date().timeIntervalSince(start) * 1000)
                 planMetrics.recordGeneration(
-                    tier: tier, latencyMs: latencyMs, promptTokens: -1, outputTokens: -1)
+                    tier: tier, latencyMs: latencyMs, promptTokens: -1, outputTokens: -1,
+                    toolCalls: tier == .onDevice ? advisorSession?.box.toolCalls ?? 0 : 0,
+                    turn: tier == .onDevice ? advisorSession?.turn ?? 0 : 0)
                 logPlanned(generated, in: context)
                 return generated
             } catch {
@@ -285,7 +300,7 @@ extension AppBrain {
     private static let onDeviceTimeoutSeconds: Double = 30
     private static let pccTimeoutSeconds: Double = 20
 
-    private static func run(
+    private func run(
         tier: PlanTier, request: TodayPlanRequest,
         onPartial: (@MainActor (GeneratedPlan) -> Void)?
     ) async throws -> GeneratedPlan {
@@ -298,8 +313,9 @@ extension AppBrain {
             // last viable partial (a 90%-streamed briefing) instead of discarding it.
             let box = PartialBox<GeneratedPlan>()
             let forward = onPartial
-            return try await race(timeout: onDeviceTimeoutSeconds, salvage: box) {
-                try await OnDevicePlanGenerator().generate(
+            let session = advisorSession(for: request)
+            return try await Self.race(timeout: Self.onDeviceTimeoutSeconds, salvage: box) {
+                try await OnDevicePlanGenerator(session: session).generate(
                     request,
                     onPartial: { partial in
                         box.latest = partial
@@ -307,10 +323,29 @@ extension AppBrain {
                     })
             }
         case .pcc:
-            return try await race(timeout: pccTimeoutSeconds) {
+            return try await Self.race(timeout: Self.pccTimeoutSeconds) {
                 try await PCCPlanGenerator().generate(request, onPartial: onPartial)
             }
         }
+    }
+
+    /// The per-day advisor session: created on the day's first on-device generation,
+    /// reused for every later turn (the recompose transcript), replaced on day change.
+    /// Instructions freeze at creation — per-day is exactly their cadence (the
+    /// throughput line changes daily), and a stable prefix is what the KV cache wants.
+    private func advisorSession(for request: TodayPlanRequest) -> AdvisorSession {
+        let dayKey = TodayPlanStore.dayKey(for: request.now)
+        if let session = advisorSession, session.dayKey == dayKey { return session }
+        let session = AdvisorSession(
+            dayKey: dayKey, instructions: TodayPlanInstructions.text(for: request))
+        advisorSession = session
+        return session
+    }
+
+    /// The measured candidate budget, once the session has computed it (nil → the
+    /// fixed cap). Read by the request builder so heavy days fill the real window.
+    var advisorCandidateCap: Int {
+        advisorSession?.measuredCandidateCap ?? TodayPlanRequest.candidateCap
     }
 
     /// Race a generation against a deadline; cancel the loser. When a `salvage` box is

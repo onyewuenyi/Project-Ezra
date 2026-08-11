@@ -134,8 +134,18 @@ struct TodayPlanRequest: Sendable {
     /// the advisor's sizing, never gates it. Nil = cold start (say nothing).
     let typicalCompleted: Int?
     let now: Date
+    /// Per-candidate detail the `task_details` tool serves (keyed by lowercased uuid).
+    /// Value snapshots built at request time — tools never touch Core Data.
+    var toolDetails: [String: String] = [:]
+    /// The deterministic yesterday digest the `yesterday_outcome` tool serves.
+    var yesterdayOutcome: String? = nil
+    /// A recompose turn's continuity block ("SINCE THIS MORNING: …"). When the
+    /// advisor session is alive this rides ON TOP of the transcript; after a process
+    /// restart it IS the continuity — either way the prompt carries it.
+    var deltaContext: String? = nil
 
-    /// The context-budget cap on the candidate set handed to the advisor.
+    /// The fixed context-budget cap — the fallback until the session's measured
+    /// budget lands (`AdvisorSession.measuredCandidateCap`), and the sim/test value.
     static let candidateCap = 12
 
     /// The deterministic fallback's action count: the typical throughput when known,
@@ -149,15 +159,32 @@ struct TodayPlanRequest: Sendable {
     /// reverse-edge facts).
     static func make(
         candidateItems: [TaskItem], allTasks: [TaskItem], recapCount: Int,
-        typicalCompleted: Int?, now: Date
+        typicalCompleted: Int?, now: Date, cap: Int = candidateCap
     ) -> TodayPlanRequest {
-        let candidates =
-            candidateItems
-            .prefix(candidateCap)
-            .compactMap { PlanTaskSnapshot.from($0, among: allTasks, now: now) }
+        let capped = candidateItems.prefix(max(1, cap))
+        let candidates = capped.compactMap { PlanTaskSnapshot.from($0, among: allTasks, now: now) }
+        // The tool detail index: notes + provenance + engagement clocks per candidate,
+        // as plain fact lines. Built here — the one place with the live objects —
+        // so the tools stay snapshot-pure.
+        var details: [String: String] = [:]
+        for task in capped {
+            guard let id = task.uuid else { continue }
+            var lines: [String] = []
+            if let notes = task.notes, !notes.isEmpty { lines.append("Notes: \(notes)") }
+            if !task.reasoning.isEmpty { lines.append("Why it exists: \(task.reasoning)") }
+            let blockers = task.activeBlockerTasks(among: allTasks).map(\.title)
+            if !blockers.isEmpty { lines.append("Waiting on: " + blockers.joined(separator: "; ")) }
+            let children = task.children(among: allTasks)
+            if !children.isEmpty { lines.append("Has \(children.count) sub-steps") }
+            if task.deferralCount > 0 { lines.append("Set aside \(task.deferralCount)× in a row") }
+            details[id.uuidString.lowercased()] =
+                lines.isEmpty
+                ? "No further detail — the candidate line is everything known."
+                : lines.joined(separator: "\n")
+        }
         return TodayPlanRequest(
             candidates: Array(candidates), recapCount: recapCount,
-            typicalCompleted: typicalCompleted, now: now)
+            typicalCompleted: typicalCompleted, now: now, toolDetails: details)
     }
 }
 

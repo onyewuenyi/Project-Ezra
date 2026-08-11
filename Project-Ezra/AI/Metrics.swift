@@ -94,6 +94,19 @@ final class MetricsRecorder {
         defaults.set(now, forKey: Key.firstPayoffAt)
     }
 
+    /// Wipe the counted signals (Settings ▸ Reset everything). The install stamp restarts
+    /// at `now` rather than clearing: time-to-first-payoff is measured from a start, and a
+    /// reset store is a new one — leaving the old stamp would report a payoff measured in
+    /// weeks the moment the next capture lands.
+    func reset(now: Date = Date()) {
+        selfInitiatedOpens = 0
+        firstPayoffAt = nil
+        installedAt = now
+        defaults.removeObject(forKey: Key.opens)
+        defaults.removeObject(forKey: Key.firstPayoffAt)
+        defaults.set(now, forKey: Key.installedAt)
+    }
+
     private enum Key {
         static let opens = "metrics.selfInitiatedOpens"
         static let installedAt = "metrics.installedAt"
@@ -121,6 +134,9 @@ final class PlanMetrics {
     private(set) var lastLatencyMs: Int
     private(set) var lastPromptTokens: Int
     private(set) var lastOutputTokens: Int
+    /// In-memory session diagnostics — tool calls last generation, and its turn number.
+    private(set) var lastToolCalls = 0
+    private(set) var lastTurn = 0
     private(set) var skips: Int
     private(set) var interruptions: Int
     /// The tier that produced the last returned plan ("on-device"/"pcc"/"rules").
@@ -150,7 +166,15 @@ final class PlanMetrics {
     /// Record a completed generation: bump the tier's count and stamp the latest
     /// latency/token readings. `promptTokens`/`outputTokens` are −1 when the model
     /// surface doesn't expose usage (device-verify wires the real numbers).
-    func recordGeneration(tier: PlanTier, latencyMs: Int, promptTokens: Int, outputTokens: Int) {
+    func recordGeneration(
+        tier: PlanTier, latencyMs: Int, promptTokens: Int, outputTokens: Int,
+        toolCalls: Int = 0, turn: Int = 0
+    ) {
+        // Session diagnostics (in-memory, like the parse-shape trio): the tool-call
+        // count is the over-calling tripwire, the turn number says whether this was
+        // the morning briefing or a recompose.
+        lastToolCalls = toolCalls
+        lastTurn = turn
         switch tier {
         case .onDevice:
             onDeviceCount += 1
@@ -204,6 +228,32 @@ final class PlanMetrics {
     func recordInterruption() {
         interruptions += 1
         defaults.set(interruptions, forKey: Key.interruptions)
+    }
+
+    /// Wipe the tier counts and last-generation diagnostics (Settings ▸ Reset everything).
+    /// In-memory as well as persisted — these are cached at init, so clearing the keys
+    /// alone would leave yesterday's numbers on the footer until the next launch.
+    func reset() {
+        onDeviceCount = 0
+        pccCount = 0
+        deterministicCount = 0
+        lastLatencyMs = -1
+        lastPromptTokens = -1
+        lastOutputTokens = -1
+        lastToolCalls = 0
+        lastTurn = 0
+        skips = 0
+        interruptions = 0
+        lastTier = nil
+        lastError = nil
+        lastAvailability = nil
+        for key in [
+            Key.onDeviceCount, Key.pccCount, Key.deterministicCount, Key.lastLatencyMs,
+            Key.lastPromptTokens, Key.lastOutputTokens, Key.skips, Key.interruptions,
+            Key.lastTier, Key.lastError, Key.lastAvailability,
+        ] {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     private enum Key {
@@ -438,6 +488,20 @@ final class ModelMetrics {
             }
             if let error = entry.lastError { line += " · \(error)" }
             return line
+        }
+    }
+
+    /// Wipe every capability's tally (Settings ▸ Reset everything). The evidence stream is
+    /// about THIS store's behaviour, so it starts over with it.
+    func reset() {
+        for feature in ModelFeature.allCases {
+            stats[feature] = Stats()
+            for key in [
+                Key.successes(feature), Key.timeouts(feature), Key.salvaged(feature),
+                Key.failures(feature), Key.lastLatencyMs(feature), Key.lastError(feature),
+            ] {
+                defaults.removeObject(forKey: key)
+            }
         }
     }
 

@@ -44,6 +44,12 @@ final class AppBrain {
     /// place a generation completes — see `TodayPlanService`.
     let planMetrics = PlanMetrics()
 
+    /// The per-day advisor conversation (profile + tools + transcript) — created on
+    /// the day's first on-device generation, reused for recompose turns, replaced on
+    /// day change. Nil off-device and before the first generation. See
+    /// `AdvisorSession.swift`.
+    var advisorSession: AdvisorSession?
+
     /// True while a triage call is in flight — drives the soft-glow processing UI.
     var isProcessing = false
 

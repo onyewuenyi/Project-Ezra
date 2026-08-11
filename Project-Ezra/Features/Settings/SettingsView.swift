@@ -203,6 +203,7 @@ struct SettingsView: View {
             parts.append("tok \(max(m.lastPromptTokens, 0))/\(max(m.lastOutputTokens, 0))")
         }
         if let tier = m.lastTier { parts.append("via \(tier)") }
+        if m.lastTurn > 0 { parts.append("turn \(m.lastTurn) · tools \(m.lastToolCalls)") }
         if let err = m.lastError { parts.append("err \(err)") }
         if let avail = m.lastAvailability { parts.append("ai \(avail)") }
         return parts.joined(separator: " · ")

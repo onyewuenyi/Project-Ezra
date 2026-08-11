@@ -105,7 +105,7 @@ final class TodaySequenceModel {
             // briefing on screen until the voiced one lands, so nothing blanks out.
             if !(plan?.hasAdvisorVoice ?? false) && AppBrain.todayAdvisorAvailable() {
                 AppBrain.prewarmTodayModel()
-                Task { await generate(preservePlan: true) }
+                Task { await generate(mode: .selfHeal) }
             }
             return
         }
@@ -165,10 +165,38 @@ final class TodaySequenceModel {
         beat = .briefing
     }
 
-    /// Regenerate the briefing (the Replan affordance / day-changed hint).
+    /// Recompose the day (the Replan affordance / day-changed hint) — now a DELTA
+    /// TURN on the per-day advisor session rather than a cold regeneration: the
+    /// prompt leads with what changed since the morning, the transcript (when the
+    /// process survived) carries the morning's reasoning, and the current briefing
+    /// stays on screen until the recomposition lands. After a process restart the
+    /// delta block alone reconstructs the continuity — same product behavior.
     func replan() {
-        resting = false
-        Task { await generate() }
+        let delta = deltaContext()
+        Task { await generate(mode: .recompose(delta: delta)) }
+    }
+
+    /// The observable since-this-morning facts, as one prompt block. Deterministic:
+    /// resolved planned actions + candidates the cached briefing wasn't built against.
+    private func deltaContext() -> String? {
+        guard let cached = store.cache(for: now) else { return nil }
+        var lines: [String] = []
+        let resolved = cached.actions.filter { action in
+            allTasks.first { $0.uuid == action.taskID }?.status.isResolved ?? false
+        }
+        if !resolved.isEmpty {
+            lines.append("completed \(resolved.count) of this morning's plan")
+        }
+        let known = Set(cached.docketSignature)
+        let fresh = candidateTasks(from: allTasks).filter { task in
+            task.uuid.map { !known.contains($0) } ?? false
+        }
+        if !fresh.isEmpty {
+            lines.append(
+                "new since then: " + fresh.prefix(3).map(\.title).joined(separator: "; "))
+        }
+        guard !lines.isEmpty else { return nil }
+        return "SINCE THIS MORNING: " + lines.joined(separator: " · ") + "."
     }
 
     // MARK: - Generation
@@ -177,20 +205,32 @@ final class TodaySequenceModel {
     /// currently-shown (cached deterministic) briefing on screen — no blank loading cover,
     /// no streamed partials swapped in — and replaces it only if a *voiced* briefing lands.
     /// A still-voiceless result leaves the cached plan untouched (no re-freeze, no flicker).
-    private func generate(preservePlan: Bool = false) async {
+    /// How a generation relates to what is on screen. `.fresh` blanks to the loading
+    /// cover and streams partials in; `.selfHeal` keeps the cached plan and swaps only
+    /// a VOICED upgrade in; `.recompose` keeps the current briefing and replaces it
+    /// with whatever the delta turn returns (a deterministic recomposition is still
+    /// the correct updated plan — the day really did change).
+    enum GenerationMode: Equatable {
+        case fresh
+        case selfHeal
+        case recompose(delta: String?)
+    }
+
+    private func generate(mode: GenerationMode = .fresh) async {
         guard let context else { return }
         generation += 1
         let token = generation
         isGenerating = true
-        if !preservePlan {
+        if mode == .fresh {
             plan = nil  // fresh briefing; the loading cover shows until it arrives
         }
 
-        let request = makeRequest()
-        // Upgrade path streams no partials into the resting plan (no flicker); the fresh
-        // path streams validated partials into the loading cover.
+        var request = makeRequest()
+        if case .recompose(let delta) = mode { request.deltaContext = delta }
+        // Only the fresh path streams partials (into the loading cover); the self-heal
+        // and recompose paths keep the current briefing on screen, no flicker.
         var handler: (@MainActor (GeneratedPlan) -> Void)?
-        if !preservePlan {
+        if mode == .fresh {
             handler = { [weak self] partial in
                 guard let self, self.generation == token else { return }  // stale guard (during)
                 self.plan = partial
@@ -199,17 +239,17 @@ final class TodaySequenceModel {
         let generated = await brain.todayPlan(for: request, in: context, onPartial: handler)
 
         guard generation == token else { return }  // stale guard (after the await)
+        isGenerating = false
 
-        if preservePlan {
+        switch mode {
+        case .selfHeal:
             // Only swap in — and re-cache — a genuinely voiced upgrade; otherwise keep
             // showing the cached plan exactly as-is.
-            isGenerating = false
             guard generated.hasAdvisorVoice else { return }
             plan = generated
             finalize()
-        } else {
+        case .fresh, .recompose:
             plan = generated
-            isGenerating = false
             finalize()
         }
     }
@@ -249,9 +289,15 @@ final class TodaySequenceModel {
     private func makeRequest() -> TodayPlanRequest {
         let baseline = CapacityBaseline.baseline(for: .steady, logs: capacityLogs)
         let typical = baseline.isPersonalized ? baseline.typicalCompletedCount : nil
-        return TodayPlanRequest.make(
+        // The measured budget (context-sized, once the session has computed it) —
+        // heavy days fill the model's real window instead of a fixed guess.
+        var request = TodayPlanRequest.make(
             candidateItems: candidateTasks(from: allTasks), allTasks: allTasks,
-            recapCount: recap.count, typicalCompleted: typical, now: now)
+            recapCount: recap.count, typicalCompleted: typical, now: now,
+            cap: brain.advisorCandidateCap)
+        request.yesterdayOutcome = YesterdayDigest.make(
+            tasks: allTasks, logs: capacityLogs, now: now)
+        return request
     }
 
     /// The advisor's candidate set: my live work plus open decisions, in `TaskRanking`
@@ -281,6 +327,12 @@ final class TodaySequenceModel {
     /// against — the quiet "Replan" hint.
     func dayChanged(currentTasks: [TaskItem]) -> Bool {
         let ids = candidateTasks(from: currentTasks).compactMap(\.uuid)
-        return store.hasDocketChanged(currentOpenDocketIDs: ids)
+        if store.hasDocketChanged(currentOpenDocketIDs: ids) { return true }
+        // Completing planned work is also a material change — the rest of the day
+        // deserves recomposition, not a plan frozen around finished items.
+        guard let cached = store.cache(for: now) else { return false }
+        return cached.actions.contains { action in
+            currentTasks.first { $0.uuid == action.taskID }?.status.isResolved ?? false
+        }
     }
 }
