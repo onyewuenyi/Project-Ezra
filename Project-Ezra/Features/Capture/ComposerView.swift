@@ -707,16 +707,26 @@ struct ComposerView: View {
             Text(Self.nothingFoundHint).supportingStyle()
             Spacer(minLength: 0)
         } else {
-            ScrollView {
-                ConfirmCreationList(
-                    drafts: $drafts,
-                    ownerOptions: ownerOptions,
-                    rosterNames: rosterNames,
-                    onAddToRoster: { addToRoster($0) },
-                    onRemove: { removedDrafts.record($0) },
-                    revealedAt: revealedAt
-                )
-                .padding(.top, Spacing.xxs)
+            // The composition CENTERS in whatever room it has. Top-aligned, a one-card
+            // reveal put a small card under a headline and left the bottom half of the
+            // screen empty above the button — which reads as an empty state, not as an
+            // answer. The `GeometryReader`'s concrete height is what lets the content
+            // claim the full area and centre inside it; a bare `maxHeight: .infinity`
+            // here has nothing to resolve against and hangs the layout pass.
+            GeometryReader { proxy in
+                ScrollView {
+                    ConfirmCreationList(
+                        drafts: $drafts,
+                        ownerOptions: ownerOptions,
+                        rosterNames: rosterNames,
+                        onAddToRoster: { addToRoster($0) },
+                        onRemove: { removedDrafts.record($0) },
+                        revealedAt: revealedAt
+                    )
+                    .padding(.top, Spacing.xxs)
+                    .frame(minHeight: proxy.size.height, alignment: .center)
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
         }
 
