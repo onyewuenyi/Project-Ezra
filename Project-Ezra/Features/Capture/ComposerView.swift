@@ -2,30 +2,31 @@
 //  ComposerView.swift
 //  Project-Ezra
 //
-//  The global capture point. Two visible affordances only: type or speak — and
-//  the parse happens LIVE: candidates appear below the field while the user is
-//  still writing (or talking), re-triaged on a short debounce with stale results
-//  cancelled. Nothing is gated on confidence; every candidate appears, wrong
-//  fields and all, because a visible mistake the user can fix in one tap is
-//  cheaper than an item withheld in a queue (no-gating-at-capture decision).
+//  RAMBLE — the core loop, and the product's wow moment. It is NOT an interactive task
+//  parser; it is a fast path from messy thought to trusted structure:
 //
-//  The single human-in-the-loop moment is the Confirm-Creation card list: every
-//  AI-inferred field pre-filled and editable, one CTA to add the batch. Each
-//  field edit is diffed against the AI's frozen snapshot at commit and becomes a
-//  Correction row — the local learning signal.
+//      CAPTURE → (submit) → UNDERSTANDING → REVEAL/CONFIRM → CREATE
 //
-//  On device, Foundation Models streams partial generation through `onPartial`,
-//  so candidates fill in progressively within a single parse — and the parse
-//  ROLLS: input arriving while a parse streams never cancels it (its cards are
-//  landing live); a follow-up over the fuller text chains at completion, and a
-//  max-wait bound fires the first parse of a burst even when dictation deltas
-//  arrive faster than the debounce can ever survive. The old shape cancelled the
-//  in-flight generation on every delta, so "cards take shape as you talk" was
-//  structurally "cards appear when you stop"; now the mid-ramble screen is the
-//  product's signature moment on both engines (the heuristic is instant, so its
-//  rolling cadence is simply the max-wait tick).
+//  The hard invariant, which every decision here serves: **at no point before
+//  confirmation may the user see an intermediate AI interpretation presented as truth.**
+//  During capture the AI is entirely absent — no parse, no cards, no counts, no
+//  classification — because the user owns the conversation while they are still having
+//  it. Submit is a deliberate handoff ("got it, I'll take it from here"); the input
+//  collapses into one orb; and the reveal presents ONE interpretation.
 //
-
+//  The engineering rule that makes that possible: **progressively enrich, never
+//  progressively reinterpret.** Structure — how many tasks, in what order — is decided
+//  once, at submit, and never changes under the user. The deterministic read is trusted
+//  only when it is certain (the user typed the structure, or there is exactly one item);
+//  otherwise the model decides while the orb holds the screen. Afterwards the model may
+//  improve every card's title and metadata, but it may not re-count or reorder — see
+//  `enrich`.
+//
+//  This replaced a live-parsing composer whose cards appeared, split, merged and
+//  vanished while the user typed. That reads as "slow and confused" even when the final
+//  answer is excellent: the fix was not to render intermediate states faster but to stop
+//  rendering them.
+//
 import CoreData
 import PhotosUI
 import SwiftUI
@@ -89,6 +90,14 @@ struct ComposerView: View {
         refreshRosterCaches()  // the one in-session mutation path
     }
 
+    /// Where in the arc we are. Nothing is parsed in `.capture`; nothing but the orb
+    /// shows in `.understanding`; `.confirm` renders one interpretation.
+    @State private var phase: RamblePhase = .capture
+    /// When submit happened — the clock for the performance contract.
+    @State private var submittedAt: Date?
+    /// Which producer decided the structure on screen ("local"/"model").
+    @State private var structureSource = "local"
+
     @State private var text = ""
     @State private var drafts: [TaskDraft] = []
     /// The cards the user deleted this session. The merge filters re-proposals of
@@ -138,6 +147,11 @@ struct ComposerView: View {
     @State private var silenceDeadline: Date?
     /// The small mic capsule and the listening hero share this morph.
     @Namespace private var voiceMorph
+    /// The one object the whole arc transforms through: field → orb → composition.
+    @Namespace private var rambleMorph
+    static let rambleMorphID = "ramble"
+    /// Set when the orb has been holding long enough that silence would read as stuck.
+    @State private var showReassurance = false
     @FocusState private var focused: Bool
 
     init(resuming: Capture? = nil) {
@@ -148,58 +162,13 @@ struct ComposerView: View {
         NavigationStack {
             // Tighter once candidates exist: every point of vertical spacing here is a
             // point the card can't use to show a field.
-            VStack(alignment: .leading, spacing: drafts.isEmpty ? Spacing.md : Spacing.sm) {
-                // The prompt is an EMPTY-STATE invitation: once candidates exist it has
-                // done its job, and on a keyboard-up sheet its ~60pt is the difference
-                // between a card that shows its fields and one clipped mid-chip.
-                if drafts.isEmpty {
-                    Text("What's on your mind?")
-                        .screenTitleStyle()
-                        .padding(.top, Spacing.xs)
-                        .transition(.opacity)
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                switch phase {
+                case .capture: captureSurface
+                case .understanding: understandingSurface
+                case .confirm: confirmSurface
+                case .created(let count): createdSurface(count)
                 }
-
-                imageChip
-
-                composerField
-                    // Once tasks have taken shape, the TASK is the subject — the raw
-                    // text stays visible and editable but yields its room. It used to
-                    // hold 160pt while the card list got ~80pt with the keyboard up,
-                    // which is why a single card rendered clipped mid-title.
-                    .frame(minHeight: 72, maxHeight: drafts.isEmpty ? 240 : 76)
-                    // The field yields room to the cards it produced — but it EASES
-                    // instead of snapping. It used to lose 80pt in one frame the
-                    // instant the first candidate landed, resizing under the cursor
-                    // of someone still mid-sentence.
-                    .animation(reduceMotion ? nil : Motion.settle, value: drafts.isEmpty)
-
-                dictationHint
-                    // The hint states declare opacity transitions; this is the
-                    // animation that actually drives them — without it every state
-                    // change snapped.
-                    .animation(Motion.fade, value: speech.state)
-
-                if drafts.isEmpty {
-                    Text(foundNothing ? Self.nothingFoundHint : Self.openingHint)
-                        .supportingStyle()
-                        .animation(Motion.fade, value: foundNothing)
-                    Spacer(minLength: 0)
-                } else {
-                    engineDisclosure
-                    ScrollView {
-                        ConfirmCreationList(
-                            drafts: $drafts,
-                            ownerOptions: ownerOptions,
-                            rosterNames: rosterNames,
-                            onAddToRoster: { addToRoster($0) },
-                            onRemove: { removedDrafts.record($0) }
-                        )
-                        .padding(.top, Spacing.xxs)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                }
-
-                footer
             }
             .padding(Spacing.lg)
             .background(Palette.background)
@@ -219,13 +188,18 @@ struct ComposerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    // Cancel is a real choice now, because swiping away no longer
-                    // destroys anything. "Keep it" is the default; discarding is the
-                    // deliberate, destructive one.
-                    if drafts.isEmpty && text.isEmpty {
+                    // Cancel is a real choice, because swiping away no longer destroys
+                    // anything. From the reveal, "Back" returns to the canvas with the
+                    // words intact — nothing has been committed yet.
+                    switch phase {
+                    case .capture where text.isEmpty:
                         Button("Cancel") { dismiss() }
-                    } else {
+                    case .capture:
                         Button("Discard", role: .destructive) { showDiscardConfirm = true }
+                    case .understanding, .confirm:
+                        Button("Back") { backToCapture() }
+                    case .created:
+                        EmptyView()
                     }
                 }
             }
@@ -233,6 +207,30 @@ struct ComposerView: View {
                 focused = true
                 refreshRosterCaches()
                 restoreIfResuming()
+                // Verification seam: a resumed capture from `-OpenCapture` submits itself
+                // so the understanding/reveal phases are screenshot-reachable headlessly
+                // (synthetic taps are blocked on this host). `-NoSubmit` stays on the
+                // canvas for the capture-phase shot. Never fires in normal runs.
+                #if DEBUG
+                    if resuming != nil, !text.isEmpty,
+                        !ProcessInfo.processInfo.arguments.contains("-NoSubmit")
+                    {
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(250))
+                            submit()
+                        }
+                    }
+                #endif
+            }
+            // The orb's reassurance line — long work must read as calm, never as stuck.
+            .onChange(of: phase) { _, newPhase in
+                showReassurance = false
+                guard newPhase == .understanding else { return }
+                Task {
+                    try? await Task.sleep(for: .seconds(Self.reassuranceAfterSeconds))
+                    guard phase == .understanding else { return }
+                    Motion.withMotion(Motion.fade) { showReassurance = true }
+                }
             }
             // Live transcript flows into the field: base text + everything heard so far.
             .onChange(of: speech.transcript) { _, transcript in
@@ -245,15 +243,17 @@ struct ComposerView: View {
                 if !transcript.isEmpty { usedDictation = true }
                 scheduleSilenceStop()
             }
-            // The live loop, two producers. The provisional pass paints cards from the
-            // deterministic pipeline NOW; the model parse keeps its rolling cadence and
-            // upgrades those cards in place when it lands.
+            // Nothing happens here on purpose. During capture the user owns the
+            // conversation and the AI stays quiet: no parse, no cards, no counts, no
+            // classification. The system gets to work at submit, and not before.
             .onChange(of: text) { _, _ in
-                if drafts.isEmpty, parse.firstCardClockStartedAt == nil {
-                    parse.firstCardClockStartedAt = Date()
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    let parked
+                {
+                    // The thought was erased; parking must not keep advertising it.
+                    AppBrain.discard(parked, in: context)
+                    self.parked = nil
                 }
-                renderProvisional()
-                scheduleTriage()
             }
             .onChange(of: speech.state) { _, state in
                 if state == .listening { scheduleSilenceStop() } else { silenceDeadline = nil }
@@ -270,8 +270,6 @@ struct ComposerView: View {
             .onDisappear {
                 speech.stop()
                 parse.silenceTask?.cancel()
-                parse.debounceTask?.cancel()
-                parse.provisionalTask?.cancel()
                 parse.parseTask?.cancel()
                 // The backstop that makes this whole phase worth having: a swipe-down,
                 // a phone call, anything that tears the sheet down mid-thought leaves
@@ -297,242 +295,135 @@ struct ComposerView: View {
     private static let nothingFoundHint =
         "Nothing actionable in that yet. Try phrasing it as something to do — “call the dentist”, “decide about the gym” — and it'll take shape here."
 
-    /// A finished parse that produced no candidates. Without this the composer's only
-    /// answer to "why is the button dead?" was the same encouraging hint as an empty
-    /// field, which reads as the app having quietly failed.
+    // MARK: - The Ramble arc: submit → understand → reveal
+
+    /// Which stage of the arc is on screen. The whole point of the phase machine is the
+    /// hard invariant: **at no point before confirmation may the user see an intermediate
+    /// AI interpretation presented as truth.** During `.capture` nothing is parsed at all;
+    /// during `.understanding` nothing is shown but the orb; `.confirm` renders one
+    /// interpretation whose STRUCTURE never changes again.
+    enum RamblePhase: Equatable {
+        case capture
+        case understanding
+        case confirm
+        case created(Int)
+    }
+
+    /// How long the ✓ receipt holds before the sheet closes.
+    private static let createdReceiptSeconds: TimeInterval = 0.9
+    /// When "still working" reassurance joins the orb, so a long ramble reads as calm
+    /// rather than stuck. Deliberately not a progress affordance.
+    static let reassuranceAfterSeconds: TimeInterval = 8
+
+    /// Submit — the deliberate handoff. "Got it, I'll take it from here."
     ///
-    /// Keyed on what the ENGINE returned, not on whether cards are on screen: a user
-    /// who read three good candidates and deleted all three would otherwise be told
-    /// "nothing actionable in that yet" about text the parser understood perfectly —
-    /// the message exists to stop the app reading as quietly broken, so it must not
-    /// become the lie it was added to prevent.
-    private var foundNothing: Bool {
-        guard drafts.isEmpty, !brain.isProcessing, !lastParseYieldedCandidates,
-            let lastParsedText
-        else { return false }
-        return lastParsedText == text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    // MARK: - Live triage loop
-
-    /// The rolling cadence, three numbers:
-    /// - `debounce`: the quiet gap after which a burst of input is worth parsing.
-    /// - `maxParseDeferral`: how long continuous input may keep resetting that
-    ///   debounce before a parse fires anyway. Dictation's volatile hypotheses land
-    ///   faster than the debounce can ever survive, so without this bound the
-    ///   flagship input mode never parsed until the speaker stopped.
-    /// - `parkThrottle`: the floor between mid-session park writes (an O(capture)
-    ///   encode + synchronous save) now that rolling parses complete far more often
-    ///   than the old at-pause cadence. Raw text is never at risk for longer than
-    ///   this window, and dismissal always parks unthrottled.
-    private static let debounceMilliseconds = 400
-    private static let maxParseDeferralSeconds: TimeInterval = 1.2
-    private static let parkThrottleSeconds: TimeInterval = 2
-
-    /// The PROVISIONAL pass's floor — and it is not a debounce. Leading-edge: the
-    /// first input of a capture renders at once, which is the entire feature; only
-    /// continuous input (dictation's ~12Hz hypotheses) is coalesced, at the same
-    /// ~10 updates/s ceiling the streamed partials already use. A debounce here
-    /// would delay the first card, which is precisely the latency this removes.
-    private static let provisionalCoalesceSeconds: TimeInterval = 0.08
-
-    /// The instant answer, painted before any model runs. Coalesced on the leading
-    /// edge (the first input fires immediately) and skipped outright when the text
-    /// hasn't actually changed — dictation re-emits identical hypotheses.
-    private func renderProvisional() {
-        let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !captured.isEmpty, captured != parse.lastProvisionalText else { return }
-        let elapsed = parse.lastProvisionalAt.map { Date().timeIntervalSince($0) } ?? .infinity
-        guard elapsed >= Self.provisionalCoalesceSeconds else {
-            // Trailing edge: one sleeping pass, cancel-and-replace, so a burst still
-            // ends on the newest text rather than the last one that beat the floor.
-            parse.provisionalTask?.cancel()
-            parse.provisionalTask = Task {
-                try? await Task.sleep(
-                    for: .seconds(Self.provisionalCoalesceSeconds - elapsed))
-                guard !Task.isCancelled else { return }
-                runProvisional()
-            }
-            return
-        }
-        runProvisional()
-    }
-
-    private func runProvisional() {
+    /// Structure is decided HERE and never changes again. The deterministic read is
+    /// trusted only when it is certain (the user typed the structure, or there is exactly
+    /// one item); otherwise the model decides and the orb holds the screen until it
+    /// answers. Either way the user never watches boundaries move.
+    private func submit() {
         let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !captured.isEmpty else { return }
-        let started = Date()
-        // `sessionRules()` is the one prep this path keeps — it's cached for the whole
-        // session and it's the parity requirement (learned corrections must apply to
-        // the instant card too). Ownership stays `.none`: the proposer early-outs
-        // until sync ships, and its snapshot is exactly the store read this path forbids.
-        let fresh = AppBrain.provisionalDrafts(captured, learned: sessionRules())
-        parse.lastProvisionalAt = Date()
-        parse.lastProvisionalText = captured
-        ModelMetrics.shared.recordProvisionalPass(
-            latencyMs: Int(Date().timeIntervalSince(started) * 1000))
-        applyDrafts(
-            DraftMerge.mergeProvisional(fresh: fresh, into: drafts, removed: removedDrafts),
-            source: "prov")
-    }
+        focused = false
+        speech.stop()
+        let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
+        let trusted = Segmentation.structureIsCertain(captured) && !local.isEmpty
+        submittedAt = Date()
 
-    /// The ONE place cards reach the screen — which is what makes the
-    /// time-to-first-card number honest rather than three approximations of it.
-    private func applyDrafts(_ next: [TaskDraft], source: String) {
-        let wasEmpty = drafts.isEmpty
-        Motion.withMotion(Motion.settle) { drafts = next }
-        guard wasEmpty, !next.isEmpty, let started = parse.firstCardClockStartedAt else { return }
-        ModelMetrics.shared.recordCapturePaint(
-            firstCardMs: Int(Date().timeIntervalSince(started) * 1000), source: source)
-        parse.firstCardClockStartedAt = nil
-    }
-
-    /// The input edge of the MODEL loop: debounce quiet gaps, bound continuous bursts
-    /// by `maxParseDeferralSeconds` — and never disturb a parse that is already
-    /// streaming (its candidates are landing on screen; a follow-up chains the
-    /// moment it completes instead).
-    private func scheduleTriage() {
-        parse.debounceTask?.cancel()
-
-        let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !captured.isEmpty else {
-            // Everything in flight is now about text that no longer exists.
-            parse.parseEpoch += 1
-            parse.parseTask?.cancel()
-            parse.parseTask = nil
-            parse.burstStartedAt = nil
-            parse.preparedCandidates = []
-            parse.enrichedText = nil
-            parse.provisionalTask?.cancel()
-            parse.lastProvisionalText = nil
-            parse.firstCardClockStartedAt = nil
-            drafts = []
-            lastParsedText = nil
-            lastParseYieldedCandidates = false
-            // Nothing dictated survives an emptied field, so the Capture row must not
-            // keep claiming this was a voice capture — nor an image one: an emptied
-            // field is the user erasing the thought, photo and all.
-            usedDictation = false
-            if let ref = capturedImageRef { CaptureImageStore.delete(ref) }
-            capturedImageRef = nil
-            capturedThumb = nil
-            usedImage = false
-            // The user emptied the field. Parking exists so an INTERRUPTION can't destroy a
-            // thought — it must not resurrect one that was deliberately erased. Left alone,
-            // the parked row keeps the deleted text and Today goes on advertising it as a
-            // "capture waiting", which reads as the app ignoring a delete.
-            if let parked { AppBrain.discard(parked, in: context) }
-            parked = nil
-            return
-        }
-
-        // A parse is already streaming; don't disturb it. Whether a follow-up is
-        // needed is decided at its completion, by comparing the field against what
-        // it actually parsed — no flag to keep honest.
-        if parse.parseTask != nil { return }
-
-        let now = Date()
-        let burstStart = parse.burstStartedAt ?? now
-        parse.burstStartedAt = burstStart
-        if now.timeIntervalSince(burstStart) >= Self.maxParseDeferralSeconds {
-            startParse()
+        if trusted {
+            // Certain structure — reveal at once. This is how the common cases meet
+            // "submit → stable confirmation" without waiting on generation.
+            drafts = local
+            structureSource = "local"
+            Motion.withMotion(Motion.heroSettle) { phase = .confirm }
+            recordConfirmReached()
         } else {
-            parse.debounceTask = Task {
-                try? await Task.sleep(for: .milliseconds(Self.debounceMilliseconds))
-                guard !Task.isCancelled else { return }
-                startParse()
-            }
+            structureSource = "model"
+            Motion.withMotion(Motion.heroSettle) { phase = .understanding }
         }
+        parkIfUnfinished(force: true)
+        runParse(captured, revealWhenDone: !trusted)
     }
 
-    /// One parse, start to finish: prep the context, run the engine with streaming
-    /// partials, apply the completed result, chain the follow-up if the field moved
-    /// while it ran. Exactly one parse runs at a time — `scheduleTriage` defers to a
-    /// running one, so the only caller-side invariant is `parse.parseTask == nil`.
-    private func startParse() {
-        let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !captured.isEmpty else { return }
-        parse.burstStartedAt = nil
-        parse.parseEpoch += 1
-        let epoch = parse.parseEpoch
-
+    /// The ONE model parse a capture gets. When the reveal is already on screen this
+    /// only ENRICHES the stable set (never re-counts, never reorders); when the orb is
+    /// holding, its result is what reveals.
+    private func runParse(_ captured: String, revealWhenDone: Bool) {
+        parse.parseTask?.cancel()
         parse.parseTask = Task {
-            // Everything below is real work (correction-profile build, open-set snapshot,
-            // suppression load + prune, embedding warm-up). It runs only once a burst
-            // earns a parse — never once per keystroke — so a fast typist doesn't pay
-            // for input that is immediately superseded.
             let roster = rosterSnapshot
             let learned = sessionRules()
             let openTasks = openTaskSnapshots
             let suppressions = sessionSuppressions()
             let ownership = ownershipSnapshot
-            // Load persisted title vectors into the retrieval memo (once per process) so
-            // the first capture of the session doesn't re-embed the whole open set.
             EmbeddingStore.warmUp(openTaskIDs: Set(openTasks.map(\.id)), in: context)
+            // No partial handler: streamed snapshots would expose structure growing,
+            // which is the whole thing this architecture exists to prevent. The
+            // deadline's salvage still applies — it becomes the timeout path into
+            // the reveal.
             let result = await brain.triage(
-                captured,
-                roster: roster,
-                learned: learned,
-                openTasks: openTasks,
-                suppressions: suppressions,
-                ownership: ownership,
-                preparedCandidates: parse.preparedCandidates,
-                onPartial: { partial in
-                    // Streaming (device): candidates fill in while the model is still
-                    // generating — including while the user keeps talking. Snapshots
-                    // from an invalidated epoch drop; edits survive merge; cards the
-                    // snapshot hasn't reached yet are KEPT (only a completed parse
-                    // may drop a card).
-                    guard epoch == self.parse.parseEpoch else { return }
-                    self.applyDrafts(
-                        self.merge(fresh: partial, into: self.drafts, keepingUnmatched: true),
-                        source: "partial")
-                }
-            )
-            guard !Task.isCancelled, epoch == parse.parseEpoch else { return }
+                captured, roster: roster, learned: learned, openTasks: openTasks,
+                suppressions: suppressions, ownership: ownership)
+            guard !Task.isCancelled else { return }
             parse.parseTask = nil
-            // This parse's retrieval becomes the NEXT parse's prompt candidates —
-            // the chain is how the model gets a candidate package without first-draft
-            // latency ever paying for retrieval (audit A1).
-            parse.preparedCandidates = result.candidates
-            // Persist any title vectors retrieval computed fresh this pass — tiny rows
-            // on the app's write context, post-debounce (never per keystroke). The
-            // save rides the next commit; an abandoned capture just re-memoizes later.
             EmbeddingStore.persistFresh(openTasks: openTasks, in: context)
-            lastParseYieldedCandidates = !result.drafts.isEmpty
-            // Preserve the user's in-place edits: a re-parse only replaces
-            // candidates whose AI reading actually changed.
-            //
-            // A parse is authoritative only about the text it READ. If the user kept
-            // typing or talking, the provisional cards for sentences this parse never
-            // saw must ride at the tail rather than be dropped — the chained follow-up
-            // below drops them for real once it has read the whole thing. This refines
-            // the old contract ("only a completed parse may drop a card") to "only a
-            // completed parse over the CURRENT text may drop a card".
-            let textMoved = text.trimmingCharacters(in: .whitespacesAndNewlines) != captured
-            applyDrafts(
-                merge(fresh: result.drafts, into: drafts, keepingUnmatched: textMoved),
-                source: "model")
             lastParsedText = captured
-            announceParseResult()
-            // Park as soon as there is something worth keeping, not only on dismiss —
-            // it shrinks the window in which the thought lives only in memory.
-            parkIfUnfinished()
-            // The field moved while this parse ran (dictation deltas, more typing).
-            // Chain the follow-up immediately: the debounce's job — don't parse
-            // mid-burst — has been done by the parse's own duration.
-            if text.trimmingCharacters(in: .whitespacesAndNewlines) != captured {
-                startParse()
-            } else if result.suggestsEnrichment, parse.enrichedText != captured {
-                // Single-shot backstop: the burst produced no chain, so the model
-                // never saw candidates and duplicate/child proposals couldn't land.
-                // ONE re-parse over the same text with the now-ready package —
-                // bounded by the marker, and an enrichment run carries candidates so
-                // it can never suggest another.
-                parse.enrichedText = captured
-                startParse()
+            lastParseYieldedCandidates = !result.drafts.isEmpty
+
+            if revealWhenDone {
+                // The model decides the structure; if it found nothing, the
+                // deterministic read is the honest fallback rather than an empty screen.
+                let final =
+                    result.drafts.isEmpty
+                    ? AppBrain.provisionalDrafts(captured, learned: learned) : result.drafts
+                drafts = merge(fresh: final, into: drafts)
+                Motion.withMotion(Motion.heroSettle) { phase = .confirm }
+                recordConfirmReached()
+            } else {
+                // ENRICHMENT ONLY. The shown structure wins: the model may improve every
+                // card's title and metadata, but it may not change how many there are or
+                // what order they are in.
+                enrich(with: result.drafts)
             }
+            parkIfUnfinished(force: true)
         }
+    }
+
+    /// Fill metadata onto the revealed set without reinterpreting it. Cards the model
+    /// didn't claim keep what they have; model drafts that claim nothing are dropped and
+    /// counted, so local-vs-model structural disagreement is visible rather than guessed.
+    private func enrich(with fresh: [TaskDraft]) {
+        guard !fresh.isEmpty else { return }
+        let before = drafts
+        let merged = merge(fresh: fresh, into: before)
+        // The invariant, enforced at the seam rather than trusted: enrichment may not
+        // change the count or the order of what the user is already reading.
+        let kept = before.map { existing in
+            merged.first(where: { $0.id == existing.id }) ?? existing
+        }
+        if merged.count != before.count {
+            ModelMetrics.shared.recordStructureDisagreement()
+        }
+        Motion.withMotion(Motion.fade) { drafts = kept }
+        if let submittedAt {
+            ModelMetrics.shared.recordEnrichment(
+                latencyMs: Int(Date().timeIntervalSince(submittedAt) * 1000))
+        }
+    }
+
+    private func recordConfirmReached() {
+        guard let submittedAt else { return }
+        ModelMetrics.shared.recordConfirmReached(
+            latencyMs: Int(Date().timeIntervalSince(submittedAt) * 1000),
+            source: structureSource)
+    }
+
+    /// Back to the canvas with the words intact — nothing has been committed.
+    private func backToCapture() {
+        parse.parseTask?.cancel()
+        parse.parseTask = nil
+        Motion.withMotion(Motion.settle) { phase = .capture }
+        focused = true
     }
 
     /// The learned-correction rules, built once per composer session. Correction rows
@@ -630,69 +521,169 @@ struct ComposerView: View {
             keepingUnmatched: keepingUnmatched)
     }
 
-    // MARK: - Footer (the Confirm-Creation moment)
+    // MARK: - The four surfaces
 
-    private var footer: some View {
+    /// CAPTURE — a thought canvas, not a task field. The AI is entirely absent here.
+    @ViewBuilder private var captureSurface: some View {
+        Text("What's on your mind?")
+            .screenTitleStyle()
+            .padding(.top, Spacing.xs)
+        Text("Dump it all here. I'll sort it out.")
+            .supportingStyle()
+
+        imageChip
+        composerField
+            .frame(minHeight: 120, maxHeight: 280)
+            .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
+
+        dictationHint
+            .animation(Motion.fade, value: speech.state)
+
+        Spacer(minLength: 0)
+
         VStack(spacing: Spacing.sm) {
-            Button {
-                commitAll()
-            } label: {
-                HStack {
-                    // The "count may still grow" signal, ENABLED state only — the
-                    // disabled button no longer moonlights as the progress indicator
-                    // (the field's border glow already says "thinking"; the one thing
-                    // that looks tappable shouldn't be the one saying "wait").
-                    if brain.isProcessing && !drafts.isEmpty {
-                        Image(systemName: "sparkles")
-                            .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
-                    }
-                    Text(ctaTitle)
-                        .font(.ctaLabel)
-                }
-                // `onAccent` is tuned for the gradient; on the muted disabled surface
-                // it fails contrast — the disabled state gets the muted pair instead.
-                .foregroundStyle(
-                    drafts.isEmpty
-                        ? AnyShapeStyle(Palette.mutedText) : AnyShapeStyle(Palette.onAccent)
+            rambleButton
+            voiceOrMicRow
+        }
+    }
+
+    /// The submit affordance — the deliberate handoff.
+    private var rambleButton: some View {
+        Button { submit() } label: {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "sparkle")
+                Text("Ramble").font(.ctaLabel)
+            }
+            .foregroundStyle(
+                canSubmit ? AnyShapeStyle(Palette.onAccent) : AnyShapeStyle(Palette.mutedText)
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .background(
+                canSubmit
+                    ? AnyShapeStyle(Palette.accentGradient)
+                    : AnyShapeStyle(Palette.secondarySurface),
+                in: Capsule()
+            )
+        }
+        .buttonStyle(.pressableProminent)
+        .disabled(!canSubmit)
+        .accessibilityLabel("Ramble — turn what you wrote into tasks")
+    }
+
+    private var canSubmit: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !readingImage
+    }
+
+    /// UNDERSTANDING — one calm object. No spinner, no progress, no counts, no
+    /// candidate titles: the engine may revise its interpretation arbitrarily behind
+    /// this and the screen must not move.
+    @ViewBuilder private var understandingSurface: some View {
+        Spacer(minLength: 0)
+        VStack(spacing: Spacing.lg) {
+            RambleOrb()
+                .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
+            Text("Making sense of it")
+                .font(.sectionHeader)
+                .foregroundStyle(Palette.primaryText)
+            if showReassurance {
+                Text("Still working — that was a big one.")
+                    .metadataStyle()
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Making sense of what you wrote")
+        Spacer(minLength: 0)
+    }
+
+    /// REVEAL / CONFIRM — the answer, as one composition. Tasks own the viewport.
+    @ViewBuilder private var confirmSurface: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            Text(drafts.isEmpty ? "Nothing actionable in that" : "Here's what I understood")
+                .screenTitleStyle()
+            if !drafts.isEmpty {
+                Text(drafts.count == 1 ? "1 thing" : "\(drafts.count) things")
+                    .supportingStyle()
+            }
+        }
+        .padding(.top, Spacing.xs)
+        .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
+
+        if drafts.isEmpty {
+            Text(Self.nothingFoundHint).supportingStyle()
+            Spacer(minLength: 0)
+        } else {
+            ScrollView {
+                ConfirmCreationList(
+                    drafts: $drafts,
+                    ownerOptions: ownerOptions,
+                    rosterNames: rosterNames,
+                    onAddToRoster: { addToRoster($0) },
+                    onRemove: { removedDrafts.record($0) }
                 )
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(
-                    (drafts.isEmpty
-                        ? AnyShapeStyle(Palette.secondarySurface)
-                        : AnyShapeStyle(Palette.accentGradient)),
-                    in: Capsule()
-                )
+                .padding(.top, Spacing.xxs)
+            }
+        }
+
+        VStack(spacing: Spacing.sm) {
+            Button { createTasks() } label: {
+                Text(createTitle)
+                    .font(.ctaLabel)
+                    .foregroundStyle(Palette.onAccent)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(Palette.accentGradient, in: Capsule())
             }
             .buttonStyle(.pressableProminent)
             .disabled(drafts.isEmpty)
-            // Sighted users learn "more may still arrive" from the pulsing sparkle;
-            // without this, VoiceOver announced a bare count and nothing else.
-            .accessibilityValue(brain.isProcessing ? "still reading, the count may change" : "")
 
-            // Voice as the hero while listening: the small capsule morphs into the
-            // full listening bar — level meter, 64pt stop control, silence countdown —
-            // and morphs back on stop. Under Reduce Motion the morph is a crossfade.
-            if speech.isActive {
-                VoiceHeroBar(
-                    monitor: speech.audioLevel,
-                    silenceDeadline: silenceDeadline,
-                    silenceWindow: Self.silenceStopSeconds,
-                    onStop: { toggleDictation() }
-                )
-                .matchedGeometryEffect(id: "voice", in: voiceMorph)
-            } else {
-                micRow
-                    .matchedGeometryEffect(id: "voice", in: voiceMorph)
-            }
+            Button("Add another") { backToCapture() }
+                .font(.controlLabel)
+                .foregroundStyle(Palette.secondaryText)
+                .frame(height: LayoutMetrics.hitTarget)
+                .buttonStyle(.pressableLink)
         }
-        .animation(reduceMotion ? Motion.fade : Motion.capsuleExpand, value: speech.isActive)
     }
 
-    private var ctaTitle: String {
-        guard !drafts.isEmpty else { return "Add tasks" }
-        return "Add \(drafts.count) task\(drafts.count == 1 ? "" : "s")"
+    private var createTitle: String {
+        drafts.count == 1 ? "Create 1 task" : "Create \(drafts.count) tasks"
     }
+
+    /// DONE — a short, satisfying receipt, then back to whatever the user was doing.
+    @ViewBuilder private func createdSurface(_ count: Int) -> some View {
+        Spacer(minLength: 0)
+        VStack(spacing: Spacing.md) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.glyphDisplay(.semibold))
+                .foregroundStyle(Palette.accentFlat)
+                .transition(.scale.combined(with: .opacity))
+            Text(count == 1 ? "1 task added" : "\(count) tasks added")
+                .font(.sectionHeader)
+                .foregroundStyle(Palette.primaryText)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        Spacer(minLength: 0)
+    }
+
+    /// The voice hero / mic row, unchanged in behavior — capture keeps both input modes.
+    @ViewBuilder private var voiceOrMicRow: some View {
+        if speech.isActive {
+            VoiceHeroBar(
+                monitor: speech.audioLevel,
+                silenceDeadline: silenceDeadline,
+                silenceWindow: Self.silenceStopSeconds,
+                onStop: { toggleDictation() }
+            )
+            .matchedGeometryEffect(id: "voice", in: voiceMorph)
+        } else {
+            micRow
+                .matchedGeometryEffect(id: "voice", in: voiceMorph)
+        }
+    }
+
 
     /// Speak the outcome of a completed parse. The composer's whole promise is that
     /// candidates appear as you talk — visible motion a screen-reader user got no
@@ -725,11 +716,6 @@ struct ComposerView: View {
     private func parkIfUnfinished(force: Bool = false) {
         guard !drafts.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
-        if !force, let last = parse.lastParkAt,
-            Date().timeIntervalSince(last) < Self.parkThrottleSeconds
-        {
-            return
-        }
         parse.lastParkAt = Date()
         parked = brain.park(
             drafts, rawCapture: text, source: captureSource, imageRef: capturedImageRef,
@@ -758,18 +744,14 @@ struct ComposerView: View {
             capturedThumb = image
             usedImage = true
         }
-        if let restored = resuming.parkedDrafts, !restored.isEmpty {
-            drafts = restored
-        } else {
-            scheduleTriage()
-        }
+        // A resumed capture lands in CAPTURE with its words, awaiting a fresh submit.
+        // Resuming is not re-deciding: the user re-reads what they wrote and rambles
+        // again, rather than being handed an interpretation they never asked for twice.
+        drafts = []
     }
 
     private func discard() {
         speech.stop()
-        parse.parseEpoch += 1
-        parse.debounceTask?.cancel()
-        parse.provisionalTask?.cancel()
         parse.parseTask?.cancel()
         parse.parseTask = nil
         // Discard is the one destructive path — the photo goes with the thought.
@@ -783,39 +765,34 @@ struct ComposerView: View {
         dismiss()
     }
 
-    private func commitAll() {
+    /// CREATE — the only place tasks come into existence. Nothing before this wrote to
+    /// the store, which is what makes the whole arc safe to iterate behind.
+    private func createTasks() {
         guard !drafts.isEmpty else { return }
         speech.stop()
-        parse.parseEpoch += 1
-        parse.debounceTask?.cancel()
-        parse.provisionalTask?.cancel()
         parse.parseTask?.cancel()
         parse.parseTask = nil
+        let count = drafts.count
         committed += 1
-        // Adopt the parked row rather than creating a second one for the same event.
         brain.commit(
             drafts, rawCapture: text, source: captureSource, imageRef: capturedImageRef,
             parked: parked, into: context)
-        // "Add N tasks" IS the Confirm-Creation moment, and `commit` IS the creation:
-        // every field was visible and editable, and the tasks come into existence here,
-        // born `.todo`. There is no second confirm step to run. (A judgment call's Needs
-        // Decision flag survives creation — confirming that "figure out if X" exists is
-        // not making the call.)
-        //
-        // Clearing the session state is REQUIRED, not tidiness: `.onDisappear` runs
-        // `parkIfUnfinished` after this, and it keys off `drafts`/`text`. Leaving them
-        // populated would park a phantom duplicate of the capture just committed, and
-        // Today would read "1 capture waiting" after every successful add.
+        // Clearing is REQUIRED, not tidiness: `.onDisappear` runs `parkIfUnfinished`,
+        // and it keys off `drafts`/`text` — leaving them populated would park a phantom
+        // duplicate of the capture just committed.
         parked = nil
         drafts = []
         removedDrafts = RemovedDraftSet()
         text = ""
-        // No save here: `brain.commit` ends with one, and nothing between it and this
-        // line touches the store — the four assignments above are view state. A second
-        // synchronous save on the confirm tap was pure latency before `dismiss()`.
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         parse.cachedRules = nil  // likewise new corrections
-        dismiss()
+        // A short, satisfying receipt, then back to whatever the user was doing —
+        // capture is something you do mid-life, not a place you go.
+        Motion.withMotion(Motion.heroSettle) { phase = .created(count) }
+        Task {
+            try? await Task.sleep(for: .seconds(Self.createdReceiptSeconds))
+            dismiss()
+        }
     }
 
     // MARK: - Field
@@ -1117,37 +1094,12 @@ struct ComposerView: View {
 /// mutate on every keystroke and transcript delta, and nothing in the view's `body`
 /// reads them, so observing them only bought a redundant render pass per event.
 final class LiveParseState {
-    /// Bumped whenever in-flight work must be invalidated — a parse starting, the
-    /// field emptied, commit/discard. A parse captures the value at start; its
-    /// streamed partials and final result apply only while still current.
-    var parseEpoch = 0
-    /// The sleeping debounce; cancelled and replaced per input event.
-    var debounceTask: Task<Void, Never>?
-    /// The one running parse. New input never cancels it — its candidates are
-    /// streaming onto the screen; it is superseded only at its own completion.
+    /// The one parse a submitted capture gets. Cancelled by Back, Discard and Create.
     var parseTask: Task<Void, Never>?
-    /// When the current burst of unparsed input began — the max-wait clock. Cleared
-    /// when a parse starts.
-    var burstStartedAt: Date?
-    /// The last completed parse's retrieval set — the next parse's prompt
-    /// candidates (audit A1: candidates ride the chain).
-    var preparedCandidates: [RetrievalCandidate] = []
-    /// The text an enrichment re-parse already ran for, so the single-shot
-    /// backstop fires at most once per settled text.
-    var enrichedText: String?
     /// The learned-correction rules for this session (see `sessionRules`).
     var cachedRules: [LearnedRule]?
-    /// The last mid-session park write, for the throttle.
+    /// The last park write, so the durable row is updated rather than duplicated.
     var lastParkAt: Date?
-    /// The provisional (instant) pass's bookkeeping: when it last ran, the sleeping
-    /// trailing-edge pass, and the trimmed text it last read — dictation re-emits
-    /// identical hypotheses, and re-segmenting the same string is pure cost.
-    var lastProvisionalAt: Date?
-    var provisionalTask: Task<Void, Never>?
-    var lastProvisionalText: String?
-    /// When the current capture's first input landed on an empty card list — the
-    /// time-to-first-card clock, cleared the moment a card is painted.
-    var firstCardClockStartedAt: Date?
     /// The single silence-timeout in flight; cancelled and replaced on every
     /// transcript delta, cancelled outright on stop/disappear.
     var silenceTask: Task<Void, Never>?

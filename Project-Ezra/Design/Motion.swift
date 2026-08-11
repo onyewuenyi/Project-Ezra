@@ -75,6 +75,9 @@ enum Motion {
     /// The composer's "thinking" glow pulse — never a spinner.
     static let glowPulse = Animation.easeInOut(duration: 0.6)
     /// Slow ambient drift for the held-depth diffuse field.
+    /// The Ramble orb's breath — seconds-long on purpose. Faster reads as a spinner;
+    /// this reads as thinking.
+    static let orbBreath = Animation.easeInOut(duration: 2.4)
     static let ambient = Animation.easeInOut(duration: 6)
 
     // MARK: - Reduce-motion helpers (imperative sites)

@@ -51,6 +51,38 @@ enum Segmentation {
         return fold(items)
     }
 
+    /// Items from ONLY the structure the user actually typed — lines, bullets, sentence
+    /// marks, list commas — with no connective-clause inference. Splitting "renew my
+    /// passport and call mom" is a judgement about prose; splitting "buy milk, call mom"
+    /// is reading punctuation the user put there.
+    static func explicitItems(from text: String) -> [String] {
+        let separators = CharacterSet(charactersIn: "\n\r")
+        var items: [String] = []
+        for line in text.components(separatedBy: separators) {
+            let trimmed =
+                line
+                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-•*·—▪◦> \t"))
+            guard trimmed.count > 1 else { continue }
+            for sentence in sentences(in: trimmed) {
+                items.append(contentsOf: splitCommaList(strippedPreamble(sentence)))
+            }
+        }
+        return fold(items)
+    }
+
+    /// Is the deterministic read trustworthy enough to SHOW as final structure?
+    ///
+    /// Only when it needs no inference about prose: either the split came entirely from
+    /// punctuation and layout the user typed, or there is exactly one item. Anything the
+    /// connective splitter cut apart is a guess, and a guess must never be presented as
+    /// the answer — the model decides those, behind the orb.
+    static func structureIsCertain(_ text: String) -> Bool {
+        let full = items(from: text)
+        if full.count <= 1 { return true }
+        return full.count == explicitItems(from: text).count
+    }
+
     // MARK: - Sentences
 
     private static func sentences(in line: String) -> [String] {

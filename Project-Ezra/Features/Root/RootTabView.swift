@@ -180,7 +180,7 @@ struct RootTabView: View {
     }
 
     /// Deterministic verification seam. Launch with `-OpenCapture ["text"]` to present
-    /// the composer at launch — the one capture surface no other arg could reach
+    /// the composer at launch (add `-NoSubmit` to stay on the capture canvas) — the one capture surface no other arg could reach
     /// (synthetic taps are blocked here, and the composer only opens from a tap). With
     /// a text argument the seam parks that text as a `Capture` and RESUMES it, which
     /// re-parses through the full live loop (`restoreIfResuming` → `scheduleTriage`) —

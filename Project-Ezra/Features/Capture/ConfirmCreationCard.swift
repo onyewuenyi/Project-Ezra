@@ -248,7 +248,6 @@ struct ConfirmCreationCard: View, Equatable {
             ownerChip
             urgentChip
             effortChip
-            kindChip
             if draft.blockedBy != nil { blockerChip }
             ForEach(draft.blocks, id: \.id) { dependent in
                 dependentChip(dependent)
@@ -275,7 +274,6 @@ struct ConfirmCreationCard: View, Equatable {
                     ownerChip
                     urgentChip
                     effortChip
-                    kindChip
                     if draft.blockedBy != nil { blockerChip }
                     ForEach(draft.blocks, id: \.id) { dependent in
                         dependentChip(dependent)
@@ -454,52 +452,6 @@ struct ConfirmCreationCard: View, Equatable {
         }
         .accessibilityLabel("Category, assumed \(draft.category)")
     }
-
-    /// What KIND of work this is (axis 2). It leads the row on purpose: "what sort of
-    /// thing is this" reads ahead of "what area of life does it belong to".
-    ///
-    /// Present because the classification is still consequential — it biases the
-    /// breakdown's planning rung and is a learnable correction field — but DEMOTED to
-    /// the end of the row (2026-08-08): it no longer voices the CTA or gates any
-    /// capability (Decision retired from axis 2; the partner keys on flag/wording).
-    /// Presence, not primacy — first position belongs to category · due · owner.
-    private var kindChip: some View {
-        Menu {
-            ForEach(WorkIntent.allCases) { intent in
-                Button(intent.label) {
-                    draft.workIntent = intent
-                    draft.markEdited(.workIntent)
-                }
-            }
-            if draft.workIntent != nil {
-                Divider()
-                Button("Clear", role: .destructive) {
-                    draft.workIntent = nil
-                    draft.markEdited(.workIntent)
-                }
-            }
-        } label: {
-            if let intent = draft.workIntent {
-                pill {
-                    assumedMark
-                    Image(systemName: "square.stack.3d.up").font(.glyphCaption())
-                    Text(intent.label).font(.metadata.weight(.medium))
-                }
-                .foregroundStyle(Palette.secondaryText)
-            } else {
-                // Unreachable after the resolver's backfill, but kept so a fixture or a
-                // cleared value degrades to the same add-affordance its neighbours use.
-                pill {
-                    Image(systemName: "plus").font(.glyphCaption())
-                    Text("kind").font(.metadata.weight(.medium))
-                }
-                .foregroundStyle(Palette.mutedText)
-            }
-        }
-        .accessibilityLabel(
-            draft.workIntent.map { "Kind of work, assumed \($0.label)" } ?? "Add kind of work")
-    }
-
     private var dueChip: some View {
         Menu {
             Button("Today") { setDue(0) }

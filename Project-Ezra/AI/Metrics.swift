@@ -265,13 +265,18 @@ final class ModelMetrics {
         /// evidence chunking and context budgets are designed against.
         var lastPromptTokens = -1
         var lastContextSize = -1
-        /// Text change → a card on screen, for the FIRST card of a capture. The
-        /// instant-capture claim, measured: nothing measured it before, and the
-        /// deterministic branch recorded nothing at all. `source` names the producer
-        /// ("prov"/"partial"/"model") — a drift back to "model" is the signal the
-        /// provisional pass has broken.
-        var lastFirstCardMs = -1
+        /// **Submit → stable confirmation** — the number that actually matters for
+        /// Ramble. Not time-to-first-token, not time-to-first-card: time to a
+        /// trustworthy result the user can act on. `source` says who decided the
+        /// structure ("local" = a certain deterministic read, revealed at once;
+        /// "model" = the orb held the screen until generation answered).
+        var lastConfirmMs = -1
         var lastFirstCardSource: String?
+        /// Submit → the model's enrichment landing on the already-revealed set.
+        var lastEnrichmentMs = -1
+        /// How often the model wanted a different structure than the one on screen.
+        /// The shown structure always wins; this says how often that costs something.
+        var structureDisagreements = 0
         /// One provisional pass's cost — segmentation + resolve + owner proposal, on
         /// the thread the keyboard shares. The number the coalesce window is tuned on.
         var lastProvisionalMs = -1
@@ -358,13 +363,26 @@ final class ModelMetrics {
         stats[feature] = entry
     }
 
-    /// Time-to-first-card for a capture, recorded at the ONE place cards reach the
-    /// screen. In-memory like the parse-shape trio: it tunes in-session behavior and
-    /// the record path already pays five synchronous defaults writes.
-    func recordCapturePaint(firstCardMs: Int, source: String) {
+    /// Submit → the confirmation the user can act on: Ramble's headline number.
+    /// In-memory like the rest of the parse-shape diagnostics.
+    func recordConfirmReached(latencyMs: Int, source: String) {
         var entry = stats[.captureTriage] ?? Stats()
-        entry.lastFirstCardMs = firstCardMs
+        entry.lastConfirmMs = latencyMs
         entry.lastFirstCardSource = source
+        stats[.captureTriage] = entry
+    }
+
+    /// Submit → enrichment landing on an already-revealed set.
+    func recordEnrichment(latencyMs: Int) {
+        var entry = stats[.captureTriage] ?? Stats()
+        entry.lastEnrichmentMs = latencyMs
+        stats[.captureTriage] = entry
+    }
+
+    /// The model wanted a different structure than the one already revealed.
+    func recordStructureDisagreement() {
+        var entry = stats[.captureTriage] ?? Stats()
+        entry.structureDisagreements += 1
         stats[.captureTriage] = entry
     }
 
@@ -403,13 +421,14 @@ final class ModelMetrics {
             }
             if entry.lastRetrievalMs >= 0 { line += " · retr \(entry.lastRetrievalMs)ms" }
             if entry.lastPartialCount > 0 { line += " · \(entry.lastPartialCount) partials" }
-            // The instant-capture numbers, first because they are what the user feels.
-            if entry.lastFirstCardMs >= 0 {
-                line += " · card \(entry.lastFirstCardMs)ms"
+            // The Ramble contract, first because it is what the user feels.
+            if entry.lastConfirmMs >= 0 {
+                line += " · confirm \(entry.lastConfirmMs)ms"
                 if let source = entry.lastFirstCardSource { line += "(\(source))" }
             }
-            if entry.lastProvisionalMs >= 0 {
-                line += " · prov \(entry.lastProvisionalMs)ms ×\(entry.provisionalPasses)"
+            if entry.lastEnrichmentMs >= 0 { line += " · enrich \(entry.lastEnrichmentMs)ms" }
+            if entry.structureDisagreements > 0 {
+                line += " · \(entry.structureDisagreements) restructure"
             }
             if entry.lastCommitMs >= 0 { line += " · commit \(entry.lastCommitMs)ms" }
             if entry.lastPromptTokens >= 0 {
