@@ -31,6 +31,10 @@ struct SettingsView: View {
     @State private var pendingReset: StoreResetRecord?
     @State private var exportURL: URL?
     @State private var backupArchiveURL: URL?
+    /// The clear awaiting confirmation, and the one that happened. Both nil is the
+    /// resting state.
+    @State private var pendingScope: DataReset.Scope?
+    @State private var clearReceipt: DataReset.Receipt?
 
     private var profile: UserProfile? { profilesResults.first }
     private var tasks: [TaskItem] { Array(tasksResults) }
@@ -337,8 +341,11 @@ struct SettingsView: View {
         )
     }
 
-    // MARK: - Data (export)
+    // MARK: - Data (export, and the two clears)
 
+    /// Export sits ABOVE the clears on purpose: the JSON snapshot is the honest safety net
+    /// (the automatic copy taken by `DataReset` is of a store that is currently open), so
+    /// the escape hatch is in view before the destructive button is.
     private var dataCard: some View {
         settingsCard(title: "Data") {
             VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -354,6 +361,129 @@ struct SettingsView: View {
                     "A readable copy of your tasks, captures and history. Everything stays on this device."
                 )
                 .metadataStyle()
+
+                Divider().overlay(Palette.border)
+
+                if let receipt = clearReceipt {
+                    clearedReceipt(receipt)
+                } else {
+                    clearControls
+                }
+            }
+        }
+    }
+
+    /// Two clears, weighted differently on purpose. Clearing your work is the one people
+    /// actually want (a bad import, a test drive, a fresh start on the same phone), so it
+    /// reads as a normal destructive action. The factory reset takes your name, your
+    /// household and your settings with it — it is the rarer, heavier thing, so it sits
+    /// below in supporting type rather than as a second red button competing with the first.
+    private var clearControls: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Button(role: .destructive) {
+                pendingScope = .work
+            } label: {
+                Label("Clear all tasks", systemImage: "trash")
+                    .font(.controlLabel)
+                    .foregroundStyle(Palette.error)
+            }
+            .frame(minHeight: LayoutMetrics.hitTarget, alignment: .leading)
+
+            Text("Deletes every task, capture and activity entry. Your profile and household stay.")
+                .metadataStyle()
+
+            Button {
+                pendingScope = .everything
+            } label: {
+                Text("Reset everything")
+                    .font(.supporting)
+                    .foregroundStyle(Palette.secondaryText)
+            }
+            .frame(minHeight: LayoutMetrics.hitTarget, alignment: .leading)
+        }
+        // One dialog for both, driven by the scope — the copy is what differs, and putting
+        // the two apart invites them to drift into saying different things about the same act.
+        .confirmationDialog(
+            clearTitle, isPresented: clearDialogPresented, titleVisibility: .visible,
+            presenting: pendingScope
+        ) { scope in
+            Button(clearVerb(scope), role: .destructive) { performClear(scope) }
+            Button("Cancel", role: .cancel) {}
+        } message: { scope in
+            Text(clearMessage(scope))
+        }
+    }
+
+    private var clearTitle: String {
+        pendingScope == .everything ? "Reset everything?" : "Clear all tasks?"
+    }
+
+    private func clearVerb(_ scope: DataReset.Scope) -> String {
+        scope == .everything ? "Reset everything" : "Clear all tasks"
+    }
+
+    private func clearMessage(_ scope: DataReset.Scope) -> String {
+        switch scope {
+        case .work:
+            return
+                "Every task, capture and activity entry is deleted. This can't be undone from inside the app — a copy of your data is saved first."
+        case .everything:
+            return
+                "Everything goes: tasks, captures, history, your profile, your household and your settings. The app starts over as if newly installed. A copy of your data is saved first."
+        }
+    }
+
+    /// Binding rather than a second `@State` flag: the pending scope IS the presentation
+    /// state, and two sources of truth for one dialog is how a cancel leaves a stale scope
+    /// armed for the next tap.
+    private var clearDialogPresented: Binding<Bool> {
+        Binding(get: { pendingScope != nil }, set: { if !$0 { pendingScope = nil } })
+    }
+
+    private func performClear(_ scope: DataReset.Scope) {
+        let receipt = DataReset.clear(
+            scope, in: context, metrics: brain.metrics, planMetrics: brain.planMetrics)
+        pendingScope = nil
+        clearReceipt = receipt
+        backupArchiveURL = receipt.backupName.flatMap { PersistenceStack.zippedBackup(named: $0) }
+        // The offered export was built at open, from data that no longer exists — sharing
+        // it after a clear would hand back the very thing the user just deleted.
+        exportURL = try? DataExport.writeTemporaryFile(in: context)
+        // The reset notice (if any) described a store that is gone either way.
+        StoreResetLog.clear()
+        pendingReset = nil
+        if scope == .everything {
+            // The one preference with a side effect outside the store: a scheduled nudge
+            // for a briefing that no longer has anything to brief about.
+            briefing.isEnabled = false
+            Task { await briefing.cancelAll() }
+        }
+    }
+
+    /// The receipt replaces the buttons for the rest of the sheet's life — the clear
+    /// happened, and re-offering it immediately reads as though it might not have.
+    private func clearedReceipt(_ receipt: DataReset.Receipt) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Label(
+                receipt.scope == .everything ? "Everything was reset." : "All tasks were cleared.",
+                systemImage: "checkmark.circle"
+            )
+            .font(.controlLabel)
+            .foregroundStyle(Palette.primaryText)
+
+            if receipt.backupName != nil, let archive = backupArchiveURL {
+                ShareLink(item: archive) {
+                    Label("Share the backup", systemImage: "square.and.arrow.up")
+                        .font(.controlLabel)
+                        .foregroundStyle(Palette.accentFlat)
+                }
+                .frame(minHeight: LayoutMetrics.hitTarget, alignment: .leading)
+            } else {
+                // Stated plainly rather than left to be discovered — same rule the
+                // involuntary-reset card holds.
+                Text("The safety copy could not be written, so this data is gone.")
+                    .font(.supporting)
+                    .foregroundStyle(Palette.warning)
             }
         }
     }

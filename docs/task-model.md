@@ -100,6 +100,15 @@ The nil arm is the design, not an omission: someone else's task is not yours to 
 enum WorkIntent: String { case action, planning }
 ```
 
+**The whole axis went INTERNAL on 2026-08-11** — a change of ownership, not a hiding: users
+maintain facts; the system maintains interpretations. No kind chip exists anywhere (confirm,
+detail, Today); the write chain is exactly engine-classification / lexical backfill →
+`reclassify`, with the no-user-write invariant DEBUG-asserted in `markEdited`. The field's
+consumers are the Today advisor (`promptOnlyFacts`: "planning work") and the breakdown bias —
+and because no human correction exists, the classifier is **evaluated**: `RambleEvalTests`
+scores a labeled kind field with a regression floor. An AI-owned field earns trust through
+evaluation, not invisibility.
+
 **`decision` is cut too** (2026-08-08). Choosing is not a kind of work the user should classify — it is a capability the system brings. Choice-shaped wording is noticed at read time by `DecisionShape` (the one decision lexicon, hoisted from the resolver), which — together with the `needsDecision` flag — is what summons the Thinking Partner. Stored `"decision"` values decode as `.planning` (`WorkIntent.decode`), additively, with no store wipe; nothing writes the raw value again.
 
 **`waiting` is cut.** It and the derived `blocked` flag were the same predicate on two axes — a task blocked on a person is both. External waits already store as an edge with a note and no target, so `blocked` covers it, and cutting it removes the type boundary a classifier would most reliably fumble.

@@ -246,6 +246,35 @@ The advisor's per-action line is grounded in the same observable **facts** the c
 
 ---
 
+### 8a. The advisor session & internal signals (product decision, 2026-08-11)
+
+**`workIntent` is an internal, AI-owned signal, not a user-facing classification.** Users
+maintain **facts** (status · owner · due · urgent · category · effort); the system maintains
+**interpretations** (workIntent, deferral band, other inference); the advisor turns both into
+action. Binding corollaries:
+
+- It never leaks into user-facing metadata or deterministic Today copy — **advisor-only facts
+  and display facts derive separately** from the same task state (`PlanTaskSnapshot.facts` vs
+  `promptOnlyFacts`). Internal reasoning signals must not become accidental UI.
+- Planning classification **informs** the advisor's composition (a signal, never a quota, never
+  an override of deterministic ranking). Repeated deferral is a **bounded** intervention: the
+  advisor sees only the 2–3 band; 4+ is StallDiagnosis/Unstick territory — never escalating
+  re-plan pressure.
+- The advisor is told candidates arrive **already ranked** — a strong prior to deviate from.
+- `workIntent` is **system-owned by construction** (one write chain, no user-editing path,
+  DEBUG-asserted) and its classifier is **evaluated**: a labeled kind field with a regression
+  floor in the ramble eval. An internal AI-owned field earns trust through evaluation, not
+  invisibility.
+
+**The advisor is a session, not a call** (`AI/AdvisorSession.swift`): one `DynamicProfile`-backed
+conversation per day — `.deep` on-device reasoning (a pinned prior for the device A/B), the
+600-token cap, a bounded history window, and two ungated read-only tools (`task_details(id)`,
+`yesterday_outcome()` — snapshot-backed, candidate-ids-only, call counts in `PlanMetrics`).
+Mid-day re-entry is a **delta turn** ("SINCE THIS MORNING: …" → the complete updated plan) with
+the morning transcript as continuity — reconstructed from a digest after a process restart. The
+candidate cap is **context-measured** (floor 8 / ceiling 24) instead of a fixed guess. On-device
+only; PCC stays dormant.
+
 ## 9. AI System — two engines + personal context
 
 `AI/AIEngine.swift` defines the seam. **`FoundationModelsEngine`** (real on-device LLM, iOS 27) and **`HeuristicEngine`** (deterministic fallback) both conform and emit `[TaskIntent]` via `triage(rawText:context:onPartial:)`. `AppBrain` selects the engine at launch via `SystemLanguageModel.default.availability` and degrades to the heuristic on failure. **The simulator is no longer guaranteed to exercise the heuristic path** — on Xcode 27 the sim follows the host Mac's Apple Intelligence and can run the real on-device model (verified 2026-07-26); read the Inbox diagnostics footer rather than assuming. Both engines stay behaviorally consistent — the shared derivation lives in `AutonomyPolicy.tier` + `IntentResolver` (including `applyRules`, the learned-correction half both engines get for free). Use guided generation (`@Generable` + `@Guide`), not JSON parsing; **device-verify any `@Generable` schema change.**
@@ -315,7 +344,7 @@ Users should be able to:
 
 - **Inbox-confirm surfacing gap:** V0 ships **without a daily surface for unconfirmed inbox items** — the Today sequence does not port NowView's confirm section. Captures still confirm contextually via the composer, but there is no once-a-day "you have N to confirm" nudge. Open product gap.
 - **Stale-undated-work gap:** with the retro removed, the retro's do/kill/defer moment for stale undated work is gone; the briefing's risks line names overdue/blocked/undecided work, and `BrainSweeps` auto-archive is the only path for genuinely buried undated rot. Watch whether that's enough.
-- **Final reset mechanism + mid-day re-entry:** the plays-once trigger is one swappable predicate (`shouldReplay(now:)`, V0 = per-day); the final mechanism and any mid-day regenerate behavior are held open pending separate input.
+- **Final reset mechanism:** the plays-once trigger is one swappable predicate (`shouldReplay(now:)`, V0 = per-day); the final mechanism is held open. *(Mid-day re-entry SHIPPED 2026-08-11: the resting briefing's "Your day changed" hint — fired by new candidates or completed planned work — sends a delta turn on the per-day advisor session; see §8a.)*
 - Rationale voice pass (the model's tone across many days), swipe-to-advance (V0 is tap-only), multi-profile plan orchestration, and Household-level capacity (capacity is per-user in V0).
 - Image capture (`Attachment` multimodal input is a confirmed API — Vision-OCR-to-text is the sim-friendly first step), Siri / App Intents / widgets / Action Button / watch entry points, a continuous capture session (`DynamicInstructions`), Split-Into-Subtasks & Merge-Duplicate UI (`parentTaskID` plumbing exists), `recentPatterns` tool, location/calendar triggers, visible cycle progress/burndown (stays rejected — solo apps have no standup audience).
 

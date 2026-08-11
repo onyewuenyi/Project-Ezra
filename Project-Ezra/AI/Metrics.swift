@@ -586,6 +586,16 @@ final class CapabilityMetrics {
         return "cards: " + parts.joined(separator: " · ")
     }
 
+    /// Wipe the offer/act counts (Settings ▸ Reset everything), for the same reason
+    /// `ModelMetrics.reset` does: the offers were made against work that is now gone.
+    func reset() {
+        for kind in Kind.allCases {
+            stats[kind] = Stats()
+            defaults.removeObject(forKey: Key.offered(kind))
+            defaults.removeObject(forKey: Key.acted(kind))
+        }
+    }
+
     private enum Key {
         static func offered(_ k: Kind) -> String { "cards.\(k.rawValue).offered" }
         static func acted(_ k: Kind) -> String { "cards.\(k.rawValue).acted" }
