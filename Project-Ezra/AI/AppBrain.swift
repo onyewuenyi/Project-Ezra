@@ -119,6 +119,41 @@ final class AppBrain {
         EmbeddingStore.warmUp(in: context)
     }
 
+    // MARK: - The provisional pass (the instant answer)
+
+    /// The deterministic pipeline, rendered BEFORE any model runs — the fix for
+    /// capture's real latency problem, which was never that the model is slow but
+    /// that it sat on the critical path to seeing anything at all. On device the
+    /// heuristic previously ran only as a post-failure fallback (see `triage`), so
+    /// the answer this returns in microseconds went unshown for seconds.
+    ///
+    /// No model, no Core Data, no `await`: `Segmentation` → `HeuristicEngine.intent`
+    /// → `IntentResolver.resolve` → `proposeOwners`, all pure value work. It
+    /// deliberately passes NO open tasks and NO candidates — `detectDependents` is
+    /// O(open set) per draft and `edgeProposals` needs ids only the model emits, and
+    /// both are refinements a later parse adds rather than anything the card needs to
+    /// render or commit. Everything else the confirm card shows (title, category,
+    /// date + reason, owner, blocker, urgent, importance, effort, work intent,
+    /// autonomy, `aiOriginal`, learned rules) is here at full parity.
+    @MainActor
+    static func provisionalDrafts(
+        _ rawText: String, learned: [LearnedRule] = [],
+        ownership: OwnershipContext = .none, now: Date = Date()
+    ) -> [TaskDraft] {
+        let clauses = Segmentation.items(from: rawText)
+        guard !clauses.isEmpty else { return [] }
+        var drafts = IntentResolver.resolve(
+            clauses.map { HeuristicEngine.intent(from: $0) }, rules: learned, now: now)
+        proposeOwners(to: &drafts, ownership: ownership)
+        // `resolve` filters to `.create` and maps 1:1, and every heuristic intent is
+        // `.create` — so drafts[i] came from clauses[i]. Guarded rather than assumed,
+        // because the upgrade match's lineage rides on it.
+        if drafts.count == clauses.count {
+            for index in drafts.indices { drafts[index].provisionalSource = clauses[index] }
+        }
+        return drafts
+    }
+
     /// One completed live parse. `candidates` is the retrieval set this parse
     /// awaited at its end — the chain hands it to the NEXT parse's prompt, which is
     /// how the model gets a candidate package without first-draft latency ever

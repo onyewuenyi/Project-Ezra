@@ -28,8 +28,15 @@ struct HeuristicEngine: AIEngine {
         context: TriageContext,
         onPartial: (@MainActor ([TaskIntent]) -> Void)?
     ) async throws -> [TaskIntent] {
-        let lines = Self.splitIntoItems(rawText)
-        return lines.map { Self.intent(from: $0) }
+        Self.intents(from: rawText)
+    }
+
+    /// The pure, synchronous half — segmentation plus per-item classification, no
+    /// actor hop and nothing to await. `triage` is this behind the protocol's async
+    /// shape; the composer's PROVISIONAL pass calls it directly, because a
+    /// suspension point is exactly the cost an instant card cannot pay.
+    nonisolated static func intents(from rawText: String) -> [TaskIntent] {
+        splitIntoItems(rawText).map { intent(from: $0) }
     }
 
     // MARK: - Household narrative (deterministic template)

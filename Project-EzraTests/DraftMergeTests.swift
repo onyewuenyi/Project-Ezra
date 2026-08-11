@@ -123,6 +123,117 @@ struct DraftMergeTests {
         #expect(Set(merged.map(\.id)).count == 2)
     }
 
+    // MARK: - The provisional upgrade (instant card → model card)
+
+    private func provisional(_ title: String, source: String) -> TaskDraft {
+        var d = draft(title)
+        d.provisionalSource = source
+        return d
+    }
+
+    @Test("A model retitle claims the provisional card it came from — id, edits, and all")
+    func modelRetitleClaimsProvisionalCard() {
+        // The motivating case: word overlap between the two TITLES is 0.25, under the
+        // 0.3 retitle floor, so Passes A and B both miss. Only source-clause lineage
+        // recognises them as one thought.
+        let source = "I should probably get around to booking the flights"
+        var current = provisional("Get around to booking the flights", source: source)
+        current.category = "Travel"
+        current.markEdited(.category)
+
+        let fresh = draft("Book flights")
+        let merged = DraftMerge.merge(fresh: [fresh], into: [current], removed: none)
+
+        #expect(merged.count == 1)
+        #expect(merged[0].id == current.id)  // no swap, no view teardown
+        #expect(merged[0].title == "Book flights")  // the model's better reading wins
+        #expect(merged[0].category == "Travel")  // the user's edit survived
+        #expect(merged[0].aiOriginal == fresh.aiOriginal)  // correction diff stays honest
+        #expect(!merged[0].isProvisional)  // cleared by construction, not by a flag reset
+    }
+
+    @Test("Claiming requires shared SUBJECT words — a shared verb alone is not lineage")
+    func sharedVerbAloneNeverClaims() {
+        // "Call mom" and "call the dentist" share exactly "call". Letting that claim
+        // would hand one line's edits to another line's card.
+        #expect(!DraftMerge.claims(modelTitle: "Call mom", source: "call the dentist"))
+        #expect(!DraftMerge.claims(modelTitle: "Buy milk", source: "call mom back"))
+        // Real compressions do claim, including across inflection (booking → book).
+        #expect(
+            DraftMerge.claims(
+                modelTitle: "Book flights",
+                source: "I should probably get around to booking the flights"))
+        #expect(DraftMerge.claims(modelTitle: "Renew passport", source: "renew my passport"))
+    }
+
+    @Test("The provisional claim never fires model-over-model")
+    func claimNeverFiresModelOverModel() {
+        // Neither card is provisional (no source clause), so Pass C cannot engage —
+        // structurally, not by a parameter someone could forget to pass.
+        let current = draft("Get around to booking the flights")
+        let fresh = draft("Book flights")
+        let merged = DraftMerge.merge(fresh: [fresh], into: [current], removed: none)
+        #expect(merged.count == 1)
+        #expect(merged[0].id != current.id)  // dropped and replaced, today's behavior
+    }
+
+    // MARK: - The additive provisional merge
+
+    @Test("A provisional pass never downgrades a model-derived card")
+    func provisionalNeverDowngradesModelCard() {
+        // The model already tightened this card; a later keystroke's provisional pass
+        // re-reads the same clause and must leave it BYTE-IDENTICAL.
+        var modelCard = draft("Book flights")
+        modelCard.category = "Travel"
+        let candidate = provisional(
+            "Get around to booking the flights",
+            source: "I should probably get around to booking the flights")
+
+        let merged = DraftMerge.mergeProvisional(
+            fresh: [candidate], into: [modelCard], removed: none)
+
+        #expect(merged.count == 1)
+        #expect(merged[0].id == modelCard.id)
+        #expect(merged[0].title == "Book flights")
+        #expect(!merged[0].isProvisional)
+    }
+
+    @Test("A provisional pass adds only genuinely new clauses")
+    func provisionalAddsOnlyNewClauses() {
+        let existing = draft("Renew passport")
+        let known = provisional("Renew passport", source: "renew passport")
+        let fresh = provisional("Call mom back", source: "call mom back")
+
+        let merged = DraftMerge.mergeProvisional(
+            fresh: [known, fresh], into: [existing], removed: none)
+
+        #expect(merged.count == 2)
+        #expect(merged[0].id == existing.id)  // matched, untouched
+        #expect(merged[1].title == "Call mom back")  // the new clause entered
+    }
+
+    @Test("A card the segmenter stops seeing rides along instead of vanishing mid-keystroke")
+    func provisionalKeepsUnmatchedCurrentCards() {
+        let modelCard = draft("Book flights")
+        let candidate = provisional("Renew passport", source: "renew passport")
+        let merged = DraftMerge.mergeProvisional(
+            fresh: [candidate], into: [modelCard], removed: none)
+        #expect(merged.count == 2)
+    }
+
+    @Test("A removed provisional card stays removed when the model re-proposes it retitled")
+    func removedProvisionalStaysRemovedAcrossRetitle() {
+        let source = "I should probably get around to booking the flights"
+        var removed = RemovedDraftSet()
+        removed.record(provisional("Get around to booking the flights", source: source))
+
+        // The model's re-proposal carries a title the removal key can't recognise.
+        let merged = DraftMerge.merge(
+            fresh: [draft("Book flights"), draft("Call mom")], into: [], removed: removed)
+
+        #expect(merged.map(\.title) == ["Call mom"])
+    }
+
     // MARK: - Streaming partials keep the tail
 
     @Test("A partial snapshot keeps the cards it hasn't reached yet")

@@ -125,6 +125,24 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     /// Codable trap at the top of this struct.
     var editedFields: Set<DraftField>? = nil
 
+    /// The raw clause `Segmentation` cut this card from, set ONLY by the composer's
+    /// provisional (deterministic, instant) pass. It is the lineage a later model
+    /// parse matches against: the model emits a rewritten title with no pointer back
+    /// into the text, so "Book flights" can only be recognised as the same thought as
+    /// "I should probably get around to booking the flights" by comparing against the
+    /// clause the card came from (`DraftMerge.claims`).
+    ///
+    /// Optional for the same reason `editedFields` is — a pre-existing parked payload
+    /// has no key and must still decode. It doubles as the provisional flag: a
+    /// model-authored draft never carries one.
+    var provisionalSource: String? = nil
+
+    /// True while this card is the instant deterministic reading rather than a model
+    /// parse's. Derived, never stored: `DraftMerge.adopt` starts from the fresh
+    /// candidate, so a model draft adopting a provisional card clears this by
+    /// construction — there is no flag to forget to reset.
+    var isProvisional: Bool { provisionalSource != nil }
+
     mutating func markEdited(_ field: DraftField) {
         editedFields = (editedFields ?? []).union([field])
     }

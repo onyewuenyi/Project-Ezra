@@ -87,6 +87,31 @@ enum DraftMerge {
             }
         }
 
+        // Pass C — the PROVISIONAL upgrade. A model candidate claims a provisional
+        // card by the clause that card was cut from, because Pass B structurally
+        // cannot see this case: the model rewrites the title ("I should probably get
+        // around to booking the flights" → "Book flights"), and word-overlap against
+        // the heuristic's title falls under the floor. Without this the provisional
+        // card is DROPPED and the model's enters with a fresh id — a visible swap
+        // that also discards any edit made while the model was still thinking.
+        //
+        // Both halves of the gate are structural: only a non-provisional (model)
+        // candidate may claim, and only a provisional current card may be claimed —
+        // so "never fires model-over-model" is unrepresentable rather than merely
+        // untested.
+        for f in candidates.indices where matches[f] == nil && !candidates[f].isProvisional {
+            let title = candidates[f].aiOriginal?.title ?? candidates[f].title
+            if let c = current.indices.first(where: {
+                !claimed[$0] && current[$0].isProvisional
+                    && current[$0].provisionalSource.map {
+                        claims(modelTitle: title, source: $0)
+                    } == true
+            }) {
+                claimed[c] = true
+                matches[f] = c
+            }
+        }
+
         var merged = candidates.enumerated().map { f, candidate in
             matches[f].map { adopt(fresh: candidate, keeping: current[$0]) } ?? candidate
         }
@@ -141,6 +166,96 @@ enum DraftMerge {
         return merged
     }
 
+    /// A provisional pass landing on cards a model parse may already own. **Additive
+    /// only**: a matched card is returned BYTE-IDENTICAL, never re-read down to
+    /// heuristic values. That is the whole rule — a card that already exists is by
+    /// definition at least as good as what the segmenter would now say about it, and
+    /// re-adopting would clobber the three things only the model has (the tightened
+    /// title, the edge proposals, and `aiOriginal`, whose rewrite would break both the
+    /// Correction diff and the suppression key). No epoch is needed to make that safe;
+    /// it is safe by construction.
+    static func mergeProvisional(
+        fresh: [TaskDraft], into current: [TaskDraft], removed: RemovedDraftSet
+    ) -> [TaskDraft] {
+        let candidates = removed.filter(fresh)
+        var claimed = [Bool](repeating: false, count: current.count)
+        var result: [TaskDraft] = []
+        for candidate in candidates {
+            if let c = provisionalMatch(for: candidate, in: current, claimed: claimed) {
+                claimed[c] = true
+                result.append(current[c])  // untouched — never downgraded
+            } else {
+                result.append(candidate)
+            }
+        }
+        // A card the segmenter no longer sees (the model split a line differently)
+        // must not vanish because the user typed one more character.
+        result += current.indices.filter { !claimed[$0] }.map { current[$0] }
+        return result
+    }
+
+    /// Pass A / B / C′ for the additive merge. C′ is Pass C with the roles swapped —
+    /// a MODEL card claiming this provisional candidate's clause — so a retitle is
+    /// recognised from both directions and the provisional pass can't add a duplicate
+    /// card for a line the model already holds under a rewritten title.
+    private static func provisionalMatch(
+        for candidate: TaskDraft, in current: [TaskDraft], claimed: [Bool]
+    ) -> Int? {
+        let k = key(candidate)
+        if !k.isEmpty,
+            let c = current.indices.first(where: { !claimed[$0] && key(current[$0]) == k })
+        {
+            return c
+        }
+        if let c = current.indices.first(where: { !claimed[$0] && related(candidate, current[$0]) }) {
+            return c
+        }
+        guard let source = candidate.provisionalSource else { return nil }
+        return current.indices.first(where: {
+            !claimed[$0] && !current[$0].isProvisional
+                && claims(
+                    modelTitle: current[$0].aiOriginal?.title ?? current[$0].title, source: source)
+        })
+    }
+
+    /// Does a model title read as a COMPRESSION of the clause a provisional card was
+    /// cut from? Deliberately not `related`'s Jaccard: a rewritten title is a short
+    /// subset of a transcript clause, and a symmetric metric punishes it for the words
+    /// it correctly threw away ("Book flights" vs "i should probably get around to
+    /// booking the flights" scores 0.25 — under the floor, so the upgrade misses).
+    /// Containment over the smaller side, with a crude local stem so "booking" reaches
+    /// "book".
+    static let provisionalClaimFloor = 0.5
+
+    static func claims(modelTitle: String, source: String) -> Bool {
+        let modelWords = Set(CorrectionProfile.significantWords(modelTitle).map(stem))
+        let sourceWords = Set(CorrectionProfile.significantWords(source).map(stem))
+        guard !modelWords.isEmpty, !sourceWords.isEmpty else { return false }
+        let overlap = modelWords.intersection(sourceWords)
+        guard !overlap.isEmpty else { return false }
+        // A shared imperative verb alone is NOT lineage — "Call mom" and "call the
+        // dentist" share exactly "call", and letting that claim would hand one line's
+        // edits to another. Require a shared word that carries the subject.
+        guard !overlap.subtracting(Segmentation.actionVerbs.map(stem)).isEmpty else {
+            return false
+        }
+        return Double(overlap.count) / Double(min(modelWords.count, sourceWords.count))
+            >= provisionalClaimFloor
+    }
+
+    /// Crude suffix stripping, local to the claim and used NOWHERE else. The
+    /// suppression key, the learned-rule vocabulary, blocker matching and the eval
+    /// floors all read `CorrectionProfile.significantWords` unstemmed — those are
+    /// stable contracts other code depends on, and this predicate is not a reason to
+    /// move them.
+    private static func stem(_ word: String) -> String {
+        if word.count >= 5, word.hasSuffix("ing") { return String(word.dropLast(3)) }
+        if word.count >= 4, word.hasSuffix("ed") { return String(word.dropLast(2)) }
+        if word.count >= 4, word.hasSuffix("es") { return String(word.dropLast(2)) }
+        if word.count >= 4, word.hasSuffix("s") { return String(word.dropLast()) }
+        return word
+    }
+
     /// The two legitimate ways one line's reading moves between parses: guided
     /// generation grows the tail element's title token by token (prefix), and a
     /// full re-parse may re-phrase it (word overlap above the floor).
@@ -164,20 +279,43 @@ enum DraftMerge {
 /// capture's parse, not a durable preference (durable "no" is the suppression store).
 struct RemovedDraftSet {
     private var counts: [String: Int] = [:]
+    /// Source clauses of removed PROVISIONAL cards. Without this the title key alone
+    /// lets a deleted card come BACK: the user removes the instant card, the model
+    /// finishes a second later and re-proposes the same thought under a rewritten
+    /// title the key cannot recognise, and the merge — seeing no removal for that
+    /// key — lets it in. A card that un-deletes itself reads as the AI overruling the
+    /// user, which is the exact failure rule 3 exists to prevent.
+    private var sources: [String: Int] = [:]
 
     mutating func record(_ draft: TaskDraft) {
         counts[DraftMerge.key(draft), default: 0] += 1
+        if let source = draft.provisionalSource { sources[source, default: 0] += 1 }
     }
 
-    /// Drop up to the recorded count of fresh candidates per key, in order.
+    /// Drop up to the recorded count of fresh candidates per key, in order — then,
+    /// for anything that survived, the same check against removed provisional
+    /// clauses (a model re-proposal of a removed instant card).
     func filter(_ fresh: [TaskDraft]) -> [TaskDraft] {
-        guard !counts.isEmpty else { return fresh }
+        guard !counts.isEmpty || !sources.isEmpty else { return fresh }
         var remaining = counts
+        var remainingSources = sources
         return fresh.filter { draft in
             let k = DraftMerge.key(draft)
-            guard let n = remaining[k], n > 0 else { return true }
-            remaining[k] = n - 1
-            return false
+            if let n = remaining[k], n > 0 {
+                remaining[k] = n - 1
+                return false
+            }
+            // The retitle path: does this candidate read as a compression of a clause
+            // whose card the user deleted?
+            let title = draft.aiOriginal?.title ?? draft.title
+            if let source = remainingSources.first(where: { source, count in
+                count > 0 && DraftMerge.claims(modelTitle: title, source: source)
+            })?.key {
+                remainingSources[source]? -= 1
+                return false
+            }
+            return true
         }
     }
+
 }
