@@ -276,6 +276,8 @@ final class ModelMetrics {
         /// the thread the keyboard shares. The number the coalesce window is tuned on.
         var lastProvisionalMs = -1
         var provisionalPasses = 0
+        /// The confirm tap: drafts → tasks in the store, synchronously.
+        var lastCommitMs = -1
 
         var calls: Int { successes + salvaged + timeouts + failures }
         /// Calls that put usable output in front of the user, however they got there.
@@ -366,6 +368,14 @@ final class ModelMetrics {
         stats[.captureTriage] = entry
     }
 
+    /// The confirm tap's wall clock — draft(s) → tasks in the store, synchronously,
+    /// before the sheet dismisses.
+    func recordCommit(latencyMs: Int) {
+        var entry = stats[.captureTriage] ?? Stats()
+        entry.lastCommitMs = latencyMs
+        stats[.captureTriage] = entry
+    }
+
     /// One provisional pass's own cost — the evidence behind the coalesce window.
     func recordProvisionalPass(latencyMs: Int) {
         var entry = stats[.captureTriage] ?? Stats()
@@ -401,6 +411,7 @@ final class ModelMetrics {
             if entry.lastProvisionalMs >= 0 {
                 line += " · prov \(entry.lastProvisionalMs)ms ×\(entry.provisionalPasses)"
             }
+            if entry.lastCommitMs >= 0 { line += " · commit \(entry.lastCommitMs)ms" }
             if entry.lastPromptTokens >= 0 {
                 line += " · \(entry.lastPromptTokens)"
                 if entry.lastContextSize > 0 { line += "/\(entry.lastContextSize)" }

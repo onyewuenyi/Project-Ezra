@@ -810,7 +810,9 @@ struct ComposerView: View {
         drafts = []
         removedDrafts = RemovedDraftSet()
         text = ""
-        context.saveChanges()
+        // No save here: `brain.commit` ends with one, and nothing between it and this
+        // line touches the store — the four assignments above are view state. A second
+        // synchronous save on the confirm tap was pure latency before `dismiss()`.
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         parse.cachedRules = nil  // likewise new corrections
         dismiss()

@@ -504,6 +504,7 @@ final class AppBrain {
         parked: Capture? = nil,
         into context: NSManagedObjectContext
     ) -> [TaskItem] {
+        let commitStarted = Date()
         // The Capture row is written at PARSE time now (`park`), so a commit usually
         // ADOPTS the existing row rather than creating one — otherwise a parked capture
         // that is then confirmed would leave two rows for one event. Creating one here
@@ -588,6 +589,12 @@ final class AppBrain {
 
         context.saveChanges()
         if !created.isEmpty { metrics.recordFirstPayoffIfNeeded() }
+        // The confirm tap's own wall clock — the other half of "instant capture", and
+        // the number that decides whether the remaining commit-path work (the
+        // per-created-task dependent rescan in `AttentionEngine.metadata`) is worth
+        // restructuring. Measure before optimizing: nobody has seen this number yet.
+        ModelMetrics.shared.recordCommit(
+            latencyMs: Int(Date().timeIntervalSince(commitStarted) * 1000))
         lastCommitSummary = CommitSummary(
             created: created.count, mergedTitles: mergeTargets.map(\.title))
         return created
@@ -837,7 +844,16 @@ final class AppBrain {
     /// grows the roster.
     private func resolveOwners(_ drafts: [TaskDraft], created: [TaskItem], in context: NSManagedObjectContext)
     {
-        let members = (try? context.fetch(NSFetchRequest<FamilyMember>(entityName: "FamilyMember"))) ?? []
+        // The roster fetch is only ever consumed by the spoken-name match below, so a
+        // capture where nobody was named — the overwhelmingly common case, and the
+        // whole of the fast path — must not pay a full-store fetch on the confirm tap.
+        let namesSpoken = drafts.contains { draft in
+            draft.ownerName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+        let members =
+            namesSpoken
+            ? ((try? context.fetch(NSFetchRequest<FamilyMember>(entityName: "FamilyMember"))) ?? [])
+            : []
         for (draft, task) in zip(drafts, created) {
             guard let name = draft.ownerName?.trimmingCharacters(in: .whitespacesAndNewlines),
                 !name.isEmpty
