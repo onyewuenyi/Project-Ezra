@@ -452,7 +452,14 @@ final class TaskItem: NSManagedObject {
     }
 
     /// The task's cached work-intent classification; nil until classified (the
-    /// heuristic path leaves it nil). Written only through `setWorkIntent`.
+    /// heuristic path leaves it nil).
+    ///
+    /// **System-owned by construction** (2026-08-11): there is no user-editing path.
+    /// The write chain is exactly: engine classification / lexical backfill at resolve
+    /// → `reclassify` (the background classifier). The user maintains FACTS (status,
+    /// owner, due, urgent, category, effort); the system maintains interpretations —
+    /// this one feeds the Today advisor and the breakdown bias, and never renders as
+    /// a label anywhere.
     var workIntent: WorkIntent? {
         get { workIntentRaw.flatMap(WorkIntent.decode) }
         set { workIntentRaw = newValue?.rawValue }

@@ -144,6 +144,10 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     var isProvisional: Bool { provisionalSource != nil }
 
     mutating func markEdited(_ field: DraftField) {
+        // `workIntent` is system-owned (2026-08-11): no user-editing path exists, so a
+        // caller marking it edited is a programmer error — enforced, not documented.
+        // The case stays in `DraftField` for the frozen correction vocabulary.
+        assert(field != .workIntent, "workIntent is system-owned — no user-editing path may mark it")
         editedFields = (editedFields ?? []).union([field])
     }
 

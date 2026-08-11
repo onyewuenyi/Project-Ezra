@@ -262,7 +262,6 @@ struct TaskDetailView: View {
                 dueChip
                 categoryChip
                 effortChip
-                workIntentChip
                 addBlockerChip
             }
             if showDatePicker {
@@ -411,35 +410,6 @@ struct TaskDetailView: View {
             }
         }
     }
-
-    /// The work-intent correction. Reachable but unprominent, on purpose.
-    ///
-    /// Type gates which capability the detail offers (`TaskCapabilities.available`), so
-    /// a misclassification silently withholds the Thinking Partner from a task that
-    /// needed it — and the classifier will sometimes read a decision as an action. This
-    /// is the human's one-tap fix, and the correction it writes is exactly the training
-    /// signal the correction-as-data architecture wants.
-    ///
-    /// On the heuristic path (and for any user whose Apple Intelligence is off or
-    /// unavailable) `workIntent` is nil, so this renders as a muted add-affordance
-    /// rather than hiding — it is one of the few places that path can be corrected at all.
-    private var workIntentChip: some View {
-        Menu {
-            ForEach(WorkIntent.allCases) { intent in
-                Button(intent.label) { setWorkIntent(intent) }
-            }
-            if task.workIntent != nil {
-                Divider()
-                Button("Clear", role: .destructive) { setWorkIntent(nil) }
-            }
-        } label: {
-            chip(muted: task.workIntent == nil) {
-                Image(systemName: "square.stack.3d.up").font(.glyphCaption())
-                Text(task.workIntent?.label ?? "Kind of work")
-            }
-        }
-    }
-
     private var effortChip: some View {
         Menu {
             Button("15 min") { setEffort(15) }
@@ -975,31 +945,6 @@ struct TaskDetailView: View {
             summary: "Recategorized to \(cat)", in: context)
         context.saveChanges()
     }
-
-    /// A HUMAN type correction. Logged as a plain field edit (coalescing, out of the
-    /// Inbox feed) plus a `Correction` row — distinct from the classifier's own
-    /// `reclassify`, which writes an `.ai` entry when it crosses the workload boundary.
-    private func setWorkIntent(_ intent: WorkIntent?) {
-        guard intent != task.workIntent else { return }
-        let old = task.workIntent
-        actionPulse += 1
-        task.workIntent = intent
-        task.logHumanEdit(
-            field: "workIntent", oldValue: old?.rawValue, newValue: intent?.rawValue,
-            summary: intent.map { "Set kind to \($0.label)" } ?? "Cleared the kind of work",
-            in: context)
-        // Recorded even when the prior value was nil. A nil intent is precisely the
-        // heuristic / Apple-Intelligence-off case this chip exists to correct, so
-        // gating the row on a non-nil `old` dropped the signal on the exact tasks that
-        // most needed it.
-        context.insert(
-            Correction(
-                taskUUID: task.uuid, captureID: task.captureID,
-                fieldCorrected: "workIntent", aiValue: old?.rawValue ?? "none",
-                userValue: intent?.rawValue ?? "none", in: context))
-        context.saveChanges()
-    }
-
     private func setEffort(_ minutes: Int?) {
         guard minutes != task.effortMinutes else { return }
         let old = task.effortMinutes

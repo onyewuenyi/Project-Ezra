@@ -112,9 +112,10 @@ extension TaskItem {
     /// boundary left — every remaining kind counts as work — so a reclassification only
     /// changes which capability the detail offers, which was always the silent case.
     ///
-    /// The HUMAN path (`TaskDetailView.setWorkIntent`) still logs and writes a
-    /// `Correction`: a person correcting the AI is a real signal, an AI refining its own
-    /// guess is not.
+    /// There is no human path any more (2026-08-11): `workIntent` is system-owned —
+    /// the type chips and `setWorkIntent` are deleted, and this classifier chain is
+    /// the field's only writer. Trust moved from human correction to evaluation
+    /// (`RambleEvalTests` scores the kind with a regression floor).
     func reclassify(
         to intent: WorkIntent, in context: NSManagedObjectContext, now: Date = Date()
     ) {
