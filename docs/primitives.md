@@ -24,7 +24,7 @@ A **primitive** here is a noun or seam that earns its existence by deleting bran
 
 | Primitive | Where | Role | Key invariant | Writer |
 |---|---|---|---|---|
-| **TaskItem** | `Models/TaskItem.swift` | The unit of work; four independent axes (lifecycle · type · flags · signal) | Axes never fuse; exists only from Confirm | `TaskMutations` + status setter |
+| **TaskItem** | `Models/TaskItem.swift` | The unit of work; four independent axes (lifecycle · type — INTERNAL, AI-owned since 2026-08-11 · flags · signal) | Axes never fuse; exists only from Confirm | `TaskMutations` + status setter |
 | **Capture** | `Models/Capture.swift` | One capture event: `rawText` verbatim forever + parked drafts (`draftsData`) | Raw text never mutates; a parked capture is not a task | parse writes, `commit` adopts |
 | **Relationship** (blob) | `Models/Relationship.swift` | The graph: `.blocks` / `.parent` / `.related` edges, each with an `Origin` | Live edges are the only edges; human edges carry no confidence | `TaskMutations` helpers only |
 | **RelationshipSuppression** | `Models/RelationshipSuppression.swift` | A remembered "no" to a proposed edge (capture-form + pair-form keys) | A rejection is a record, never a phantom edge; rows expire | resolver/commit |

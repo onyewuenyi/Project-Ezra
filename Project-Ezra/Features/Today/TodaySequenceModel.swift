@@ -148,6 +148,27 @@ final class TodaySequenceModel {
         return true
     }
 
+    /// The store was emptied under the sequence (Settings ▸ Clear all tasks). Drop the
+    /// briefing and re-arm, so the caller can start a fresh one against what is left.
+    ///
+    /// Not folded into `restartIfDayRolledOver`: that one is gated on the day predicate
+    /// and on `started`, and both gates are wrong here — the day has NOT changed, and a
+    /// wipe has to land whether or not a briefing is in flight. What it shares is the
+    /// generation bump, which orphans anything still generating against the old tasks.
+    func rearmAfterDataCleared() {
+        generation += 1
+        started = false
+        resting = false
+        plan = nil
+        beat = .recap
+        // The orphaned run returns at its stale guard, BEFORE it lowers this flag — so
+        // lower it here, or a sequence nobody restarts sits on the loading cover forever.
+        isGenerating = false
+        recap = TodayRecap(completedSince: now, completedTasks: [])
+        allTasks = []
+        capacityLogs = []
+    }
+
     // MARK: - Scene transition (data-driven, never timed)
 
     /// The View calls this once the Recap's entrance has played; it transitions to the
