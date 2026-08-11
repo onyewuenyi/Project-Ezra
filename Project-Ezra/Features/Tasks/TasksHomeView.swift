@@ -148,7 +148,10 @@ struct TasksHomeView: View {
             .sheet(isPresented: $showSettings) { SettingsView() }
             .taskDetailSheet($selectedTask, peers: slice.peers)
             .undoNotice($notice)
-            .task { openDetailIfRequested() }
+            .task {
+                openDetailIfRequested()
+                openSettingsIfRequested()
+            }
         }
     }
 
@@ -163,6 +166,15 @@ struct TasksHomeView: View {
         let peers = visibleSlice.peers
         guard peers.indices.contains(index) else { return }
         selectedTask = peers[index]
+    }
+
+    /// Deterministic verification seam. Launch with `-OpenSettings` to present the
+    /// Settings sheet, which is otherwise two taps deep behind the "…" menu. It now holds
+    /// the destructive clears, and a screen that can delete everything should be reviewable
+    /// without a synthetic tap (blocked by Accessibility here). Never fires in normal runs.
+    private func openSettingsIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("-OpenSettings") else { return }
+        showSettings = true
     }
 
     // MARK: - Tab bar (Assigned / Created + the filter pill)

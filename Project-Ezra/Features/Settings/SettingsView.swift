@@ -31,10 +31,9 @@ struct SettingsView: View {
     @State private var pendingReset: StoreResetRecord?
     @State private var exportURL: URL?
     @State private var backupArchiveURL: URL?
-    /// The clear awaiting confirmation, and the one that happened. Both nil is the
-    /// resting state.
+    /// The clear awaiting confirmation. Nil is the resting state; what HAPPENED is read
+    /// from `StoreResetLog` into `pendingReset`, not tracked separately here.
     @State private var pendingScope: DataReset.Scope?
-    @State private var clearReceipt: DataReset.Receipt?
 
     private var profile: UserProfile? { profilesResults.first }
     private var tasks: [TaskItem] { Array(tasksResults) }
@@ -221,21 +220,36 @@ struct SettingsView: View {
 
     // MARK: - Reset notice (a wipe must never be silent)
 
-    /// Shown until acknowledged. `Palette.warning` is correct here — this is a literal
-    /// warning about data, not one of the split attention hues the design system
-    /// reserves (`overdue`/`statusInProgress`/`householdAttention`).
+    /// ONE card for every wipe, voluntary or not — because what the user needs afterwards
+    /// (when, what went, where the copy is) is identical either way, and two cards would
+    /// drift. Only the tone branches: a warning triangle for a reset that happened TO you,
+    /// a checkmark for one you asked for. `Palette.warning` is correct in the first case —
+    /// this is a literal warning about data, not one of the split attention hues the
+    /// design system reserves (`overdue`/`statusInProgress`/`householdAttention`).
+    ///
+    /// Shown until dismissed, which is the whole point of reading it from `StoreResetLog`
+    /// rather than from view state: the backup stays reachable after the sheet closes, and
+    /// after the app is relaunched.
     private func resetCard(_ reset: StoreResetRecord) -> some View {
-        settingsCard(title: "Data was reset") {
+        let voluntary = reset.reason.isVoluntary
+        return settingsCard(title: voluntary ? "Data cleared" : "Data was reset") {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
-                    Image(systemName: "exclamationmark.triangle.fill")
+                    Image(systemName: voluntary ? "checkmark.circle" : "exclamationmark.triangle.fill")
                         .font(.glyphCaption())
-                        .foregroundStyle(Palette.warning)
+                        .foregroundStyle(voluntary ? Palette.secondaryText : Palette.warning)
                     Text(
                         "Your saved data was cleared on \(reset.date.formatted(date: .abbreviated, time: .shortened)) because \(reset.reason.explanation)."
                     )
                     .font(.supporting)
                     .foregroundStyle(Palette.primaryText)
+                }
+                if case .userRequested(let clearedIdentity) = reset.reason, clearedIdentity {
+                    // The first-run cover is armed at launch and deliberately not
+                    // re-presented mid-session (raising it from the shell while this sheet
+                    // is open is a presentation conflict), so say when setup returns.
+                    Text("Setup runs again the next time you open the app.")
+                        .metadataStyle()
                 }
                 if let detail = reset.reason.detail {
                     Text(detail)
@@ -364,8 +378,12 @@ struct SettingsView: View {
 
                 Divider().overlay(Palette.border)
 
-                if let receipt = clearReceipt {
-                    clearedReceipt(receipt)
+                // A clear that just happened is reported by `resetCard` at the top of the
+                // sheet — the same card every other wipe uses — so the controls simply
+                // stand down rather than growing a second, parallel receipt here.
+                if pendingReset?.reason.isVoluntary == true {
+                    Text("Cleared. The receipt is at the top of this screen.")
+                        .metadataStyle()
                 } else {
                     clearControls
                 }
@@ -429,7 +447,7 @@ struct SettingsView: View {
                 "Every task, capture and activity entry is deleted. This can't be undone from inside the app — a copy of your data is saved first."
         case .everything:
             return
-                "Everything goes: tasks, captures, history, your profile, your household and your settings. The app starts over as if newly installed. A copy of your data is saved first."
+                "Everything goes: tasks, captures, history, your profile, your household and your settings. Setup runs again the next time you open the app. A copy of your data is saved first."
         }
     }
 
@@ -440,51 +458,23 @@ struct SettingsView: View {
         Binding(get: { pendingScope != nil }, set: { if !$0 { pendingScope = nil } })
     }
 
+    /// `DataReset` writes the receipt to `StoreResetLog`; this just adopts it into view
+    /// state, so the card at the top of the sheet renders from the same record a relaunch
+    /// would read. One reporting path, two readers.
     private func performClear(_ scope: DataReset.Scope) {
-        let receipt = DataReset.clear(
+        let record = DataReset.clear(
             scope, in: context, metrics: brain.metrics, planMetrics: brain.planMetrics)
         pendingScope = nil
-        clearReceipt = receipt
-        backupArchiveURL = receipt.backupName.flatMap { PersistenceStack.zippedBackup(named: $0) }
+        pendingReset = record
+        backupArchiveURL = record.backupName.flatMap { PersistenceStack.zippedBackup(named: $0) }
         // The offered export was built at open, from data that no longer exists — sharing
         // it after a clear would hand back the very thing the user just deleted.
         exportURL = try? DataExport.writeTemporaryFile(in: context)
-        // The reset notice (if any) described a store that is gone either way.
-        StoreResetLog.clear()
-        pendingReset = nil
         if scope == .everything {
             // The one preference with a side effect outside the store: a scheduled nudge
             // for a briefing that no longer has anything to brief about.
             briefing.isEnabled = false
             Task { await briefing.cancelAll() }
-        }
-    }
-
-    /// The receipt replaces the buttons for the rest of the sheet's life — the clear
-    /// happened, and re-offering it immediately reads as though it might not have.
-    private func clearedReceipt(_ receipt: DataReset.Receipt) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
-            Label(
-                receipt.scope == .everything ? "Everything was reset." : "All tasks were cleared.",
-                systemImage: "checkmark.circle"
-            )
-            .font(.controlLabel)
-            .foregroundStyle(Palette.primaryText)
-
-            if receipt.backupName != nil, let archive = backupArchiveURL {
-                ShareLink(item: archive) {
-                    Label("Share the backup", systemImage: "square.and.arrow.up")
-                        .font(.controlLabel)
-                        .foregroundStyle(Palette.accentFlat)
-                }
-                .frame(minHeight: LayoutMetrics.hitTarget, alignment: .leading)
-            } else {
-                // Stated plainly rather than left to be discovered — same rule the
-                // involuntary-reset card holds.
-                Text("The safety copy could not be written, so this data is gone.")
-                    .font(.supporting)
-                    .foregroundStyle(Palette.warning)
-            }
         }
     }
 

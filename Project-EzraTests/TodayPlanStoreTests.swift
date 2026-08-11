@@ -53,6 +53,46 @@ struct TodayPlanStoreTests {
         #expect(store.cache(for: tomorrow) == nil)  // stale cache is not returned as resting
     }
 
+    // MARK: - Outliving the work (the self-healing read, in place of a wipe broadcast)
+
+    @Test("A briefing whose tasks have ALL gone has outlived its work")
+    func outlivedItsWork() {
+        let alive = UUID()
+        let gone = UUID()
+        let plan = cache(
+            for: now,
+            actions: [
+                PlannedAction(taskID: gone, rationale: nil), PlannedAction(taskID: alive, rationale: nil),
+            ])
+
+        // Some tasks gone is still a plan — the render path compacts those rows.
+        #expect(!TodayPlanStore.hasOutlivedItsWork(plan, liveTaskIDs: [alive]))
+        // Every task gone is a briefing about nothing.
+        #expect(TodayPlanStore.hasOutlivedItsWork(plan, liveTaskIDs: []))
+        #expect(TodayPlanStore.hasOutlivedItsWork(plan, liveTaskIDs: [UUID()]))
+        // An actionless plan can't outlive anything — there is nothing to check it against.
+        #expect(!TodayPlanStore.hasOutlivedItsWork(cache(for: now), liveTaskIDs: []))
+    }
+
+    @Test("Reading drops a cache that outlived its work — no wipe notification needed")
+    func dropsTheCacheWhenWorkVanishes() {
+        let store = TodayPlanStore(defaults: freshDefaults())
+        let task = UUID()
+        store.save(cache(for: now, actions: [PlannedAction(taskID: task, rationale: nil)]))
+        #expect(store.cache(for: now) != nil)
+
+        // Still there: the day's plan survives a read while its task exists.
+        #expect(!store.dropCacheIfWorkVanished(liveTaskIDs: [task]))
+        #expect(store.cache(for: now) != nil)
+
+        // The task is gone (a clear, a merge, an undo — the store never learns which).
+        #expect(store.dropCacheIfWorkVanished(liveTaskIDs: []))
+        #expect(store.cache(for: now) == nil)
+        #expect(store.shouldReplay(now: now))  // …so the next open generates instead of resting
+        // Idempotent: nothing left to drop, so nothing is reported.
+        #expect(!store.dropCacheIfWorkVanished(liveTaskIDs: []))
+    }
+
     @Test("The cache round-trips through UserDefaults across store instances")
     func cachePersists() {
         let defaults = freshDefaults()

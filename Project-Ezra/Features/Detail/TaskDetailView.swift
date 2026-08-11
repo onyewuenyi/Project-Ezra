@@ -272,6 +272,7 @@ struct TaskDetailView: View {
             ForEach(task.activeBlockers(among: allTasks)) { blocker in
                 blockerChipRow(blocker)
             }
+            stepsSection
         }
         .padding(Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -469,6 +470,45 @@ struct TaskDetailView: View {
             .buttonStyle(.pressableIcon)
             .accessibilityLabel("Stop waiting on \(title)")
         }
+    }
+
+    /// The steps this task was broken into, with how far they have got.
+    ///
+    /// Sits below the waits and reads deliberately unlike them. A step is not an
+    /// obstacle: there is no dismiss button (you finish or delete a step, you don't stop
+    /// waiting on it), and the state is stated as progress — "1 of 3 steps" — because a
+    /// task you have usefully decomposed has moved forward, not stalled. Read-only by
+    /// design: the steps are real rows on My Tasks, where every action already lives.
+    @ViewBuilder
+    private var stepsSection: some View {
+        if let progress = task.stepProgress(among: allTasks) {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text(progress.label)
+                    .metadataStyle()
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+                ForEach(task.children(among: allTasks)) { step in
+                    stepRow(step)
+                }
+            }
+            .padding(.top, Spacing.xs)
+        }
+    }
+
+    private func stepRow(_ step: TaskItem) -> some View {
+        let done = step.status.isResolved
+        return HStack(spacing: Spacing.sm) {
+            StatusGlyphView(task: step, allTasks: allTasks, interactive: false)
+            Text(step.title)
+                .font(.supporting)
+                .foregroundStyle(Palette.primaryText)
+                .strikethrough(done, color: Palette.mutedText)
+                .lineLimit(1)
+                .recessed(done)
+            Spacer(minLength: Spacing.sm)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Step: \(step.title), \(done ? "done" : "open")")
     }
 
     // MARK: - Decision (the judgment-call resolution)
@@ -908,7 +948,9 @@ struct TaskDetailView: View {
     private func offerUndo(verb: String, unblocked: [TaskItem] = []) {
         let task = self.task
         let context = self.context
-        notice = .resolution(verb, task.title, unblocked: unblocked) {
+        notice = .resolution(
+            verb, task.title, unblocked: unblocked, steps: task.stepProgress(among: allTasks)
+        ) {
             task.reopenAndReblock(in: context)
             context.saveChanges()
         }

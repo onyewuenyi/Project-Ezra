@@ -57,6 +57,7 @@ struct TaskSearchView: View {
                                     task: task,
                                     allTasks: tasks,
                                     blockerSummary: task.blockerSummary(among: tasks),
+                                    stepProgress: task.stepProgress(among: tasks),
                                     ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                                     ownerPhotoData: task.ownerPhotoData(among: othersRoster),
                                     interactive: !task.status.isResolved,

@@ -58,9 +58,12 @@ func completeTask(
     _ task: TaskItem, in context: NSManagedObjectContext, tasks: [TaskItem],
     notice: Binding<UndoNotice?>
 ) {
+    let steps = task.stepProgress(among: tasks)
     let unblocked = task.completeAndResurface(in: context)
     context.saveChanges()
-    notice.wrappedValue = .resolution("Completed", task.title, unblocked: unblocked) {
+    notice.wrappedValue = .resolution(
+        "Completed", task.title, unblocked: unblocked, steps: steps
+    ) {
         task.reopenAndReblock(in: context)
         context.saveChanges()
     }
@@ -71,9 +74,12 @@ func cancelTask(
     _ task: TaskItem, in context: NSManagedObjectContext, tasks: [TaskItem],
     notice: Binding<UndoNotice?>
 ) {
+    let steps = task.stepProgress(among: tasks)
     let unblocked = task.killAndResurface(in: context)
     context.saveChanges()
-    notice.wrappedValue = .resolution("Canceled", task.title, unblocked: unblocked) {
+    notice.wrappedValue = .resolution(
+        "Canceled", task.title, unblocked: unblocked, steps: steps
+    ) {
         task.reopenAndReblock(in: context)
         context.saveChanges()
     }
@@ -100,6 +106,7 @@ struct TaskLaneEntryView: View {
                 task: task,
                 allTasks: allTasks,
                 blockerSummary: task.blockerSummary(among: allTasks),
+                stepProgress: task.stepProgress(among: allTasks),
                 ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                 ownerPhotoData: task.ownerPhotoData(among: othersRoster),
                 interactive: !resolved,

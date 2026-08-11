@@ -38,6 +38,9 @@ struct ConfirmCreationList: View {
     /// record it — a removed card must stay removed across re-parses (`DraftMerge`
     /// filters re-proposals against the session's `RemovedDraftSet`).
     var onRemove: ((TaskDraft) -> Void)? = nil
+    /// When this card set arrived — the stagger clock the entrance rides (see
+    /// `RevealEntrance`). Nil means "already on screen", which renders settled.
+    var revealedAt: Date? = nil
     /// Counts removals so the card leaving can be FELT, not just seen. Dropping a
     /// candidate is a decisive act on a surface where everything else is a
     /// reversible edit; the animation alone left it oddly weightless.
@@ -56,7 +59,7 @@ struct ConfirmCreationList: View {
         // `DraftMerge` keeps ids stable — under the old merge, per-partial identity
         // churn would have made laziness thrash instead of save.
         LazyVStack(spacing: Spacing.sm) {
-            ForEach($drafts) { $draft in
+            ForEach(Array($drafts.enumerated()), id: \.element.id) { position, $draft in
                 let batchIndex = entering.firstIndex(of: draft.id) ?? 0
                 ConfirmCreationCard(
                     draft: $draft, ownerOptions: ownerOptions, rosterNames: rosterNames,
@@ -90,6 +93,11 @@ struct ConfirmCreationList: View {
                             ? nil
                             : Motion.settle.delay(Double(min(batchIndex, 5)) * Motion.staggerStep))
                 )
+                // The ARRIVAL, distinct from the transition above: that one covers a card
+                // joining a list already on screen, this one covers the whole composition
+                // landing at the reveal — where the transition never fires, because the
+                // list itself is what got inserted.
+                .revealEntrance(index: position, revealedAt: revealedAt)
             }
         }
         .animation(Motion.settle, value: drafts.map(\.id))
@@ -165,16 +173,19 @@ struct ConfirmCreationCard: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(alignment: .top, spacing: Spacing.sm) {
-                if isUncertain {
-                    Image(systemName: "questionmark.circle")
-                        .font(.glyphCaption(.semibold))
-                        .foregroundStyle(Palette.mutedText)
-                        .padding(.top, 3)
-                        .transition(.opacity)
-                }
+                // The "?" that used to sit here is gone. A grey glyph at the leading edge
+                // and a grey glyph at the trailing edge, same size and same tone, where
+                // one is an unexplained status and the other destroys the card — neither
+                // said what it was. Uncertainty is now a WORD, in the chip row
+                // (`notSureChip`), and the delete control is the only glyph in this row.
                 TextField("Task", text: titleBinding, axis: .vertical)
                     .font(presentation == .hero ? .sectionHeader : .taskTitle)
                     .foregroundStyle(Palette.primaryText)
+                    // A title is a NAME. If the model hasn't produced one, the card should
+                    // not silently become a transcript viewer — cap it and let the field
+                    // scroll, so a long title reads as an outlier rather than as the
+                    // card's natural shape.
+                    .lineLimit(1...4)
                     .textInputAutocapitalization(.sentences)
 
                 Spacer(minLength: 0)
@@ -211,8 +222,12 @@ struct ConfirmCreationCard: View, Equatable {
                     expanded ? "Fewer details" : "Details",
                     systemImage: expanded ? "chevron.up" : "chevron.down"
                 )
-                .font(.metadata)
-                .foregroundStyle(Palette.mutedText)
+                .font(.metadata.weight(.medium))
+                // Raised off `mutedText`: this is the only control on the card that
+                // reflows the whole composition, and it was rendered as the quietest
+                // thing on it. A control that changes the layout has to look like a
+                // control.
+                .foregroundStyle(Palette.secondaryText)
                 .minimumHitTarget(around: IconSize.small)
             }
             .buttonStyle(.pressableLink)
@@ -257,16 +272,30 @@ struct ConfirmCreationCard: View, Equatable {
     /// reveal shows only what the AI actually understood; everything else is one tap
     /// away behind Details. A confirm glance that lists eight identical-looking
     /// affordances is not a glance.
+    /// The AI's own uncertainty, said in words instead of encoded in a glyph the user has
+    /// to decode. It sits with the other chips because that is where the things worth
+    /// knowing about this card live — and it is deliberately NOT tappable: there is
+    /// nothing to resolve, the fix is editing the title, which is already right there.
+    private var notSureChip: some View {
+        MetadataChip(density: .compact) {
+            Image(systemName: "questionmark.circle").font(.glyphCaption())
+            Text("Not sure").font(.metadata.weight(.medium))
+        }
+        .foregroundStyle(Palette.mutedText)
+        .accessibilityLabel("I might have this one wrong — check the title")
+    }
+
     /// Whether `essentialChips` (or an edge proposal) will render anything at all.
     /// Mirrors that view's conditions exactly — if one gains a chip, so must this.
     private var hasEssentialChips: Bool {
-        draft.dueDate != nil || draft.ownerName != nil || draft.isUrgent
+        isUncertain || draft.dueDate != nil || draft.ownerName != nil || draft.isUrgent
             || draft.blockedBy != nil || !draft.blocks.isEmpty
             || draft.edgeProposals.contains { $0.kind == .duplicateOf || $0.kind == .childOf }
     }
 
     private var essentialChips: some View {
         Group {
+            if isUncertain { notSureChip }
             if draft.dueDate != nil { dueChip }
             if draft.ownerName != nil { ownerChip }
             if draft.isUrgent { urgentChip }
@@ -296,8 +325,18 @@ struct ConfirmCreationCard: View, Equatable {
     /// The consequence, never the classifier. `workIntent` is an internal axis; what
     /// the user needs to know is what it MEANS for them — that this one needs deciding
     /// or planning before it can be done.
+    ///
+    /// **Reads `isJudgmentCall` ONLY — never `draft.needsDecision`.** That property is
+    /// `isJudgmentCall || confidence < 0.5`, which is the right reading for the flag the
+    /// task is BORN with (an unsure capture should land flagged for a look), but a
+    /// catastrophic thing to say out loud here: it told a user that "Cook dinner" needs a
+    /// decision because the model was unsure of its own parse. That states something false
+    /// about the user's life in order to express something true about the model, on the
+    /// one screen whose entire job is trust. The AI's uncertainty already has honest
+    /// carriers on this card — the dimming and the "?" — and they say "I might have this
+    /// wrong", which is the actual message.
     @ViewBuilder private var consequenceLine: some View {
-        if draft.needsDecision || draft.isJudgmentCall {
+        if draft.isJudgmentCall {
             Label("Needs a decision", systemImage: "hand.raised")
                 .font(.metadata)
                 .foregroundStyle(Palette.decisionAccent)
@@ -579,9 +618,14 @@ struct ConfirmCreationCard: View, Equatable {
             MetadataChip(density: .compact) {
                 if draft.ownerReason != nil, missing == nil { assumedMark }
                 if let missing {
+                    // "<name> · not in household" described an internal roster state in a
+                    // warning colour, on a card where the user hadn't asked for anything —
+                    // it read as an error they had caused. Name the person and let the
+                    // tint carry "unresolved"; the menu's first item is the fix, which is
+                    // where the explanation belongs.
                     Image(systemName: "person.crop.circle.badge.questionmark")
                         .font(.glyphCaption())
-                    Text("\(missing) · not in household")
+                    Text(missing)
                         .font(.metadata.weight(.medium))
                         .lineLimit(1)
                 } else {

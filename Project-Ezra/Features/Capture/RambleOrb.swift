@@ -21,22 +21,51 @@ import SwiftUI
 struct RambleOrb: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var breathing = false
+    @State private var settledIn = false
 
     /// The orb's resting diameter. A named metric, like every other layout constant.
     static let diameter: CGFloat = LayoutMetrics.rambleOrb
 
+    /// How long the orb takes to gather itself — a slow, one-way settle from a diffuse
+    /// haze into a defined object.
+    ///
+    /// This is the answer to the one real complaint about a spinner-free wait: a single
+    /// object breathing at a fixed amplitude has no sense of progression, so somewhere
+    /// past fifteen seconds "calm" becomes indistinguishable from "stalled". The orb now
+    /// CONDENSES over that window — the glow tightens, the edge sharpens, the breath
+    /// narrows — so time passing is legible in the object itself.
+    ///
+    /// It reports nothing. The settle is not tied to generation progress (there is no such
+    /// signal, and inventing one would be a lie), it does not complete at any particular
+    /// moment, and it never reaches a state that reads as "done". It is the difference
+    /// between a fire that has caught and a progress bar.
+    private static let gatherSeconds: TimeInterval = 14
+
     var body: some View {
+        let gathered = settledIn || reduceMotion
         Circle()
             .fill(Palette.accentGradient)
             .frame(width: Self.diameter, height: Self.diameter)
             // The glow is the "thinking" half — it breathes wider than the orb does, so
-            // the edge stays soft instead of pulsing like a status light.
-            .shadow(color: Palette.accentGlow, radius: breathing ? 28 : 16)
-            .scaleEffect(breathing ? 1.04 : 0.96)
+            // the edge stays soft instead of pulsing like a status light. It starts wide
+            // and diffuse and draws in as the wait lengthens.
+            .shadow(
+                color: Palette.accentGlow,
+                radius: (breathing ? 28 : 16) * (gathered ? 0.62 : 1.0)
+            )
+            .blur(radius: gathered ? 0 : 6)
+            // The breath narrows as it gathers: early on it swings wide and loose, later
+            // it holds closer — an object concentrating, not one winding down.
+            .scaleEffect(breathing ? (gathered ? 1.02 : 1.06) : (gathered ? 0.99 : 0.94))
             .animation(
                 reduceMotion ? nil : Motion.orbBreath.repeatWhileTrue(true), value: breathing
             )
-            .onAppear { if !reduceMotion { breathing = true } }
+            .animation(reduceMotion ? nil : .easeInOut(duration: Self.gatherSeconds), value: settledIn)
+            .onAppear {
+                guard !reduceMotion else { return }
+                breathing = true
+                settledIn = true
+            }
             .accessibilityHidden(true)
     }
 }

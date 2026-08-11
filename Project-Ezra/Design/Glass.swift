@@ -140,3 +140,23 @@ struct BlockedIndicator: View {
             .accessibilityHidden(true)
     }
 }
+
+/// The container marker: "1/3" beside a broken-down task, in the same row slot the
+/// blocked hourglass uses.
+///
+/// **Deliberately not the hourglass.** A task with open steps genuinely can't be finished
+/// yet, which makes it tempting to render as blocked — but the hourglass means "waiting on
+/// the world", and a task you just decomposed is the opposite of stuck. Stating the count
+/// says the same thing truthfully and tells the user something they didn't know. Silent to
+/// VoiceOver; the row announces the progress in words.
+struct StepProgressIndicator: View {
+    let progress: StepProgress
+
+    var body: some View {
+        Text("\(progress.done)/\(progress.total)")
+            .font(.chipLabel)
+            .monospacedDigit()
+            .foregroundStyle(progress.isComplete ? Palette.accentFlat : Palette.mutedText)
+            .accessibilityHidden(true)
+    }
+}

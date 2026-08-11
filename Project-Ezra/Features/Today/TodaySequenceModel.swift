@@ -83,6 +83,11 @@ final class TodaySequenceModel {
         self.context = context
 
         store.reconcileIfNeeded(context: context, tasks: tasks, now: now)
+        // Before anything reads the cache: drop a briefing whose tasks have all gone
+        // (Settings ▸ Clear, a merge, an undo). Checked HERE, at the one entry point, so
+        // no site that deletes tasks has to know Today exists — and so a re-arm can't
+        // restore the same dead plan it just discarded.
+        store.dropCacheIfWorkVanished(liveTaskIDs: Set(tasks.compactMap(\.uuid)))
 
         // Cold start (no prior `recapCutoff`): count everything completed since the start
         // of TODAY, so a brand-new user who finished a few tasks and opens Today sees
@@ -148,14 +153,15 @@ final class TodaySequenceModel {
         return true
     }
 
-    /// The store was emptied under the sequence (Settings ▸ Clear all tasks). Drop the
-    /// briefing and re-arm, so the caller can start a fresh one against what is left.
+    /// The briefing on screen has outlived its work — every task it named is gone (a
+    /// Settings clear, a merge, an undo). Drop it and re-arm so the caller can start a
+    /// fresh one against what is left.
     ///
     /// Not folded into `restartIfDayRolledOver`: that one is gated on the day predicate
-    /// and on `started`, and both gates are wrong here — the day has NOT changed, and a
-    /// wipe has to land whether or not a briefing is in flight. What it shares is the
+    /// and on `started`, and both gates are wrong here — the day has NOT changed, and this
+    /// has to land whether or not a briefing is in flight. What it shares is the
     /// generation bump, which orphans anything still generating against the old tasks.
-    func rearmAfterDataCleared() {
+    func rearmAfterWorkVanished() {
         generation += 1
         started = false
         resting = false

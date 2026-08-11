@@ -35,7 +35,8 @@ struct BreakdownSplitTests {
         let parent = TaskItem(title: "Plan the trip", status: .todo, in: context)
         context.insert(parent)
 
-        let created = parent.splitInto(steps(["Book flights", "Book the hotel"]), in: context)
+        let created = parent.splitInto(
+            steps(["Book flights", "Book the hotel"]), in: context)
 
         #expect(created.count == 2)
         for child in created {
@@ -84,6 +85,92 @@ struct BreakdownSplitTests {
         #expect(try entries(in: context).isEmpty)
     }
 
+    // MARK: - The container reading (derived, never a stored wait)
+
+    @Test("The umbrella can't be finished before its steps — and says so as progress")
+    func openStepsAreTheContainerState() {
+        let context = context()
+        let parent = TaskItem(title: "Plan the trip", status: .todo, in: context)
+        context.insert(parent)
+
+        let created = parent.splitInto(steps(["Book flights", "Book the hotel"]), in: context)
+        let all = TaskItem.fetchAll(in: context)
+
+        #expect(Set(parent.openSteps(among: all).compactMap(\.uuid)) == Set(created.compactMap(\.uuid)))
+        #expect(parent.stepProgress(among: all) == StepProgress(done: 0, total: 2))
+        #expect(parent.stepProgress(among: all)?.label == "0 of 2 steps")
+
+        created[0].complete()
+        #expect(parent.stepProgress(among: all) == StepProgress(done: 1, total: 2))
+        created[1].complete()
+        // Nothing had to remember to update anything: the progress is the children.
+        #expect(parent.openSteps(among: all).isEmpty)
+        #expect(parent.stepProgress(among: all)?.isComplete == true)
+    }
+
+    @Test("A container is NOT blocked — the two graphs stay unfused")
+    func containerIsNotBlocked() {
+        let context = context()
+        let me = UUID()
+        let parent = TaskItem(title: "Plan the trip", status: .todo, ownerID: me, in: context)
+        context.insert(parent)
+        parent.splitInto(steps(["Book flights"]), in: context)
+        let all = TaskItem.fetchAll(in: context)
+
+        // Storing the wait as a `.blocks` edge was tried and reversed: it made the CTA
+        // read "Unblock" (one tap to dismantle the breakdown) and the stall rung claim the
+        // task was waiting on "something else" — when the something else was itself.
+        #expect(parent.taskBlockerIDs.isEmpty)
+        #expect(!parent.hasActiveBlockers(among: all))
+        #expect(parent.recommendedAction(among: all, currentUserID: me) == .start)
+
+        parent.deferralCount = StallDetector.deferralThreshold  // stalled by avoidance
+        #expect(StallDetector.diagnose(parent, among: all) != .blocked)
+
+        // A REAL obstacle on the same task still reads as one — the container reading
+        // never suppressed anything, so nothing had to be carved back in.
+        parent.addExternalBlocker("the visa office", among: all)
+        #expect(parent.recommendedAction(among: all, currentUserID: me) == .unblock)
+        #expect(StallDetector.diagnose(parent, among: all) == .blocked)
+    }
+
+    @Test("A breakdown renders as ONE chain, steps in front of the umbrella")
+    func breakdownGroupsIntoOneChain() throws {
+        let context = context()
+        let parent = TaskItem(title: "Plan the trip", status: .todo, in: context)
+        context.insert(parent)
+        let created = parent.splitInto(steps(["Book flights", "Book the hotel"]), in: context)
+
+        let all = TaskItem.fetchAll(in: context)
+        let (chains, loose) = TaskChainGrouping.computeChains(in: all)
+
+        #expect(loose.isEmpty)  // the umbrella no longer scatters away from its own steps
+        let chain = try #require(chains.first)
+        #expect(chain.members.count == 3)
+        // Containment orders the stack the same way sequencing does: what you have to get
+        // through first comes first, so the umbrella lands last and a step is the front card.
+        #expect(chain.members.last?.uuid == parent.uuid)
+        #expect(created.compactMap(\.uuid).contains(chain.root.uuid))
+    }
+
+    @Test("Closing the umbrella early is allowed, but never silent")
+    func resolutionNoticeNamesWhatIsLeft() {
+        let context = context()
+        let parent = TaskItem(title: "Plan the trip", status: .todo, in: context)
+        context.insert(parent)
+        let created = parent.splitInto(steps(["Book flights", "Book the hotel"]), in: context)
+        let all = TaskItem.fetchAll(in: context)
+
+        let notice = UndoNotice.resolution(
+            "Completed", parent.title, steps: parent.stepProgress(among: all))
+        #expect(notice.message.contains("2 steps still open"))
+
+        created.forEach { $0.complete() }
+        let clean = UndoNotice.resolution(
+            "Completed", parent.title, steps: parent.stepProgress(among: all))
+        #expect(!clean.message.contains("still open"))  // nothing left ⇒ nothing to say
+    }
+
     // MARK: - Undo
 
     @Test("Undo removes the children and their edges, leaving the parent untouched")
@@ -102,8 +189,12 @@ struct BreakdownSplitTests {
         #expect(remaining.count == 1)  // the children are gone…
         #expect(remaining.first?.uuid == parent.uuid)  // …and the parent survived
         #expect(parent.status == .todo)
-        // The `.parent` edge lived on each child, so removing them removed it.
+        // The split wrote exactly one edge per step, on the step — so deleting the steps
+        // is the whole undo. Nothing on the parent to unwind, which is the point of
+        // deriving the container reading rather than storing it.
         #expect(parent.children(among: remaining).isEmpty)
+        #expect(parent.stepProgress(among: remaining) == nil)
+        #expect(parent.taskBlockerIDs.isEmpty)
     }
 
     @Test("Undo does NOT reclaim a step the user has since worked on")
@@ -111,7 +202,8 @@ struct BreakdownSplitTests {
         let context = context()
         let parent = TaskItem(title: "Plan the trip", status: .todo, in: context)
         context.insert(parent)
-        let created = parent.splitInto(steps(["Book flights", "Book the hotel"]), in: context)
+        let created = parent.splitInto(
+            steps(["Book flights", "Book the hotel"]), in: context)
         try context.save()
 
         // Read the ids up front. Once the undo below deletes the untouched child and the
@@ -135,6 +227,16 @@ struct BreakdownSplitTests {
         let remaining = TaskItem.fetchAll(in: context)
         #expect(remaining.contains { $0.uuid == touchedID })  // kept
         #expect(!remaining.contains { $0.uuid == reclaimedID })  // reclaimed
+        // The container reading follows the survivors with no bookkeeping: one step left,
+        // and it is done.
+        //
+        // NOTE (2026-08-11): a delete-heavy test in this suite crashes the HOST in
+        // full-suite runs. It is NOT this assertion and NOT `stepProgress` — removing this
+        // line moved the crash to `undoRemovesChildren`, which nothing had touched. The
+        // signature is an over-release inside Core Data's in-memory `NSMappedObjectStore`
+        // teardown: the shared-scratch-context harness bug tracked separately. Every test
+        // here passes when run alone.
+        #expect(parent.stepProgress(among: remaining) == StepProgress(done: 1, total: 1))
     }
 
     // MARK: - Ranking: the umbrella steps back

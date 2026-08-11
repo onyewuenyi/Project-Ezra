@@ -116,36 +116,55 @@ struct Project_EzraApp: App {
         return container
     }()
 
+    /// True when this process is the unit-test host. The host keeps its container (tests
+    /// never touch it) but boots an empty scene: the live app UI doing its normal work
+    /// during a suite — Today generation writing `today.planCache`, maintenance sweeps,
+    /// `ModelMetrics`/`MetricsRecorder` counters — all lands in the same standard
+    /// `UserDefaults` and singletons the tests read, and a second Core Data stack
+    /// actively working the shared model alongside `PersistenceStack.scratch` is the
+    /// multi-coordinator pattern this codebase avoids everywhere else. (Ruled out as the
+    /// cause of the suite's makeContext EXC_BAD_ACCESS — that reproduced with this guard
+    /// active — but the interference is real regardless.)
+    private static let isHostingUnitTests = NSClassFromString("XCTestCase") != nil
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(brain)
-                .environment(briefing)
-                .environment(\.managedObjectContext, container.viewContext)
-                .preferredColorScheme(.dark)  // dark-first reads premium; matches the "quiet" thesis
-                .onChange(of: scenePhase) { _, phase in
-                    switch phase {
-                    case .active:
-                        // A foreground counts as a self-initiated open UNLESS the app
-                        // asked for it. The briefing nudge is the only thing that can
-                        // ask, and an open we solicited is not evidence of pull — see
-                        // `BriefingReminder.consumeCameFromNotification`.
-                        if !briefing.consumeCameFromNotification() {
-                            brain.metrics.recordOpen()
-                        }
-                        // Hourly-debounced maintenance: the reversible stale auto-archive.
-                        brain.runMaintenanceSweepsIfDue(in: container.viewContext)
-                    case .background:
-                        // Roll the nudge horizon forward, skipping today if the sequence
-                        // already played. Backgrounding is the moment we know both.
-                        Task {
-                            await briefing.reschedule(
-                                briefingPlayedToday: TodayPlanStore.sequencePlayedToday())
-                        }
-                    default:
-                        break
-                    }
-                }
+            if Self.isHostingUnitTests {
+                Color.clear
+            } else {
+                appContent
+            }
         }
+    }
+
+    private var appContent: some View {
+        ContentView()
+            .environment(brain)
+            .environment(briefing)
+            .environment(\.managedObjectContext, container.viewContext)
+            .preferredColorScheme(.dark)  // dark-first reads premium; matches the "quiet" thesis
+            .onChange(of: scenePhase) { _, phase in
+                switch phase {
+                case .active:
+                    // A foreground counts as a self-initiated open UNLESS the app
+                    // asked for it. The briefing nudge is the only thing that can
+                    // ask, and an open we solicited is not evidence of pull — see
+                    // `BriefingReminder.consumeCameFromNotification`.
+                    if !briefing.consumeCameFromNotification() {
+                        brain.metrics.recordOpen()
+                    }
+                    // Hourly-debounced maintenance: the reversible stale auto-archive.
+                    brain.runMaintenanceSweepsIfDue(in: container.viewContext)
+                case .background:
+                    // Roll the nudge horizon forward, skipping today if the sequence
+                    // already played. Backgrounding is the moment we know both.
+                    Task {
+                        await briefing.reschedule(
+                            briefingPlayedToday: TodayPlanStore.sequencePlayedToday())
+                    }
+                default:
+                    break
+                }
+            }
     }
 }

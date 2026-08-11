@@ -15,6 +15,8 @@ A **primitive** here is a noun or seam that earns its existence by deleting bran
 3. **Computed over persisted.** Persistence is reserved for identity, human signals, relationships, provenance, and one system cache (the attention score). Everything else derives on read.
 4. **Every AI output rides confirm or undo.** Nothing the model produces becomes durable state without a human boundary (confirm) or a reversal path (change log).
 5. **A snapshot per AI seam.** Each prompt gets its own context value (`OpenTaskSnapshot`, `RetrievalCandidate`, `PlanTaskSnapshot`), shaped by that prompt's budget — never a shared kitchen-sink context.
+6. **Validate decoded snapshots on read; never broadcast invalidation.** Anything decoded from `UserDefaults` (today's plan cache) names ids that Core Data's change notifications can't reach. The fix is a read-time check against the live set — `GeneratedPlan.validated(against:)`, `TodayPlanStore.hasOutlivedItsWork`, `TodayView.liveActions` — never a `Notification` posted by whoever deleted something. One read-time check covers every cause (a clear, a merge, an undo, a future sync) and can't be forgotten by the next deleter. A cross-cutting broadcast was tried for the Settings wipe and reversed (2026-08-11): it needed per-observer context scoping to be correct at all (the unit-test host runs the app in-process against a different store), and it still only covered the one cause that remembered to post it.
+7. **Two graphs may join for display, never in storage.** `.blocks` (sequencing) and `.parent` (containment) answer different questions and stay unfused as data. They meet in exactly one function — `TaskChainGrouping.prerequisites(of:within:)` — because *ordering a stack* is one question: what must come first. Fusing them earlier (writing `.blocks` edges at split time) made the umbrella read as Blocked and cost two behavioural carve-outs before it was reversed.
 
 ---
 
@@ -41,7 +43,9 @@ A **primitive** here is a noun or seam that earns its existence by deleting bran
 | Primitive | Where | Role |
 |---|---|---|
 | **Flags** (Blocked · Blocking · Overdue · Stale) | `TaskItem` reads | Attention conditions derived on read, never stored |
+| **StepProgress** (`openSteps` / `stepProgress`) | `Models/TaskItem.swift` | The container reading: how far a broken-down task's steps have got. Derived from the children's `.parent` edges — a container is **not** Blocked (see rule 7) |
 | **TaskRanking / RankKey / currentRelevance** | `Models/TaskRanking.swift` | The strict-weak-order stack + the one live additive layer (±25) |
+| **TaskChainGrouping** (+`prerequisites`) | `Models/TaskChainGrouping.swift` | Dependency chains for the stacked card — the ONE place `.blocks` and `.parent` join, and only for display order |
 | **IntentResolver** | `AI/IntentResolver.swift` | Deterministic intents→drafts: dates, owners, backfill, learned rules — the half both engines share |
 | **Segmentation** | `AI/Segmentation.swift` | Deterministic ramble→items: sentences, verb-gated spoken connectives, per-part commas, safe preamble strip — the heuristic path's parser AND the on-device timeout fallback's |
 | **OpenTaskSnapshotCache** | `AI/OpenTaskSnapshotCache.swift` | The open working set as value snapshots, rebuilt on change (objects-did-change, TaskItem-filtered) instead of on read |
@@ -100,7 +104,7 @@ Each system is a loop the user feels; each is listed with the primitives it comp
 
 ### S4 · Capabilities — help where the task is stuck
 *Complexity → Break it down · Uncertainty → Thinking Partner · Inertia → Unstick.*
-**Composes:** TaskCapabilities · BreakdownEligibility · StallDiagnosis · DecisionShape (the choice-wording lexicon — Decision retired from axis 2, 2026-08-08) · ModelRun services (framing incl. the grounded recommendation, breakdown) · Relationship (`.parent` on accept) · ChangeLog ("split").
+**Composes:** TaskCapabilities · BreakdownEligibility · StallDiagnosis · DecisionShape (the choice-wording lexicon — Decision retired from axis 2, 2026-08-08) · ModelRun services (framing incl. the grounded recommendation, breakdown) · Relationship (`.parent` on accept — the only edge a split writes) · StepProgress + TaskChainGrouping (the umbrella reads as progress and stacks behind its own steps) · ChangeLog ("split").
 **Fallback:** triggers identical everywhere; model-authored cards absent off-device, Unstick renders identically — minus voice (the template headline stays).
 
 ### S5 · Learning — the correction loop
@@ -110,7 +114,7 @@ Each system is a loop the user feels; each is listed with the primitives it comp
 
 ### S6 · Trust — reversibility & data safety
 *Every AI action visible, attributable, undoable; the store never silently loses work.*
-**Composes:** ChangeLogEntry/Undo · Inbox feed · Metrics (acceptance, local-only) · StoreResetRecord · DataExport · backups.
+**Composes:** ChangeLogEntry/Undo · Inbox feed · Metrics (acceptance, local-only) · **DataReset** (the user's own wipe — two scopes, work vs everything) · StoreResetRecord (ONE receipt for every wipe, voluntary or not; only the tone branches) · DataExport · backups.
 **Fallback:** n/a — this system is the fallback.
 
 ### S7 · Household — coordination (dormant, sync-gated)
@@ -127,6 +131,7 @@ Each system is a loop the user feels; each is listed with the primitives it comp
 | Relationship (+Suppression) | proposes/links | risk facts | blocked/blocking | parent on split | suppression = "no" | linked/split undo | dependents |
 | Correction → Profile | writes+applies | — | — | — | ● owns | — | — |
 | AttentionMetadata + currentRelevance | stamps at commit | candidate order | ● owns | stall inputs | — | — | — |
+| StepProgress (derived) | — | — | containerRecede | ● owns | — | resolution notice | — |
 | ChangeLogEntry | filed/merged | planned | — | split | — | ● owns | feed |
 | AIEngine + TriageContext | ● owns | — | — | — | instructions in | — | — |
 | ModelRun seam + deadlines | (capture excluded, own cadence) | tiers+salvage | — | framing/breakdown | — | metrics | narrative |

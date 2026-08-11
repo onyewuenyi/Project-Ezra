@@ -210,4 +210,68 @@ struct SegmentationTests {
         #expect(Segmentation.explicitItems(from: "Buy milk, call mom").count == 2)
     }
 
+
+    // MARK: - One item is not evidence of one thought (the 2026-08-11 regression)
+
+    /// The gate used to return "certain" for ANY one-item read, which is exactly
+    /// backwards: one item out of a long dictation means every boundary test failed, not
+    /// that the user said one thing. Shipped consequence — a four-errand ramble became a
+    /// single task titled with the raw transcript, silently dropped the other three, and
+    /// rewrote its own title twenty seconds later when the model disagreed.
+
+    @Test("The dictated four-errand run-on from the 08-11 recording is NOT one thought")
+    func dictatedRunOnIsNotOneThought() {
+        let ramble =
+            "Cook dinner at 3PM make odd duck reservation tonight take my wife to dinner "
+            + "next week book reservation at tiki tomorrow at 1pm"
+        // The splitter genuinely cannot cut this — no connectives, just juxtaposition.
+        #expect(Segmentation.items(from: ramble).count == 1)
+        // Which is precisely why it must NOT be revealed as the answer.
+        #expect(!Segmentation.readsAsOneThought(ramble))
+        #expect(Segmentation.confidence(ramble) == .ambiguous)
+        #expect(!Segmentation.structureIsCertain(ramble))
+    }
+
+    @Test("Errands butted together without connectives read as several")
+    func interiorVerbsMeanSeveralItems() {
+        #expect(!Segmentation.readsAsOneThought("cook dinner tonight book the flights tomorrow"))
+        #expect(!Segmentation.readsAsOneThought("call the plumber pay the water bill"))
+    }
+
+    @Test("A verb in a subordinate position doesn't split a single thought")
+    func subordinateVerbsAreNotItemStarts() {
+        // after a modal
+        #expect(Segmentation.readsAsOneThought("figure out whether we should book the hotel this week"))
+        // after an infinitive marker
+        #expect(Segmentation.readsAsOneThought("schedule a call to fix the sink"))
+        // after a determiner — the "verb" is a noun
+        #expect(Segmentation.readsAsOneThought("send the book to my sister"))
+        // after a conjunction — shares the previous verb's object
+        #expect(Segmentation.readsAsOneThought("pick up and drop off the kids"))
+    }
+
+    @Test("Ordinary single errands stay on the instant path")
+    func realSingleThoughtsStayCertain() {
+        for item in [
+            "renew my passport", "buy diapers", "call Mom about Thanksgiving",
+            "figure out whether we should book the hotel this week",
+        ] {
+            #expect(Segmentation.confidence(item) == .singleThought, "\(item)")
+        }
+    }
+
+    @Test("A paragraph is never one thought, however it is punctuated")
+    func lengthAloneCanDisqualify() {
+        let paragraph = String(repeating: "something ", count: 25)
+        #expect(!Segmentation.readsAsOneThought(paragraph))
+    }
+
+    @Test("Typed structure is typed, single items are single — the two are not the same")
+    func confidenceDistinguishesProvenance() {
+        #expect(Segmentation.confidence("Renew passport\nCall mom") == .typed)
+        #expect(Segmentation.confidence("Buy milk, call mom") == .typed)
+        #expect(Segmentation.confidence("renew my passport") == .singleThought)
+        #expect(Segmentation.confidence("renew my passport and call mom") == .ambiguous)
+    }
+
 }

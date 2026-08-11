@@ -16,6 +16,7 @@
 //  Recap skips straight to the briefing once it's ready.
 //
 
+import Combine
 import CoreData
 import SwiftUI
 
@@ -116,6 +117,28 @@ struct TodayView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { restartIfDayRolledOver() }
         }
+        // The briefing on screen has outlived its work. Derived from THIS view's own fetch
+        // rather than announced by whoever deleted the tasks: the fetch already updates on
+        // every cause (Settings ▸ Clear, a duplicate-sweep merge, an undo), so there is
+        // nothing to broadcast and nothing to scope — a store this view doesn't read
+        // cannot move this value. `TodayPlanStore.dropCacheIfWorkVanished` does the same
+        // job for the cache on the cold path, which is what stops the re-arm below from
+        // restoring the very plan it just discarded.
+        .onChange(of: planHasVanished) { _, vanished in
+            guard vanished else { return }
+            sequence.rearmAfterWorkVanished()
+            recapAppeared = false
+            recapEntrancePlayed = false
+            startIfNeeded()
+        }
+    }
+
+    /// True when every task the current briefing names has stopped existing. Distinct from
+    /// "no plan yet" (nothing to salvage) and from "some tasks went" (the plan still holds
+    /// — `liveActions` compacts those rows and the numbering stays contiguous).
+    private var planHasVanished: Bool {
+        guard let plan = sequence.plan, !plan.actions.isEmpty else { return false }
+        return liveActions(of: plan).isEmpty
     }
 
     @ViewBuilder

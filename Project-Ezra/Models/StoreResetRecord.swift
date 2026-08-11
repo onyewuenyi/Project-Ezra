@@ -23,6 +23,18 @@ enum StoreResetReason: Codable, Equatable {
     /// In practice this almost always means the model was edited without adding a new
     /// version, leaving lightweight migration no source model to work from.
     case loadFailure(String)
+    /// The user asked for it, in Settings ▸ Data (`DataReset`).
+    ///
+    /// The odd one out, and the reason this enum exists rather than a bool: the other two
+    /// are things that HAPPENED TO you, and their card is a warning. This one you chose,
+    /// so `isVoluntary` turns the same card into a receipt. What it must keep from the
+    /// involuntary arms is the durable part — a record that outlives the store it
+    /// describes, carrying the safety copy's name — because "where did my backup go?"
+    /// is asked hours later, not while the sheet is still open.
+    case userRequested(clearedIdentity: Bool)
+
+    /// Whether the user chose this. Drives the card's tone; never its existence.
+    var isVoluntary: Bool { if case .userRequested = self { return true }; return false }
 
     /// Plain-language explanation, for the Settings card.
     var explanation: String {
@@ -31,13 +43,15 @@ enum StoreResetReason: Codable, Equatable {
             return "the data model moved from generation \(from) to \(to)"
         case .loadFailure:
             return "the saved data couldn't be opened"
+        case .userRequested(let clearedIdentity):
+            return clearedIdentity ? "you reset everything" : "you cleared all tasks"
         }
     }
 
     /// The underlying technical detail, when there is one worth showing.
     var detail: String? {
         switch self {
-        case .schemaGeneration: return nil
+        case .schemaGeneration, .userRequested: return nil
         case .loadFailure(let message): return message
         }
     }

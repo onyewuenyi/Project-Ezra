@@ -81,8 +81,20 @@ enum PersistenceStack {
     /// the test suite runs serially (see the scheme's disabled parallelization).
     static let scratch: NSManagedObjectContext = {
         let container = NSPersistentContainer(name: "ProjectEzra", managedObjectModel: model)
-        let desc = NSPersistentStoreDescription()
-        desc.type = NSInMemoryStoreType
+        // SQLite in the temp directory, NOT an in-memory store. On the iOS 27 beta
+        // simulator the in-memory store corrupts an object's snapshot state after a
+        // heap-length String attribute is read back (bisected in the test suite's
+        // crash history: reading such a value, then faulting/resetting/deleting that
+        // object, dies in `_CDSnapshot` retain/release with a non-pointer value —
+        // ~70 EXC_BAD_ACCESS reports since 2026-08-07, previously mis-filed as an
+        // environmental sim flake). SQLite rows materialize fresh values on fetch —
+        // the same semantics the app's real store has — and the crash is gone. The
+        // PID suffix keeps parallel sim processes from sharing a file.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ezra-scratch-\(ProcessInfo.processInfo.processIdentifier).sqlite")
+        try? FileManager.default.removeItem(at: url)
+        let desc = NSPersistentStoreDescription(url: url)
+        desc.type = NSSQLiteStoreType
         container.persistentStoreDescriptions = [desc]
         container.loadPersistentStores { _, error in
             if let error { fatalError("Could not load the scratch store: \(error)") }

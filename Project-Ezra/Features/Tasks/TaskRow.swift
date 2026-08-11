@@ -28,6 +28,10 @@ struct TaskRow: View {
     /// The "waiting on X" phrase — kept ONLY to drive the blocked dim + marker (the
     /// text itself is no longer rendered on the row). Nil when nothing blocks it.
     var blockerSummary: String? = nil
+    /// How far this task's own steps have got, when it has any — computed by the list
+    /// (like `blockerSummary`) rather than by every row against the full set. Nil for the
+    /// ordinary task with no breakdown, which is nearly all of them.
+    var stepProgress: StepProgress? = nil
     /// The owner's name resolved against the *others* roster (so it's non-nil only when
     /// the task belongs to someone else). Nil means mine or shared.
     var ownerDisplayName: String? = nil
@@ -73,6 +77,7 @@ struct TaskRow: View {
                 .recessed(isBlocked)
 
             if isBlocked { BlockedIndicator() }
+            if let stepProgress { StepProgressIndicator(progress: stepProgress) }
 
             Spacer(minLength: Spacing.xs)
 
@@ -230,6 +235,7 @@ struct TaskRow: View {
         if task.isUrgent { parts.append("urgent") }
         if task.needsDecision && !task.status.isResolved { parts.append("needs a decision") }
         if isBlocked { parts.append("blocked") }
+        if let stepProgress { parts.append(stepProgress.label) }
         if let ownerDisplayName {
             parts.append("owned by \(ownerDisplayName)")
         } else if task.ownerID == nil {

@@ -357,6 +357,14 @@ extension TaskItem {
     ///    parent. The created ids ride in `newValue` so the undo arm can find them.
     /// 3. **The AI never splits on its own.** This is only ever called from an explicit
     ///    accept — the service proposes, the person decides.
+    /// 4. **Containment is the ONLY edge written.** The umbrella genuinely cannot be
+    ///    finished before its steps, but that fact is DERIVED from the children's own
+    ///    `.parent` edges (`openSteps(among:)`), never stored as `.blocks` on the parent.
+    ///    Writing it would fuse the two graphs `children(among:)` warns about — `.parent`
+    ///    is containment, `.blocks` is sequencing — and every reader of
+    ///    `hasActiveBlockers` would inherit the question "obstacle, or container?".
+    ///    Deriving also means the wait dies with the step: nothing to unwind in undo, no
+    ///    `lastUnblockedAt` to restore, no cycle to check.
     ///
     /// Returns the created children. Callers own `save()`.
     @discardableResult

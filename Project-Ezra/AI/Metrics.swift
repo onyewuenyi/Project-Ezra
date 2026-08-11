@@ -325,8 +325,11 @@ final class ModelMetrics {
         /// Submit → the model's enrichment landing on the already-revealed set.
         var lastEnrichmentMs = -1
         /// How often the model wanted a different structure than the one on screen.
-        /// The shown structure always wins; this says how often that costs something.
         var structureDisagreements = 0
+        /// How often that disagreement was ACTED on — the shown structure was our own
+        /// fallback, so the model's replaced it and the card set changed under the user.
+        /// The visible half of the number above; the one that should reach zero first.
+        var restructures = 0
         /// One provisional pass's cost — segmentation + resolve + owner proposal, on
         /// the thread the keyboard shares. The number the coalesce window is tuned on.
         var lastProvisionalMs = -1
@@ -436,6 +439,18 @@ final class ModelMetrics {
         stats[.captureTriage] = entry
     }
 
+    /// A disagreement we ACTED on — the shown structure was our own fallback read, so the
+    /// model's won and the card set changed under the user. The two counters are separate
+    /// on purpose: a disagreement we overruled is a tuning signal, one we acted on is a
+    /// visible event, and only the second is a promise broken. Both should trend to zero
+    /// as `Segmentation.readsAsOneThought` is tuned; the second reaching zero first is
+    /// the goal.
+    func recordRestructure() {
+        var entry = stats[.captureTriage] ?? Stats()
+        entry.restructures += 1
+        stats[.captureTriage] = entry
+    }
+
     /// The confirm tap's wall clock — draft(s) → tasks in the store, synchronously,
     /// before the sheet dismisses.
     func recordCommit(latencyMs: Int) {
@@ -477,8 +492,10 @@ final class ModelMetrics {
                 if let source = entry.lastFirstCardSource { line += "(\(source))" }
             }
             if entry.lastEnrichmentMs >= 0 { line += " · enrich \(entry.lastEnrichmentMs)ms" }
+            // "2/7 restr" — acted-on over merely-detected. The left number is the one
+            // the user saw happen.
             if entry.structureDisagreements > 0 {
-                line += " · \(entry.structureDisagreements) restructure"
+                line += " · \(entry.restructures)/\(entry.structureDisagreements) restr"
             }
             if entry.lastCommitMs >= 0 { line += " · commit \(entry.lastCommitMs)ms" }
             if entry.lastPromptTokens >= 0 {

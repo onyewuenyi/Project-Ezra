@@ -104,6 +104,37 @@ final class TodayPlanStore {
         defaults.removeObject(forKey: Key.cache)
     }
 
+    // MARK: - Outliving the work (self-healing, no broadcast)
+
+    /// Has this cached briefing outlived the work it describes?
+    ///
+    /// The cache is the app's one decoded snapshot of tasks — it names ids by hand, in
+    /// `UserDefaults`, where Core Data's change notifications can't reach it. Ids can stop
+    /// resolving for several unrelated reasons (Settings ▸ Clear, a duplicate-sweep merge,
+    /// an undo), so the durable answer is to VALIDATE ON READ rather than have each of
+    /// those sites remember to announce itself. Same instinct as
+    /// `GeneratedPlan.validated(against:)`: trust nothing decoded, check it against the
+    /// live set.
+    ///
+    /// **All-or-nothing on purpose.** A plan that lost SOME tasks is still a plan (the
+    /// render path compacts those rows); a plan that lost every task is a briefing about
+    /// nothing, and its headline would go on describing a day that no longer exists.
+    /// Pure and static so the rule is testable without a store, a context or a clock.
+    static func hasOutlivedItsWork(_ cache: TodayPlanCache, liveTaskIDs: Set<UUID>) -> Bool {
+        guard !cache.actions.isEmpty else { return false }
+        return !cache.actions.contains { liveTaskIDs.contains($0.taskID) }
+    }
+
+    /// Drop the cache if it has outlived its work, reporting whether it did.
+    @discardableResult
+    func dropCacheIfWorkVanished(liveTaskIDs: Set<UUID>) -> Bool {
+        guard let cache, Self.hasOutlivedItsWork(cache, liveTaskIDs: liveTaskIDs) else {
+            return false
+        }
+        clear()
+        return true
+    }
+
     /// Stamp the sequence as fully played and advance the recap high-water mark. The
     /// resting state renders from here on; the next day's Recap counts completions
     /// since `now`.

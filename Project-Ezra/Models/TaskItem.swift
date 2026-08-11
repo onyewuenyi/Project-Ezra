@@ -176,6 +176,30 @@ struct TaskAssessment: Equatable {
     var isClean: Bool { needsDecision == nil && !isBlocked && !isUnowned }
 }
 
+/// How far a broken-down task's steps have got — the container's state, standing where
+/// a lesser design would have put "Blocked".
+///
+/// Derived on read from the children's `.parent` edges (`TaskItem.stepProgress`), so it
+/// can never drift from the tasks it counts, and completing or deleting a step updates it
+/// with no bookkeeping anywhere.
+struct StepProgress: Equatable {
+    var done: Int
+    var total: Int
+
+    var remaining: Int { max(total - done, 0) }
+    var isComplete: Bool { total > 0 && done >= total }
+
+    /// The row/detail line: "0 of 3 steps", "3 of 3 steps".
+    var label: String { "\(done) of \(total) steps" }
+
+    /// What a resolution notice adds when the umbrella is closed early — nil when
+    /// nothing is left, because then there is nothing to warn about.
+    var openStepsPhrase: String? {
+        guard remaining > 0 else { return nil }
+        return "\(remaining) step\(remaining == 1 ? "" : "s") still open"
+    }
+}
+
 // MARK: - State timeline (temporal instrumentation)
 
 /// One continuous stay in a single status. The task's timeline is an ordered list
@@ -708,6 +732,31 @@ extension TaskItem {
             other.uuid != selfID && !other.status.isResolved
                 && other.taskBlockerIDs.contains(selfID)
         }
+    }
+
+    /// The steps under this task that are still open.
+    ///
+    /// **The container reading, and it is DERIVED — never a stored `.blocks` edge.** A
+    /// broken-down task genuinely cannot be finished before its steps, which makes
+    /// "waiting on" a tempting way to say it, and writing that wait as a blocker was
+    /// tried and reversed. Two reasons it stays derived. It would fuse the two graphs
+    /// `children(among:)` warns about, leaving every reader of `hasActiveBlockers` to ask
+    /// "obstacle, or container?" — the CTA ("Unblock", which would dismantle the
+    /// breakdown) and the stall rung ("waiting on something else", when the something
+    /// else is itself) both got that wrong, and nothing forces the next reader to get it
+    /// right. And a container is not stuck: an hourglass on a task you just usefully
+    /// decomposed reads as a setback, where the truth is progress. So the state is
+    /// `StepProgress`, not Blocked.
+    func openSteps(among tasks: [TaskItem]) -> [TaskItem] {
+        children(among: tasks).filter { !$0.status.isResolved }
+    }
+
+    /// How far the steps have got, or nil when this task has none — the one value the
+    /// row, the detail and the resolution notice all read.
+    func stepProgress(among tasks: [TaskItem]) -> StepProgress? {
+        let steps = children(among: tasks)
+        guard !steps.isEmpty else { return nil }
+        return StepProgress(done: steps.count { $0.status.isResolved }, total: steps.count)
     }
 
     /// The tasks that name this one as their parent — its steps.

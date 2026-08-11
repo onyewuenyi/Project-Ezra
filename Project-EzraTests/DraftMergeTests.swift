@@ -406,4 +406,55 @@ struct DraftMergeTests {
         #expect(!result.structureDisagreed)
     }
 
+
+    // MARK: - The clamp is conditional on provenance
+
+    /// Holding the shown structure protects the user's reading of something they
+    /// punctuated themselves. Holding a FALLBACK read against the model is not stability,
+    /// it is data loss — the regression this pins discarded three of four dictated
+    /// errands while dutifully recording that it disagreed.
+
+    @Test("A fallback structure yields to the model rather than discarding its tasks")
+    func fallbackStructureYields() {
+        let shown = [draft("Cook dinner at 3PM make a reservation take my wife to dinner")]
+        let modelRead = [draft("Cook dinner"), draft("Make a reservation"), draft("Take my wife to dinner")]
+
+        let result = DraftMerge.enrich(
+            modelRead, onto: shown, removed: none, holdStructure: false)
+
+        #expect(result.drafts.count == 3)
+        #expect(result.restructured)
+        #expect(result.structureDisagreed)
+        // Nothing the model found was thrown away.
+        #expect(result.drafts.contains { $0.title == "Take my wife to dinner" })
+    }
+
+    @Test("A typed structure is never restructured, however the model reads it")
+    func typedStructureHolds() {
+        let shown = [draft("Renew passport"), draft("Call mom")]
+        let modelRead = [draft("Renew passport"), draft("Call mom"), draft("Book flights")]
+
+        let result = DraftMerge.enrich(
+            modelRead, onto: shown, removed: none, holdStructure: true)
+
+        #expect(result.drafts.count == 2)
+        #expect(!result.restructured)
+        // Still REPORTED, so the trust predicate keeps its tuning signal.
+        #expect(result.structureDisagreed)
+    }
+
+    @Test("Agreement never counts as a restructure, whichever way the clamp is set")
+    func agreementIsNeverARestructure() {
+        let shown = [draft("Renew passport"), draft("Call mom")]
+        var richer = draft("Renew my passport", aiTitle: "Renew my passport")
+        richer.id = shown[0].id
+
+        for hold in [true, false] {
+            let result = DraftMerge.enrich(
+                [richer], onto: shown, removed: none, holdStructure: hold)
+            #expect(result.drafts.count == 2, "hold=\(hold)")
+            #expect(!result.restructured, "hold=\(hold)")
+        }
+    }
+
 }

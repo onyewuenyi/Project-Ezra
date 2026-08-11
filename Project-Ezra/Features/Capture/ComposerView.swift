@@ -95,8 +95,16 @@ struct ComposerView: View {
     @State private var phase: RamblePhase = .capture
     /// When submit happened — the clock for the performance contract.
     @State private var submittedAt: Date?
-    /// Which producer decided the structure on screen ("local"/"model").
-    @State private var structureSource = "local"
+    /// Which producer decided the structure on screen ("typed"/"single"/"model").
+    @State private var structureSource = "typed"
+    /// Did the shown structure come from punctuation the USER typed? Only then may the
+    /// shown structure outrank the model's (see `DraftMerge.enrich`) — holding a fallback
+    /// guess against the model is data loss, not stability.
+    @State private var structureIsUserTyped = true
+    /// When the current card set arrived. The stagger clock: each card's entrance is
+    /// offset from this, so the composition arrives as one thing with a rhythm rather
+    /// than appearing all at once or animating per-card forever after.
+    @State private var revealedAt: Date?
 
     @State private var text = ""
     @State private var drafts: [TaskDraft] = []
@@ -182,29 +190,48 @@ struct ComposerView: View {
             .onTapGesture { focused = false }
             // Success notification — capture committed is a capstone moment.
             .sensoryFeedback(.success, trigger: committed)
+            // The reveal is the product's promise being kept, and it was the one moment
+            // in the flow with no feedback of any kind. A light impact, not `.success`:
+            // success belongs to the commit, and spending it here would flatten the
+            // difference between "here's what I understood" and "it's in your list".
+            .sensoryFeedback(.impact(weight: .light), trigger: revealedAt)
             // Dictation start/stop is felt, not just seen — the trigger is the state
             // edge, so the auto-stop lands the same haptic as a tap.
             .sensoryFeedback(.impact(weight: .medium), trigger: speech.state == .listening)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    // Cancel is a real choice, because swiping away no longer destroys
-                    // anything. From the reveal, "Back" returns to the canvas with the
-                    // words intact — nothing has been committed yet.
+                    // The leading slot is the reflexively-tapped one, so it holds only
+                    // SAFE actions. Leaving with words on the canvas parks them — the
+                    // capture resumes later untouched — so "Close" is honest and Discard
+                    // no longer sits in the spot the thumb goes to by habit.
                     switch phase {
                     case .capture where text.isEmpty:
                         Button("Cancel") { dismiss() }
                     case .capture:
-                        Button("Discard", role: .destructive) { showDiscardConfirm = true }
+                        Button("Close") { dismiss() }
                     case .understanding, .confirm:
                         Button("Back") { backToCapture() }
                     case .created:
                         EmptyView()
                     }
                 }
+                ToolbarItem(placement: .destructiveAction) {
+                    // The one irreversible action in the flow, in the slot reserved for
+                    // exactly that, and still behind a confirmation.
+                    if phase == .capture, !text.isEmpty {
+                        Button("Discard", role: .destructive) { showDiscardConfirm = true }
+                    }
+                }
             }
             .onAppear {
-                focused = true
+                // Deliberately NOT focused. Opening a canvas whose instruction is "dump it
+                // all here" by slamming up a keyboard makes the typed path the only one
+                // that feels intended, on the surface whose flagship input is speech. The
+                // whole canvas is a tap target for the keyboard when it's wanted; a
+                // RESUMED capture is the exception, because there the user is returning to
+                // words already in progress.
+                focused = resuming != nil
                 refreshRosterCaches()
                 restoreIfResuming()
                 // Verification seam: a resumed capture from `-OpenCapture` submits itself
@@ -331,32 +358,48 @@ struct ComposerView: View {
 
     /// Submit — the deliberate handoff. "Got it, I'll take it from here."
     ///
-    /// Structure is decided HERE and never changes again. The deterministic read is
-    /// trusted only when it is certain (the user typed the structure, or there is exactly
-    /// one item); otherwise the model decides and the orb holds the screen until it
-    /// answers. Either way the user never watches boundaries move.
+    /// Structure is decided HERE. The deterministic read may go on screen only when it is
+    /// evidence rather than the absence of evidence: the user punctuated the split
+    /// (`.typed`), or there is one item that actually reads as one thought
+    /// (`.singleThought`). Prose the splitter had to guess at waits behind the orb.
+    ///
+    /// The two trusted cases are NOT equivalent afterwards. A `.typed` structure is the
+    /// user's own and the model may never restructure it; a `.singleThought` structure is
+    /// ours, so if the model disagrees the model wins (see `DraftMerge.enrich`). Holding a
+    /// fallback guess against the model is what silently discarded three of four errands.
     private func submit() {
         let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !captured.isEmpty else { return }
         focused = false
         speech.stop()
         let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
-        let trusted = Segmentation.structureIsCertain(captured) && !local.isEmpty
+        let confidence = Segmentation.confidence(captured)
+        let trusted = confidence != .ambiguous && !local.isEmpty
+        structureIsUserTyped = confidence == .typed
         submittedAt = Date()
 
         if trusted {
             // Certain structure — reveal at once. This is how the common cases meet
             // "submit → stable confirmation" without waiting on generation.
             drafts = local
-            structureSource = "local"
-            Motion.withMotion(Motion.heroSettle) { phase = .confirm }
-            recordConfirmReached()
+            structureSource = confidence == .typed ? "typed" : "single"
+            reveal()
         } else {
             structureSource = "model"
             Motion.withMotion(Motion.heroSettle) { phase = .understanding }
         }
         parkIfUnfinished(force: true)
         runParse(captured, revealWhenDone: !trusted)
+    }
+
+    /// The arrival. Everything that makes the reveal land as an ANSWER rather than a
+    /// screen change happens here, in one place: the phase change on the hero spring, the
+    /// stagger clock the cards ride in on, and the haptic — the flow's emotional peak had
+    /// been the one moment in the app with no feedback of any kind.
+    private func reveal() {
+        revealedAt = .now
+        Motion.withMotion(Motion.heroSettle) { phase = .confirm }
+        recordConfirmReached()
     }
 
     /// The ONE model parse a capture gets. When the reveal is already on screen this
@@ -391,28 +434,38 @@ struct ComposerView: View {
                     result.drafts.isEmpty
                     ? AppBrain.provisionalDrafts(captured, learned: learned) : result.drafts
                 drafts = merge(fresh: final, into: drafts)
-                Motion.withMotion(Motion.heroSettle) { phase = .confirm }
-                recordConfirmReached()
+                reveal()
             } else {
-                // ENRICHMENT ONLY. The shown structure wins: the model may improve every
-                // card's title and metadata, but it may not change how many there are or
-                // what order they are in.
+                // The reveal is already on screen. The model may improve every card's
+                // title and metadata; whether it may also restructure depends on where
+                // the shown structure came from (`structureIsUserTyped`).
                 enrich(with: result.drafts)
             }
             parkIfUnfinished(force: true)
         }
     }
 
-    /// Fill metadata onto the revealed set without reinterpreting it. Cards the model
-    /// didn't claim keep what they have; model drafts that claim nothing are dropped and
-    /// counted, so local-vs-model structural disagreement is visible rather than guessed.
+    /// Fill metadata onto the revealed set. The invariant lives in `DraftMerge.enrich` —
+    /// a pure function, so "enrichment may not change the count or the order of what the
+    /// user is already reading" is property-tested rather than trusted to this call site.
+    ///
+    /// It lands as ONE settled change, never a drip. Chips fading in one at a time across
+    /// twenty seconds was the only animation in the whole flow, and it was the animation
+    /// we deleted live parsing to be rid of: the interface narrating the model's progress
+    /// on a card the user is already reading. A single `settle` says "that's filled in
+    /// now" and stops.
     private func enrich(with fresh: [TaskDraft]) {
-        // The invariant lives in `DraftMerge.enrich` — a pure function, so "enrichment
-        // may not change the count or the order of what the user is already reading" is
-        // property-tested rather than trusted to this call site.
-        let result = DraftMerge.enrich(fresh, onto: drafts, removed: removedDrafts)
+        let result = DraftMerge.enrich(
+            fresh, onto: drafts, removed: removedDrafts, holdStructure: structureIsUserTyped)
         if result.structureDisagreed { ModelMetrics.shared.recordStructureDisagreement() }
-        Motion.withMotion(Motion.fade) { drafts = result.drafts }
+        if result.restructured {
+            // The model overruled a fallback read. The set genuinely changes, so it gets
+            // the reveal's own entrance rather than a metadata fade — this is a new
+            // answer, and pretending otherwise by cross-fading it would be worse.
+            revealedAt = .now
+            ModelMetrics.shared.recordRestructure()
+        }
+        Motion.withMotion(Motion.settle) { drafts = result.drafts }
         if let submittedAt {
             ModelMetrics.shared.recordEnrichment(
                 latencyMs: Int(Date().timeIntervalSince(submittedAt) * 1000))
@@ -532,6 +585,15 @@ struct ComposerView: View {
     // MARK: - The four surfaces
 
     /// CAPTURE — a thought canvas, not a task field. The AI is entirely absent here.
+    ///
+    /// **The canvas owns the screen and voice leads.** It used to be a 120–280pt bordered
+    /// box inside an already-padded screen, under a raised keyboard, with "Speak instead"
+    /// as a secondary pill at the same weight as "Add a photo" — so the product called
+    /// Ramble opened with a keyboard and made you route around its primary affordance to
+    /// use it as named. Now the field takes all the vertical space it can (`.infinity`,
+    /// no container of its own — see `composerField`), nothing is focused on arrival, and
+    /// on an empty canvas the mic is the full-width primary action. Typing is one tap
+    /// away and the whole canvas is that tap.
     @ViewBuilder private var captureSurface: some View {
         Text("What's on your mind?")
             .screenTitleStyle()
@@ -541,21 +603,41 @@ struct ComposerView: View {
 
         imageChip
         composerField
-            .frame(minHeight: 120, maxHeight: 280)
+            // Generous, but BOUNDED. `maxHeight: .infinity` here hangs layout: the
+            // field's ZStack holds a TextEditor (itself scrollable and greedy) and,
+            // with no fixed ceiling and no Spacer left in the stack to absorb the
+            // slack, the pass doesn't settle — the composer never presents. A tall
+            // ceiling gets the whole point of the change (the canvas, not a box)
+            // without asking the layout system to resolve a cycle.
+            .frame(minHeight: 200, maxHeight: 460)
             .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
 
         dictationHint
             .animation(Motion.fade, value: speech.state)
 
-        Spacer(minLength: 0)
-
         VStack(spacing: Spacing.sm) {
-            rambleButton
+            // Ramble appears only once there is something to ramble about. A disabled
+            // primary button on an empty canvas is a dead affordance occupying the spot
+            // the live one should own.
+            if canSubmit { rambleButton }
             voiceOrMicRow
         }
+        // Deliberately NOT animated. The empty and non-empty states are different
+        // CONTAINERS (a stacked primary vs. a compact row), and asking SwiftUI to
+        // interpolate between two structures cross-fades them into each other —
+        // overlapping capsules and doubled labels for the length of the animation. The
+        // swap happens on the first keystroke, where instant is also simply correct.
+        .animation(nil, value: canSubmit)
     }
 
     /// The submit affordance — the deliberate handoff.
+    ///
+    /// **Solid, not the gradient — and that is the point.** Ramble and "Create N tasks"
+    /// were the identical gradient capsule at the identical size, for "interpret this for
+    /// me" and "commit this to my life". Spending the app's highest-signal treatment
+    /// twice in one flow flattens both, and the arc should BUILD: a request, then a
+    /// payoff. The ✦ carries the AI signal here without the gradient, which is reserved
+    /// for the moment the tasks become real.
     private var rambleButton: some View {
         Button {
             submit()
@@ -571,14 +653,14 @@ struct ComposerView: View {
             .frame(height: 52)
             .background(
                 canSubmit
-                    ? AnyShapeStyle(Palette.accentGradient)
+                    ? AnyShapeStyle(Palette.accentFlat)
                     : AnyShapeStyle(Palette.secondarySurface),
                 in: Capsule()
             )
         }
         .buttonStyle(.pressableProminent)
         .disabled(!canSubmit)
-        .accessibilityLabel("Ramble — turn what you wrote into tasks")
+        .accessibilityLabel("Ramble — turn what you said into tasks")
     }
 
     private var canSubmit: Bool {
@@ -631,7 +713,8 @@ struct ComposerView: View {
                     ownerOptions: ownerOptions,
                     rosterNames: rosterNames,
                     onAddToRoster: { addToRoster($0) },
-                    onRemove: { removedDrafts.record($0) }
+                    onRemove: { removedDrafts.record($0) },
+                    revealedAt: revealedAt
                 )
                 .padding(.top, Spacing.xxs)
             }
@@ -651,11 +734,20 @@ struct ComposerView: View {
             .buttonStyle(.pressableProminent)
             .disabled(drafts.isEmpty)
 
-            Button("Add another") { backToCapture() }
-                .font(.controlLabel)
-                .foregroundStyle(Palette.secondaryText)
-                .frame(height: LayoutMetrics.hitTarget)
-                .buttonStyle(.pressableLink)
+            // "Add another" was three plausible meanings and none of them right: it
+            // adds nothing, it returns to the canvas with your words and drafts intact
+            // so you can keep talking. Under a primary CTA a bare text button also reads
+            // as Cancel. "Say more" names what happens, and the arrow points back.
+            Button {
+                backToCapture()
+            } label: {
+                Label("Say more", systemImage: "arrow.up.left")
+                    .font(.controlLabel)
+                    .foregroundStyle(Palette.secondaryText)
+                    .frame(height: LayoutMetrics.hitTarget)
+            }
+            .buttonStyle(.pressableLink)
+            .accessibilityHint("Back to the canvas — your words and these tasks are kept")
         }
     }
 
@@ -810,15 +902,20 @@ struct ComposerView: View {
 
     private var composerField: some View {
         ZStack(alignment: .topLeading) {
+            // **No container at rest.** The words sit on the ground, the way they do in a
+            // notes app — a bordered box that says "short entry here" was contradicting
+            // the copy above it, which promises somewhere to unload everything. The
+            // surface returns only when the field is LIVE (mic hot, or the model reading),
+            // where it means "this is happening now" rather than "type in the box".
             RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
-                .fill(Palette.primarySurface)
+                .fill(fieldIsLive ? AnyShapeStyle(Palette.primarySurface) : AnyShapeStyle(.clear))
                 .overlay {
                     RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
                         .strokeBorder(
                             fieldIsLive
                                 ? AnyShapeStyle(Palette.accentGradient)
-                                : AnyShapeStyle(Palette.border),
-                            lineWidth: fieldIsLive ? 1.5 : 0.5
+                                : AnyShapeStyle(.clear),
+                            lineWidth: fieldIsLive ? 1.5 : 0
                         )
                 }
                 // Soft glow while the model is thinking — and while the mic is hot:
@@ -835,8 +932,12 @@ struct ComposerView: View {
                 )
                 .foregroundStyle(Palette.mutedText)
                 .font(.bodyInput)
-                .padding(.horizontal, Spacing.md + 4)
-                .padding(.vertical, Spacing.md + 8)
+                // Aligned to the HEADING, not inset from a box that no longer exists.
+                // `TextEditor` carries its own ~5pt leading text inset, so the nudge here
+                // is what makes the placeholder and the typed words share one left edge
+                // with "What's on your mind?".
+                .padding(.horizontal, Spacing.xs)
+                .padding(.vertical, Spacing.xs)
                 .allowsHitTesting(false)
             }
 
@@ -861,7 +962,7 @@ struct ComposerView: View {
                     .font(.bodyInput)
                     .foregroundStyle(Palette.primaryText)
                     .scrollContentBackground(.hidden)
-                    .padding(Spacing.md)
+                    .padding(Spacing.xs)
                     // The field is the product's front door and it was unlabeled —
                     // VoiceOver read only the (long, example-laden) placeholder.
                     .accessibilityLabel("What's on your mind")
@@ -887,11 +988,29 @@ struct ComposerView: View {
 
     // MARK: - Dictation
 
-    private var micRow: some View {
-        HStack(spacing: Spacing.sm) {
-            micButton
-            imageButton
-            Spacer(minLength: 0)
+    /// The mic leads on an empty canvas and steps aside once there are words.
+    ///
+    /// Voice is the flagship input and was rendered as a secondary pill of exactly the
+    /// same weight as "Add a photo". On an empty canvas it now takes the primary slot at
+    /// full width; the moment there is text, Ramble takes that slot and the mic returns
+    /// to the compact row beside the photo picker — by then the user has already chosen
+    /// their input and the mic is a way to add to it, not the way in.
+    @ViewBuilder private var micRow: some View {
+        if canSubmit {
+            // There are words now: the user has chosen their input, Ramble owns the
+            // primary slot, and these are ways to ADD to what's there.
+            HStack(spacing: Spacing.sm) {
+                micButton
+                imageButton
+                Spacer(minLength: 0)
+            }
+        } else {
+            // Empty canvas: speaking is the way in, at full width, with the photo path
+            // beneath it as the genuinely tertiary option it is.
+            VStack(spacing: Spacing.sm) {
+                micButton
+                imageButton
+            }
         }
     }
 
@@ -978,14 +1097,19 @@ struct ComposerView: View {
     private var micButton: some View {
         let listening = speech.state == .listening
         let active = speech.isActive
+        // Primary on an empty canvas: full width, CTA height, and it says "Speak" rather
+        // than "Speak instead" — "instead" framed the product's flagship input as the
+        // alternative to the keyboard it was sitting under.
+        let prominent = !canSubmit && !active
         return Button {
             toggleDictation()
         } label: {
-            Label(active ? "Listening…" : "Speak instead", systemImage: "mic.fill")
-                .font(.controlLabel)
+            Label(active ? "Listening…" : (prominent ? "Speak" : "Speak instead"), systemImage: "mic.fill")
+                .font(prominent ? .ctaLabel : .controlLabel)
                 .foregroundStyle(micTint)
                 .padding(.horizontal, Spacing.md)
-                .frame(height: 40)
+                .frame(maxWidth: prominent ? .infinity : nil)
+                .frame(height: prominent ? 52 : 40)
                 .background(active ? Palette.accentSoft : Palette.secondarySurface, in: Capsule())
                 .shadow(color: active ? Palette.accentGlow : .clear, radius: active ? 12 : 0)
                 .symbolEffect(.variableColor, options: .repeating, isActive: listening && !reduceMotion)

@@ -99,6 +99,7 @@ struct TaskChainStackView: View {
             task: task,
             allTasks: allTasks,
             blockerSummary: blockerSummary(task),
+            stepProgress: task.stepProgress(among: allTasks),
             ownerDisplayName: ownerDisplayName(task),
             ownerPhotoData: ownerPhotoData(task),
             onComplete: { onComplete(task) },

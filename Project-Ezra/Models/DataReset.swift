@@ -14,22 +14,17 @@
 //  also takes identity, preferences and diagnostics, leaving first-launch state.
 //
 //  It inherits the data-safety rules the store has held since daily use began: a safety
-//  copy is taken first, and the clear is reported (`Receipt`) rather than performed in
-//  silence. What it deliberately does NOT write is a `StoreResetRecord` — that card
-//  exists to explain a wipe the user did not choose, and warning someone about the
-//  button they just pressed is noise, not honesty.
+//  copy is taken first, and the clear is reported rather than performed in silence — through
+//  the SAME `StoreResetRecord` + `StoreResetLog` the involuntary wipes use. That reuse is
+//  the point. A first pass minted a `Receipt` of its own, on the reasoning that the reset
+//  card is a warning and warning someone about the button they just pressed is noise; the
+//  reasoning was right about the TONE and wrong about the STORAGE. A UI-local receipt dies
+//  with the sheet, and "where did my backup go?" is asked hours later. So the record is
+//  shared and durable, and only the card's tone branches (`StoreResetReason.isVoluntary`).
 //
 
 import CoreData
 import Foundation
-
-extension Notification.Name {
-    /// Posted after `DataReset.clear` empties the store. Core Data's own change
-    /// notifications cover every fetched view for free; this exists for the surfaces
-    /// holding a DECODED SNAPSHOT of work that no longer exists — today's cached
-    /// briefing, which lives in `UserDefaults` and names task ids by hand.
-    static let ezraDataCleared = Notification.Name("ezra.dataCleared")
-}
 
 enum DataReset {
 
@@ -41,16 +36,6 @@ enum DataReset {
         /// Also identity, preferences, the first-run flag and the local diagnostics —
         /// what a fresh install would have.
         case everything
-    }
-
-    /// What happened, so the caller can say so and hand back the safety copy.
-    struct Receipt: Equatable {
-        let scope: Scope
-        let date: Date
-        /// The safety copy's folder name inside `PersistenceStack.backupsDirectory`, or
-        /// nil when there was nothing to copy or the copy failed. **Nil is the case worth
-        /// surfacing** — it means the data is gone with no fallback.
-        let backupName: String?
     }
 
     /// Entities that describe WHO you are rather than what you captured. Everything else
@@ -71,8 +56,14 @@ enum DataReset {
     /// a factory reset that skips the first run isn't one.
     private static let identityKeys = ["hasOnboarded"]
 
-    /// Empty the store at `scope`. Returns the receipt; never throws — a clear the user
-    /// asked for must not be blockable by a failed copy or a failed save.
+    /// Empty the store at `scope`. Returns the same `StoreResetRecord` the involuntary
+    /// wipes write — durable, backup-carrying — and never throws: a clear the user asked
+    /// for must not be blockable by a failed copy or a failed save.
+    ///
+    /// **The receipt is written to `StoreResetLog`, not just returned.** A UI-local return
+    /// value dies with the sheet, and "where did my backup go?" is a question asked hours
+    /// later. Reusing the existing record is also what keeps ONE reset-reporting path in
+    /// the app instead of two that can drift.
     ///
     /// `metrics`/`planMetrics` are passed in rather than reached for: they are instances
     /// owned by `AppBrain`, and both cache their counters in memory, so clearing their
@@ -85,7 +76,7 @@ enum DataReset {
         metrics: MetricsRecorder? = nil, planMetrics: PlanMetrics? = nil,
         defaults: UserDefaults = .standard, now: Date = Date(),
         at location: PersistenceStack.StoreLocation = .default
-    ) -> Receipt {
+    ) -> StoreResetRecord {
         // A copy first, always — the same rule `destroyStore` holds. Best-effort by
         // design, and weaker here than there: this copies a store that is currently OPEN,
         // so the sqlite may lag its `-wal`. The stronger safety net is the JSON export
@@ -107,8 +98,6 @@ enum DataReset {
 
         if scope == .everything {
             for key in identityKeys { defaults.removeObject(forKey: key) }
-            // The pending-reset card describes a store that no longer exists.
-            StoreResetLog.clear(in: defaults)
             metrics?.reset(now: now)
             planMetrics?.reset()
             ModelMetrics.shared.reset()
@@ -119,8 +108,13 @@ enum DataReset {
             context.saveChanges()
         }
 
-        NotificationCenter.default.post(name: .ezraDataCleared, object: nil)
-        return Receipt(scope: scope, date: now, backupName: backupName)
+        // Written LAST, and after the `.everything` branch, so a factory reset can wipe
+        // every other key without erasing the receipt for the wipe itself.
+        let record = StoreResetRecord(
+            reason: .userRequested(clearedIdentity: scope == .everything), date: now,
+            backupName: backupName, destroyedData: true)
+        StoreResetLog.write(record, to: defaults)
+        return record
     }
 
     private static func entityNames(for scope: Scope, in context: NSManagedObjectContext) -> [String] {

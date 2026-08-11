@@ -262,7 +262,10 @@ struct TaskMoreMenu: View {
     private func offerUndo(verb: String, unblocked: [TaskItem]) {
         let task = self.task
         let context = self.context
-        notice = .resolution(verb, task.title, unblocked: unblocked) {
+        notice = .resolution(
+            verb, task.title, unblocked: unblocked,
+            steps: task.stepProgress(among: Array(allTasksResults))
+        ) {
             task.reopenAndReblock(in: context)
             context.saveChanges()
         }

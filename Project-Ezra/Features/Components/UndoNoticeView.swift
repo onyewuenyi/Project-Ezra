@@ -21,9 +21,18 @@ struct UndoNotice: Identifiable, Equatable {
     static func == (lhs: UndoNotice, rhs: UndoNotice) -> Bool { lhs.id == rhs.id }
 
     /// Standard message for a resolution (complete/kill), folding in any tasks the
-    /// resolution auto-unblocked so the AI's action is visible in-flow.
+    /// resolution auto-unblocked so the AI's action is visible in-flow — and any steps
+    /// left behind when the resolved task was a container.
+    ///
+    /// Closing an umbrella with open steps is allowed: sometimes the steps stop mattering
+    /// the moment the job is done. But it must never be SILENT — the steps are real rows
+    /// that would otherwise sit in the list with nothing above them to explain why. Naming
+    /// them here (with the Undo already in the pill) is the iOS-native answer: inform and
+    /// offer the way back, rather than interrupt with a dialog to confirm what the user
+    /// plainly meant.
     static func resolution(
-        _ verb: String, _ title: String, unblocked: [TaskItem] = [], undo: (() -> Void)? = nil
+        _ verb: String, _ title: String, unblocked: [TaskItem] = [],
+        steps: StepProgress? = nil, undo: (() -> Void)? = nil
     ) -> UndoNotice {
         var message = "\(verb) “\(title)”"
         if unblocked.count == 1 {
@@ -31,6 +40,7 @@ struct UndoNotice: Identifiable, Equatable {
         } else if unblocked.count > 1 {
             message += " — unblocked \(unblocked.count) tasks"
         }
+        if let phrase = steps?.openStepsPhrase { message += " — \(phrase)" }
         return UndoNotice(message: message, undoAction: undo)
     }
 }

@@ -31,10 +31,10 @@ struct TaskChain: Identifiable {
     }
 
     /// The member that decides this chain's lane and sort position: whichever root
-    /// (a member with no active blocker inside the chain — the "front" the
+    /// (a member with nothing inside the chain to come first — the "front" the
     /// collapsed stack shows) sorts first under the stack precedence.
     var root: TaskItem {
-        let roots = members.filter { $0.activeBlockerTasks(among: members).isEmpty }
+        let roots = members.filter { TaskChainGrouping.prerequisites(of: $0, within: members).isEmpty }
         return roots.min { a, b in
             guard let ka = a.uuid.flatMap({ rankKeys[$0] }), let kb = b.uuid.flatMap({ rankKeys[$0] })
             else { return false }
@@ -80,15 +80,15 @@ enum TaskChainGrouping {
         var byID: [UUID: TaskItem] = [:]
         for task in tasks { if let id = task.uuid { byID[id] = task } }
 
-        // Undirected adjacency: an edge between a task and each active blocker of
-        // its that's also present in this set.
+        // Undirected adjacency: an edge between a task and everything inside this set
+        // that has to come before it — its active blockers AND its own open steps.
         var adjacency: [UUID: Set<UUID>] = [:]
         for task in tasks {
             guard let id = task.uuid else { continue }
-            for blocker in task.activeBlockerTasks(among: tasks) {
-                guard let blockerID = blocker.uuid else { continue }
-                adjacency[id, default: []].insert(blockerID)
-                adjacency[blockerID, default: []].insert(id)
+            for earlier in prerequisites(of: task, within: tasks) {
+                guard let earlierID = earlier.uuid else { continue }
+                adjacency[id, default: []].insert(earlierID)
+                adjacency[earlierID, default: []].insert(id)
             }
         }
 
@@ -124,12 +124,25 @@ enum TaskChainGrouping {
         return (chains, loose)
     }
 
-    /// Kahn's algorithm: each layer is every not-yet-placed member whose active
-    /// blockers (within this chain) are all already placed, ties broken by the
+    /// Everything inside `set` that has to come before `task`: the tasks it is waiting
+    /// on, plus its own still-open steps.
+    ///
+    /// **Two graphs, one ordering.** `.blocks` is sequencing and `.parent` is containment
+    /// — different questions, deliberately not fused in storage (see `TaskItem.openSteps`)
+    /// — but for the purpose of laying a stack out they answer the same one: what does the
+    /// user have to get through first? Joining them HERE, in the one place that orders
+    /// tasks for display, is what lets a breakdown render as a single stack with its steps
+    /// in front, without the umbrella having to pretend it is blocked.
+    static func prerequisites(of task: TaskItem, within set: [TaskItem]) -> [TaskItem] {
+        task.activeBlockerTasks(among: set) + task.openSteps(among: set)
+    }
+
+    /// Kahn's algorithm: each layer is every not-yet-placed member whose prerequisites
+    /// (within this chain) are all already placed, ties broken by the
     /// stack precedence for deterministic output. Falls back to a stable sort of
     /// whatever's left if nothing is ever ready (shouldn't happen — `addBlocker`
-    /// already prevents cycles at write time — but this keeps grouping from
-    /// infinite-looping if one somehow existed).
+    /// already prevents cycles at write time, and containment can't cycle — but this
+    /// keeps grouping from infinite-looping if one somehow existed).
     private static func topologicallyLayer(
         _ members: [TaskItem], keys: [UUID: RankKey]
     ) -> [TaskItem] {
@@ -145,7 +158,7 @@ enum TaskChainGrouping {
             let ready =
                 remaining
                 .filter { member in
-                    member.activeBlockerTasks(among: members).allSatisfy {
+                    prerequisites(of: member, within: members).allSatisfy {
                         orderedIDs.contains($0.uuid ?? UUID())
                     }
                 }

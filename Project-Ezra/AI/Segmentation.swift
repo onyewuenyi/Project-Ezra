@@ -71,17 +71,87 @@ enum Segmentation {
         return fold(items)
     }
 
-    /// Is the deterministic read trustworthy enough to SHOW as final structure?
+    /// How much the deterministic read can be trusted to SHOW as final structure.
     ///
-    /// Only when it needs no inference about prose: either the split came entirely from
-    /// punctuation and layout the user typed, or there is exactly one item. Anything the
-    /// connective splitter cut apart is a guess, and a guess must never be presented as
-    /// the answer — the model decides those, behind the orb.
-    static func structureIsCertain(_ text: String) -> Bool {
-        let full = items(from: text)
-        if full.count <= 1 { return true }
-        return full.count == explicitItems(from: text).count
+    /// The distinction that matters is whether the shown structure is *evidence* or the
+    /// *absence* of evidence. A split the user punctuated is evidence. A single item can
+    /// be either: a genuinely single errand, or a dictated run-on the splitter could not
+    /// parse at all — and those two look identical to a count.
+    enum StructureConfidence: Equatable {
+        /// The split came entirely from punctuation and layout the user typed. Reveal
+        /// immediately; the model may enrich it but may never restructure it.
+        case typed
+        /// Exactly one item, and it reads as one thought. Reveal immediately — but if the
+        /// model comes back with a different structure, the model is right (see
+        /// `DraftMerge.enrich`): this is a read the user never confirmed by punctuating.
+        case singleThought
+        /// Prose the connective splitter had to guess at, or one item that reads like
+        /// several. Wait for the model behind the orb — a guess must never be presented
+        /// as the answer.
+        case ambiguous
     }
+
+    static func confidence(_ text: String) -> StructureConfidence {
+        let full = items(from: text)
+        guard let only = full.first else { return .typed }  // nothing to get wrong
+        if full.count > 1 {
+            return full.count == explicitItems(from: text).count ? .typed : .ambiguous
+        }
+        return readsAsOneThought(only) ? .singleThought : .ambiguous
+    }
+
+    /// Convenience for the reveal gate: may the local read go on screen at all?
+    static func structureIsCertain(_ text: String) -> Bool {
+        confidence(text) != .ambiguous
+    }
+
+    /// Does this single item plausibly describe ONE piece of work?
+    ///
+    /// This is the question the old gate never asked. It returned "certain" for any
+    /// one-item read, which is exactly backwards: one item out of a 130-character
+    /// dictation is the LEAST certain outcome the splitter can produce — it means every
+    /// boundary test failed, not that the user said one thing. The regression that
+    /// motivated this shipped a whole four-errand ramble as a single task titled with
+    /// the raw transcript, then rewrote that title twenty seconds later.
+    ///
+    /// Two signals, both cheap and both about the shape of the sentence rather than its
+    /// meaning: an interior verb that could START a task (the giveaway of errands butted
+    /// together without connectives — "cook dinner at 3pm MAKE a reservation tonight
+    /// TAKE my wife to dinner"), and sheer length. Verbs in grammatically subordinate
+    /// positions don't count, or "figure out whether we should BOOK the hotel" would be
+    /// read as two.
+    static func readsAsOneThought(_ item: String) -> Bool {
+        let words = item.split(separator: " ")
+        guard words.count <= maxSingleThoughtWords else { return false }
+        for index in words.indices.dropFirst() {
+            guard actionVerbs.contains(words[index].lowercased()) else { continue }
+            let preceding = words[index - 1].lowercased().trimmingCharacters(
+                in: CharacterSet.alphanumerics.inverted)
+            // A verb after a determiner is a noun ("a call", "the book"); after a modal
+            // or an infinitive marker it's subordinate ("should book", "to fix"); after a
+            // conjunction it shares the previous verb's subject ("pick up and drop off").
+            if subordinatingWords.contains(preceding) { continue }
+            return false
+        }
+        return true
+    }
+
+    /// A single errand stated in more words than this is a paragraph, and a paragraph is
+    /// where the model earns its place. Tuned to comfortably admit the long end of real
+    /// single tasks ("figure out whether we should book the hotel this week" is ten).
+    private static let maxSingleThoughtWords = 18
+
+    /// Words that, immediately before an action verb, mean it isn't starting a new item.
+    private static let subordinatingWords: Set<String> = [
+        // determiners → the "verb" is a noun
+        "a", "an", "the", "my", "your", "his", "her", "its", "our", "their",
+        "this", "that", "these", "those", "some", "any", "no", "one", "another",
+        // modals + infinitive marker → subordinate clause
+        "to", "should", "shall", "could", "would", "can", "will", "must", "might", "may",
+        "need", "want", "have", "has", "had", "let", "help", "gonna", "going",
+        // conjunctions → shares the previous verb's subject/object
+        "and", "or", "then", "also", "but", "nor",
+    ]
 
     // MARK: - Sentences
 
