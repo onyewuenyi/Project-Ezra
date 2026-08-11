@@ -143,6 +143,8 @@ struct ConfirmCreationCard: View, Equatable {
     /// calendar, and making the user commit first and fix it in the detail is the kind of
     /// small tax the confirm glance exists to remove.
     @State private var showDatePicker = false
+    /// Whether the non-essential metadata is revealed on this card.
+    @State private var expanded = false
 
     /// Value equality for `.equatable()` — the draft and the roster values are the
     /// card's whole rendered identity; the closures are excluded on purpose (see the
@@ -183,24 +185,38 @@ struct ConfirmCreationCard: View, Equatable {
                         .foregroundStyle(Palette.mutedText)
                         // Visual glyph stays quiet; the TOUCHABLE region meets the
                         // HIG minimum — this is a destructive control operated at
-                        // speed while cards stream in, exactly where a miss-tap
-                        // lands on the title field instead.
-                        .frame(width: LayoutMetrics.hitTarget, height: LayoutMetrics.hitTarget)
-                        .contentShape(Rectangle())
+                        // speed, exactly where a miss-tap lands on the title field
+                        // instead. It reaches into the surrounding padding rather
+                        // than reserving 44pt of layout: a one-line card was being
+                        // stretched to the height of its delete button.
+                        .minimumHitTarget(around: IconSize.small)
                 }
                 .buttonStyle(.pressableIcon)
                 .accessibilityLabel("Remove \(draft.title)")
             }
 
-            chipRowWithRationale
-
-            // The one visible flag, present from birth: a judgment call announces
-            // itself on the card, not after some later triage pass.
-            if draft.isJudgmentCall {
-                Label("Your call to make", systemImage: "hand.raised")
-                    .font(.metadata)
-                    .foregroundStyle(Palette.decisionAccent)
+            // Gated, not merely empty: a zero-height subview still consumes a VStack
+            // spacing slot, so a card the AI understood plainly ("Buy diapers") would
+            // carry the vertical rhythm of one that carries a due date and a reason.
+            if hasEssentialChips || expanded {
+                chipRowWithRationale
             }
+
+            consequenceLine
+
+            Button {
+                Motion.withMotion(Motion.settle) { expanded.toggle() }
+            } label: {
+                Label(
+                    expanded ? "Fewer details" : "Details",
+                    systemImage: expanded ? "chevron.up" : "chevron.down"
+                )
+                .font(.metadata)
+                .foregroundStyle(Palette.mutedText)
+                .minimumHitTarget(around: IconSize.small)
+            }
+            .buttonStyle(.pressableLink)
+            .accessibilityLabel(expanded ? "Hide details" : "Show category and effort")
         }
         .padding(Spacing.md)
         .background(
@@ -223,16 +239,70 @@ struct ConfirmCreationCard: View, Equatable {
     // it, an add-affordance otherwise. The confirm glance only works if the user
     // can SEE every field the task will carry (creation-confirmation spec).
     @ViewBuilder private var chipRow: some View {
-        if presentation == .hero {
-            // One card, one glance: every field visible at once. The scroller below
-            // exists because a dense list row has no width to spare — a hero card
-            // does, and hiding the owner behind a fold is how a wrong assignment
-            // survives the one moment it was cheap to catch.
-            FlowLayout(spacing: Spacing.xs, lineSpacing: Spacing.xs) {
-                chipContent
+        // Both presentations now WRAP: the horizontal scroller existed because every
+        // chip always rendered, and a dense row had no width for eight of them. Showing
+        // only what the AI understood makes them fit — and a chip that fits is a chip
+        // the user can actually check.
+        FlowLayout(spacing: Spacing.xs, lineSpacing: Spacing.xs) {
+            duplicateChip
+            childChip
+            essentialChips
+            if expanded { detailChips }
+        }
+    }
+
+    /// Does this chip carry information, or is it an empty "add…" affordance? The
+    /// reveal shows only what the AI actually understood; everything else is one tap
+    /// away behind Details. A confirm glance that lists eight identical-looking
+    /// affordances is not a glance.
+    /// Whether `essentialChips` (or an edge proposal) will render anything at all.
+    /// Mirrors that view's conditions exactly — if one gains a chip, so must this.
+    private var hasEssentialChips: Bool {
+        draft.dueDate != nil || draft.ownerName != nil || draft.isUrgent
+            || draft.blockedBy != nil || !draft.blocks.isEmpty
+            || draft.edgeProposals.contains { $0.kind == .duplicateOf || $0.kind == .childOf }
+    }
+
+    private var essentialChips: some View {
+        Group {
+            if draft.dueDate != nil { dueChip }
+            if draft.ownerName != nil { ownerChip }
+            if draft.isUrgent { urgentChip }
+            if draft.blockedBy != nil { blockerChip }
+            ForEach(draft.blocks, id: \.id) { dependent in
+                dependentChip(dependent)
             }
-        } else {
-            scrollingChipRow
+        }
+        .opacity(mergeAccepted ? 0.4 : 1)
+        .disabled(mergeAccepted)
+    }
+
+    /// Everything else — category, effort, and the empty affordances — revealed
+    /// on demand. Nothing becomes uneditable; it becomes uncluttered.
+    private var detailChips: some View {
+        Group {
+            categoryChip
+            if draft.dueDate == nil { dueChip }
+            if draft.ownerName == nil { ownerChip }
+            if !draft.isUrgent { urgentChip }
+            effortChip
+        }
+        .opacity(mergeAccepted ? 0.4 : 1)
+        .disabled(mergeAccepted)
+    }
+
+    /// The consequence, never the classifier. `workIntent` is an internal axis; what
+    /// the user needs to know is what it MEANS for them — that this one needs deciding
+    /// or planning before it can be done.
+    @ViewBuilder private var consequenceLine: some View {
+        if draft.needsDecision || draft.isJudgmentCall {
+            Label("Needs a decision", systemImage: "hand.raised")
+                .font(.metadata)
+                .foregroundStyle(Palette.decisionAccent)
+        } else if draft.workIntent == .planning {
+            Label("Needs a plan", systemImage: "list.bullet.indent")
+                .font(.metadata)
+                .foregroundStyle(Palette.secondaryText)
         }
     }
 
@@ -255,48 +325,6 @@ struct ConfirmCreationCard: View, Equatable {
         }
         .opacity(mergeAccepted ? 0.4 : 1)
         .disabled(mergeAccepted)
-    }
-
-    private var scrollingChipRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Spacing.xs) {
-                duplicateChip
-                childChip
-                // When the card will MERGE, its own fields are moot — recede them so the
-                // merge chip is the clear headline, and DISABLE them so the recede means
-                // what it shows. They were still tappable, so a user could set a due date
-                // on a card that was about to fold into another task and watch the value
-                // vanish at commit. Recede-but-live is a promise the commit can't keep;
-                // one tap on "Keep both" brings them back.
-                Group {
-                    categoryChip
-                    dueChip
-                    ownerChip
-                    urgentChip
-                    effortChip
-                    if draft.blockedBy != nil { blockerChip }
-                    ForEach(draft.blocks, id: \.id) { dependent in
-                        dependentChip(dependent)
-                    }
-                }
-                .opacity(mergeAccepted ? 0.4 : 1)
-                .disabled(mergeAccepted)
-            }
-        }
-        // The overflow affordance the glance was missing: chips past the fold used
-        // to be invisible with zero cue (no indicator, no fade), which is how a
-        // wrong owner survived the one moment it was cheap to catch. The fade is an
-        // OVERLAY painting the card's own surface color, not a mask — a mask forced
-        // an offscreen compositing pass per card, paid on every frame of every
-        // scroll and settle animation. Identical look on the solid card surface.
-        .overlay(alignment: .trailing) {
-            LinearGradient(
-                colors: [Palette.primarySurface.opacity(0), Palette.primarySurface],
-                startPoint: .leading, endPoint: .trailing
-            )
-            .frame(width: Spacing.lg)
-            .allowsHitTesting(false)
-        }
     }
 
     /// The chip row plus the owner rationale beneath it, so "why Maya?" is answerable
