@@ -234,8 +234,13 @@ final class AppBrain {
         // never candidate-blind even on a burst's first run.
         var gateCandidates = preparedCandidates
         func resolveAndGate(_ intents: [TaskIntent]) -> [TaskDraft] {
+            // Grounding first: an intent the capture contains no evidence for never becomes
+            // a draft at all, so nothing downstream has to decide what to do with it.
+            let grounded = intents.filter { Self.grounded($0, in: rawText) }
+            let dropped = intents.count - grounded.count
+            if dropped > 0 { ModelMetrics.shared.recordUngroundedDrop(dropped) }
             var drafts = IntentResolver.resolve(
-                intents, rules: learned, openTasks: openTasks, candidates: gateCandidates,
+                grounded, rules: learned, openTasks: openTasks, candidates: gateCandidates,
                 suppressions: suppressions)
             Self.proposeOwners(to: &drafts, ownership: ownership)
             return drafts
@@ -356,6 +361,48 @@ final class AppBrain {
             suggestsEnrichment: preparedCandidates.isEmpty && !gateCandidates.isEmpty
                 && status.isOnDevice && !drafts.isEmpty
         )
+    }
+
+    /// Does the capture contain evidence that this task should exist?
+    ///
+    /// The model names its evidence (`TaskIntent.sourceQuote`) and **the system checks it** —
+    /// otherwise it is model-authored evidence for model-authored output, which proves
+    /// nothing. This is the guard against the failure that motivated it: "pick up food from
+    /// the store later today" came back carrying a second task, "buy new printer paper",
+    /// plausible household work the user never said.
+    ///
+    /// Two rungs, in order of strength:
+    ///
+    /// 1. **The quote, verified.** The model copies the user's own words; we confirm they
+    ///    actually appear in the capture. Normalized for whitespace and case only — never
+    ///    for meaning, or the check would start accepting paraphrase as proof.
+    /// 2. **A lexical anchor, as an anomaly detector.** When the quote is missing or doesn't
+    ///    check out, require at least one significant word in common. This is deliberately
+    ///    NOT the semantic authority: "take care of the house before guests arrive" →
+    ///    "Clean the living room" is a legitimate reading with zero shared words, so a
+    ///    lexical rule as the primary test would reject good work. It exists to catch the
+    ///    obvious invention when the stronger evidence is absent.
+    ///
+    /// A failure DROPS the task and never substitutes one. `Capture.rawText` keeps the
+    /// user's words verbatim forever, so nothing they said is lost by refusing something
+    /// they didn't.
+    static func grounded(_ intent: TaskIntent, in rawText: String) -> Bool {
+        let haystack = normalizedForGrounding(rawText)
+        if let quote = intent.sourceQuote, !quote.isEmpty {
+            let needle = normalizedForGrounding(quote)
+            if !needle.isEmpty, haystack.contains(needle) { return true }
+        }
+        let captureWords = CorrectionProfile.significantWords(rawText)
+        let titleWords = CorrectionProfile.significantWords(intent.title)
+        guard !titleWords.isEmpty else { return true }  // nothing to judge; let it through
+        return !titleWords.isDisjoint(with: captureWords)
+    }
+
+    /// Whitespace- and case-insensitive, nothing more. Deliberately not stemming or
+    /// stripping stop words: this comparison's whole value is that it is literal.
+    private static func normalizedForGrounding(_ text: String) -> String {
+        text.lowercased().components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     /// Fold freshly-retrieved candidates over the prepared set, keeping any prepared

@@ -60,6 +60,12 @@ struct TaskIntent: Sendable, Hashable {
     /// The model's raw `WorkIntent` classification ("action"/"decision"/…). The heuristic
     /// path leaves it nil. Parsed to `WorkIntent` in the resolver.
     var workIntent: String? = nil
+    /// The user's own words this intent claims to come from — a CLAIM, never proof. The
+    /// system verifies it against the raw capture (`AppBrain.grounded`) before the intent
+    /// is allowed to become a draft, because model-authored evidence for model-authored
+    /// output is circular. Nil on the heuristic path, which cuts from the text itself and
+    /// so is grounded by construction.
+    var sourceQuote: String? = nil
 }
 
 /// A reference to an existing task the model matched THIS capture against, with its

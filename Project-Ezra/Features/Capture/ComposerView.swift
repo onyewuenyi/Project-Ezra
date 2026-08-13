@@ -97,17 +97,16 @@ struct ComposerView: View {
     @State private var submittedAt: Date?
     /// Which producer decided the structure on screen ("typed"/"single"/"model").
     @State private var structureSource = "typed"
-    /// Did the shown structure come from punctuation the USER typed? Only then may the
-    /// shown structure outrank the model's (see `DraftMerge.enrich`) — holding a fallback
-    /// guess against the model is data loss, not stability.
-    @State private var structureIsUserTyped = true
     /// When the current card set arrived. The stagger clock: each card's entrance is
     /// offset from this, so the composition arrives as one thing with a rhythm rather
     /// than appearing all at once or animating per-card forever after.
     @State private var revealedAt: Date?
 
     @State private var text = ""
-    @State private var drafts: [TaskDraft] = []
+    /// The card set and the reveal boundary that protects it. All AI-originated writes go
+    /// through `propose`, which refuses once the user has seen the composition; user edits
+    /// go through the binding and are never gated. See `Interpretation`.
+    @State private var interpretation = Interpretation()
     /// The cards the user deleted this session. The merge filters re-proposals of
     /// them, so a removal can't be undone by the next keystroke's re-parse.
     @State private var removedDrafts = RemovedDraftSet()
@@ -257,7 +256,7 @@ struct ComposerView: View {
                 // like every other phase. The receipt keeps its real duration — a seam
                 // that slowed it down would be verifying something we don't ship.
                 #if DEBUG
-                if newPhase == .confirm, !drafts.isEmpty,
+                if newPhase == .confirm, !interpretation.drafts.isEmpty,
                     ProcessInfo.processInfo.arguments.contains("-AutoCreate")
                 {
                     Task {
@@ -358,38 +357,38 @@ struct ComposerView: View {
 
     /// Submit — the deliberate handoff. "Got it, I'll take it from here."
     ///
-    /// Structure is decided HERE. The deterministic read may go on screen only when it is
-    /// evidence rather than the absence of evidence: the user punctuated the split
-    /// (`.typed`), or there is one item that actually reads as one thought
-    /// (`.singleThought`). Prose the splitter had to guess at waits behind the orb.
+    /// Two paths, one contract. The FAST path renders the deterministic read and reveals it;
+    /// the REASONING path holds the orb until the model answers and reveals that. Either way
+    /// exactly one interpretation reaches the screen, and once it does nothing the system
+    /// produces may change it (`Interpretation`).
     ///
-    /// The two trusted cases are NOT equivalent afterwards. A `.typed` structure is the
-    /// user's own and the model may never restructure it; a `.singleThought` structure is
-    /// ours, so if the model disagrees the model wins (see `DraftMerge.enrich`). Holding a
-    /// fallback guess against the model is what silently discarded three of four errands.
+    /// The fast path deliberately does not run the model at all. That is a routing POLICY
+    /// (see `CaptureRoute`), not a claim that simple captures don't deserve intelligence —
+    /// it is here because a model result that lands after the reveal is refused anyway, so
+    /// spending the battery to generate one would buy nothing.
     private func submit() {
         let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !captured.isEmpty else { return }
         focused = false
         speech.stop()
-        let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
-        let confidence = Segmentation.confidence(captured)
-        let trusted = confidence != .ambiguous && !local.isEmpty
-        structureIsUserTyped = confidence == .typed
         submittedAt = Date()
 
-        if trusted {
-            // Certain structure — reveal at once. This is how the common cases meet
-            // "submit → stable confirmation" without waiting on generation.
-            drafts = local
-            structureSource = confidence == .typed ? "typed" : "single"
+        let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
+        // An empty local read can't be revealed, whatever the router said — fall through to
+        // the model rather than showing "nothing actionable" on a capture we never parsed.
+        let route: CaptureRoute = local.isEmpty ? .reasoning : CaptureRoute.route(for: captured)
+        structureSource = route.metricName
+
+        switch route {
+        case .fast:
+            interpretation.propose(local)
             reveal()
-        } else {
-            structureSource = "model"
+            parkIfUnfinished(force: true)
+        case .reasoning:
             Motion.withMotion(Motion.heroSettle) { phase = .understanding }
+            parkIfUnfinished(force: true)
+            runParse(captured)
         }
-        parkIfUnfinished(force: true)
-        runParse(captured, revealWhenDone: !trusted)
     }
 
     /// The arrival. Everything that makes the reveal land as an ANSWER rather than a
@@ -402,10 +401,11 @@ struct ComposerView: View {
         recordConfirmReached()
     }
 
-    /// The ONE model parse a capture gets. When the reveal is already on screen this
-    /// only ENRICHES the stable set (never re-counts, never reorders); when the orb is
-    /// holding, its result is what reveals.
-    private func runParse(_ captured: String, revealWhenDone: Bool) {
+    /// The ONE model parse a capture gets, and it runs only on the reasoning path — its
+    /// result IS the reveal. There is deliberately no "enrich the already-revealed set"
+    /// arm any more: `Interpretation` refuses a late proposal, so an arm that tried would
+    /// be dead code that looked alive.
+    private func runParse(_ captured: String) {
         parse.parseTask?.cancel()
         parse.parseTask = Task {
             let roster = rosterSnapshot
@@ -427,48 +427,22 @@ struct ComposerView: View {
             lastParsedText = captured
             lastParseYieldedCandidates = !result.drafts.isEmpty
 
-            if revealWhenDone {
-                // The model decides the structure; if it found nothing, the
-                // deterministic read is the honest fallback rather than an empty screen.
-                let final =
-                    result.drafts.isEmpty
-                    ? AppBrain.provisionalDrafts(captured, learned: learned) : result.drafts
-                drafts = merge(fresh: final, into: drafts)
+            // The model decides the structure; if it found nothing, the deterministic
+            // read is the honest fallback rather than an empty screen.
+            let final =
+                result.drafts.isEmpty
+                ? AppBrain.provisionalDrafts(captured, learned: learned) : result.drafts
+            // Refused if the user somehow got to a reveal first (a race we don't expect,
+            // but the guard is the point — it can't be argued with).
+            if interpretation.propose(merge(fresh: final, into: interpretation.drafts)) {
                 reveal()
             } else {
-                // The reveal is already on screen. The model may improve every card's
-                // title and metadata; whether it may also restructure depends on where
-                // the shown structure came from (`structureIsUserTyped`).
-                enrich(with: result.drafts)
+                ModelMetrics.shared.recordRefusedProposal()
             }
+            // Zero tolerance, checked rather than assumed: whichever way that branch went,
+            // a revealed set must be exactly what the user was shown.
+            interpretation.assertNotMutated("after the model parse landed")
             parkIfUnfinished(force: true)
-        }
-    }
-
-    /// Fill metadata onto the revealed set. The invariant lives in `DraftMerge.enrich` —
-    /// a pure function, so "enrichment may not change the count or the order of what the
-    /// user is already reading" is property-tested rather than trusted to this call site.
-    ///
-    /// It lands as ONE settled change, never a drip. Chips fading in one at a time across
-    /// twenty seconds was the only animation in the whole flow, and it was the animation
-    /// we deleted live parsing to be rid of: the interface narrating the model's progress
-    /// on a card the user is already reading. A single `settle` says "that's filled in
-    /// now" and stops.
-    private func enrich(with fresh: [TaskDraft]) {
-        let result = DraftMerge.enrich(
-            fresh, onto: drafts, removed: removedDrafts, holdStructure: structureIsUserTyped)
-        if result.structureDisagreed { ModelMetrics.shared.recordStructureDisagreement() }
-        if result.restructured {
-            // The model overruled a fallback read. The set genuinely changes, so it gets
-            // the reveal's own entrance rather than a metadata fade — this is a new
-            // answer, and pretending otherwise by cross-fading it would be worse.
-            revealedAt = .now
-            ModelMetrics.shared.recordRestructure()
-        }
-        Motion.withMotion(Motion.settle) { drafts = result.drafts }
-        if let submittedAt {
-            ModelMetrics.shared.recordEnrichment(
-                latencyMs: Int(Date().timeIntervalSince(submittedAt) * 1000))
         }
     }
 
@@ -479,10 +453,13 @@ struct ComposerView: View {
             source: structureSource)
     }
 
-    /// Back to the canvas with the words intact — nothing has been committed.
+    /// Back to the canvas with the words intact — nothing has been committed. The
+    /// interpretation reopens: the user is about to say more, so the next parse is allowed
+    /// to speak again. Their existing cards and any edits ride along.
     private func backToCapture() {
         parse.parseTask?.cancel()
         parse.parseTask = nil
+        interpretation.reopen()
         Motion.withMotion(Motion.settle) { phase = .capture }
         focused = true
     }
@@ -693,17 +670,20 @@ struct ComposerView: View {
     /// REVEAL / CONFIRM — the answer, as one composition. Tasks own the viewport.
     @ViewBuilder private var confirmSurface: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
-            Text(drafts.isEmpty ? "Nothing actionable in that" : "Here's what I understood")
+            Text(interpretation.drafts.isEmpty ? "Nothing actionable in that" : "Here's what I understood")
                 .screenTitleStyle()
-            if !drafts.isEmpty {
-                Text(drafts.count == 1 ? "1 thing" : "\(drafts.count) things")
-                    .supportingStyle()
+            if !interpretation.drafts.isEmpty {
+                Text(
+                    interpretation.drafts.count == 1
+                        ? "1 thing" : "\(interpretation.drafts.count) things"
+                )
+                .supportingStyle()
             }
         }
         .padding(.top, Spacing.xs)
         .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
 
-        if drafts.isEmpty {
+        if interpretation.drafts.isEmpty {
             Text(Self.nothingFoundHint).supportingStyle()
             Spacer(minLength: 0)
         } else {
@@ -716,7 +696,7 @@ struct ComposerView: View {
             GeometryReader { proxy in
                 ScrollView {
                     ConfirmCreationList(
-                        drafts: $drafts,
+                        drafts: $interpretation.editableDrafts,
                         ownerOptions: ownerOptions,
                         rosterNames: rosterNames,
                         onAddToRoster: { addToRoster($0) },
@@ -742,7 +722,7 @@ struct ComposerView: View {
                     .background(Palette.accentGradient, in: Capsule())
             }
             .buttonStyle(.pressableProminent)
-            .disabled(drafts.isEmpty)
+            .disabled(interpretation.drafts.isEmpty)
 
             // "Add another" was three plausible meanings and none of them right: it
             // adds nothing, it returns to the canvas with your words and drafts intact
@@ -762,7 +742,8 @@ struct ComposerView: View {
     }
 
     private var createTitle: String {
-        drafts.count == 1 ? "Create 1 task" : "Create \(drafts.count) tasks"
+        interpretation.drafts.count == 1
+            ? "Create 1 task" : "Create \(interpretation.drafts.count) tasks"
     }
 
     /// DONE — a short, satisfying receipt, then back to whatever the user was doing.
@@ -805,11 +786,12 @@ struct ComposerView: View {
     /// A no-op when VoiceOver is off.
     private func announceParseResult() {
         let message: String
-        if drafts.isEmpty {
+        if interpretation.drafts.isEmpty {
             guard lastParseYieldedCandidates == false else { return }
             message = "Nothing actionable found yet."
         } else {
-            message = "\(drafts.count) task\(drafts.count == 1 ? "" : "s") ready to review."
+            message =
+                "\(interpretation.drafts.count) task\(interpretation.drafts.count == 1 ? "" : "s") ready to review."
         }
         AccessibilityNotification.Announcement(message).post()
     }
@@ -827,11 +809,14 @@ struct ComposerView: View {
     }
 
     private func parkIfUnfinished(force: Bool = false) {
-        guard !drafts.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard
+            !interpretation.drafts.isEmpty
+                || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
         parse.lastParkAt = Date()
         parked = brain.park(
-            drafts, rawCapture: text, source: captureSource, imageRef: capturedImageRef,
+            interpretation.drafts, rawCapture: text, source: captureSource,
+            imageRef: capturedImageRef,
             into: parked, in: context)
     }
 
@@ -860,7 +845,7 @@ struct ComposerView: View {
         // A resumed capture lands in CAPTURE with its words, awaiting a fresh submit.
         // Resuming is not re-deciding: the user re-reads what they wrote and rambles
         // again, rather than being handed an interpretation they never asked for twice.
-        drafts = []
+        interpretation = Interpretation()
     }
 
     private func discard() {
@@ -872,7 +857,7 @@ struct ComposerView: View {
         capturedImageRef = nil
         if let parked { AppBrain.discard(parked, in: context) }
         parked = nil
-        drafts = []
+        interpretation = Interpretation()
         removedDrafts = RemovedDraftSet()
         text = ""
         dismiss()
@@ -881,20 +866,21 @@ struct ComposerView: View {
     /// CREATE — the only place tasks come into existence. Nothing before this wrote to
     /// the store, which is what makes the whole arc safe to iterate behind.
     private func createTasks() {
-        guard !drafts.isEmpty else { return }
+        guard !interpretation.drafts.isEmpty else { return }
         speech.stop()
         parse.parseTask?.cancel()
         parse.parseTask = nil
-        let count = drafts.count
+        let count = interpretation.drafts.count
         committed += 1
         brain.commit(
-            drafts, rawCapture: text, source: captureSource, imageRef: capturedImageRef,
+            interpretation.drafts, rawCapture: text, source: captureSource,
+            imageRef: capturedImageRef,
             parked: parked, into: context)
         // Clearing is REQUIRED, not tidiness: `.onDisappear` runs `parkIfUnfinished`,
         // and it keys off `drafts`/`text` — leaving them populated would park a phantom
         // duplicate of the capture just committed.
         parked = nil
-        drafts = []
+        interpretation = Interpretation()
         removedDrafts = RemovedDraftSet()
         text = ""
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale

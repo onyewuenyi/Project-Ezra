@@ -118,6 +118,29 @@ The magic is not watching AI create tasks. The magic is watching chaos become cl
 
 > At no point before confirmation may the user see an intermediate AI interpretation presented as truth.
 
+**The central AI-trust invariant (2026-08-12, product-wide):**
+
+> **The system can think as much as it wants before showing you the answer. Once it shows you the answer, it owns that interpretation until you change it.**
+
+Revealed means **UI-committed**, not database-committed. Once visible, no AI-originated change to title, count, order, owner, date, type, relationships, splits or merges — **the user may always edit their own cards**, because immutability constrains the system, never the person. Enforced structurally in `Interpretation`, not by convention: three earlier attempts held it as a rule and all three leaked, reaching the user each time as the same defect — a card changing after they started reading it. Scoped to Capture today; it extends to Today recommendations, the Thinking Partner, breakdowns, ownership suggestions and relationships. The generalization: **never expose an AI intermediate as user truth** — show activity, never intermediate semantic conclusions.
+
+**The coupled invariant** (the first is meaningless if a background job undoes it):
+
+> Background intelligence may improve organization, but must never surprise the user by changing an object they have already seen without an attributable explanation and an undo path.
+
+**The separation of AI responsibilities.** Capture is conservative precisely so everything downstream can be ambitious:
+
+| System | AI job |
+|---|---|
+| **Capture** | Understand what I said |
+| **Context** | Ground it in my life |
+| **Ranking / Today** | Decide what deserves attention |
+| **Capabilities** | Help me overcome friction |
+| **Learning** | Learn how I work |
+| **Trust** | Keep AI actions inspectable and reversible |
+
+"Now that capture is safe, make the model smarter at capture" is the wrong optimization: capture gets fast + trustworthy + frictionless, and the compounding intelligence goes to Context → Ranking → Today → Capabilities → Learning.
+
 **The engineering rule that makes it affordable:** *progressively enrich; never progressively reinterpret.* Structure — how many tasks and in what order — is decided once and never changes under the user; metadata may fill in afterwards, quietly. And more generally: **fast deterministic work can happen invisibly; slow probabilistic work happens behind a stable UI boundary.**
 
 **The metric is time to trustworthy result, not time to first token.**
@@ -304,7 +327,7 @@ The Today Plan generator ships a real **Private Cloud Compute** tier (`PrivateCl
 
 ### Device-verify checklist (the sim can't exercise these)
 
-1. Capture on device with Apple Intelligence on → candidates fill **progressively** during one parse (streaming), and cancel cleanly when you keep typing.
+1. Capture on device with Apple Intelligence on → **one final interpretation** arrives and never changes afterwards (model reasoning streams internally; the user sees no partial cards). Check `-CaptureDiagnostics` for ungrounded drops and refused late proposals.
 2. Mention a roster name ("ask Maya to…") → `personReference` resolves via the tool; watch for tool over-calling (triage suddenly slow).
 3. Teach a correction twice (recategorize two "gym" tasks) → the third capture applies it on device too (instructions); the sim already proves the resolver half.
 4. **Today Plan, streamed:** the `@Generable` `TodayPlanSchema` fills in progressively, partial rows map cleanly (known-uuid + non-empty rationale), and `validated(against:)` drops unknown ids without reordering.

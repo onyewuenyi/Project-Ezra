@@ -230,16 +230,45 @@ struct FoundationModelsEngine: AIEngine {
                 // Carried mid-stream like every other field. Left out, a partial always
                 // showed the resolver's lexical backfill, which the final snapshot then
                 // overwrote — a visible flicker on a chip the user may already be reading.
-                workIntent: ExtractedTask.normalizedWorkIntent(task.workIntent ?? nil)
+                workIntent: ExtractedTask.normalizedWorkIntent(task.workIntent ?? nil),
+                sourceQuote: (task.sourceQuote ?? nil)?.trimmingCharacters(
+                    in: .whitespacesAndNewlines)
             )
         }
     }
 
+    /// **Capture is the conservative stage.** Its only job is to understand what the user
+    /// said. Deciding what matters, noticing what they might need, and proposing work they
+    /// didn't ask for all belong downstream (Ranking, Today, Capabilities) where the user is
+    /// asking to be advised — not here, where they are being quoted back to themselves.
+    ///
+    /// The previous wording opened "You are a **proactive** personal assistant… you fill in
+    /// the sensible defaults they didn't spell out… Infer; don't interrogate", with no rule
+    /// against invention anywhere in it. That is Today/anticipation behaviour leaking
+    /// backward into capture, and it produced exactly what you would predict: "pick up food
+    /// from the store later today" came back as two tasks, the second being "buy new printer
+    /// paper" — plausible household work the user never mentioned. Note the household
+    /// narrative path in this same file always had the rule ("Restate ONLY the facts you are
+    /// given. Never invent a task"); capture simply never got it.
+    ///
+    /// The distinction that matters: filling in a FIELD of a task the user named (its date,
+    /// its effort, its category) is the job. Inventing a task's EXISTENCE is not.
     private static let instructions = """
-        You are a proactive personal assistant. You turn a person's informal, messy
-        list of errands and to-dos into clean, structured task intents — and, like a
-        good assistant, you fill in the sensible defaults they didn't spell out so
-        nothing needs babysitting. Infer; don't interrogate. For each distinct task:
+        You are a careful personal assistant. You turn a person's informal, messy list of
+        errands and to-dos into clean, structured task intents. You are precise, not
+        proactive: your job is to understand what they said, not to think of more work
+        for them.
+
+        Hard rules, before anything else:
+        - EVERY task you return must come from something the user actually said. Never
+          invent a task, however useful or likely it seems.
+        - If the text describes one task, return exactly one. Do not pad the list.
+        - sourceQuote: copy the user's own words that this task comes from, VERBATIM from
+          the text above. If you cannot quote the words, the task does not belong here.
+        - Filling in a task's FIELDS is expected — a date, an effort, a category the user
+          didn't spell out. Filling in a task they never mentioned is not.
+
+        For each distinct task:
 
         - title: rewrite as a short verb-led action, max 8 words. No trailing period.
         - category: exactly one of \(TaskCategory.all.joined(separator: ", ")). \
@@ -311,6 +340,21 @@ struct TriageResult {
 struct ExtractedTask {
     @Guide(description: "Short verb-led action, max 8 words, no trailing period.")
     let title: String
+
+    /// The user's own words this task came from — **the model identifies the evidence, the
+    /// SYSTEM verifies it** (`AppBrain.grounded`). Without independent verification this
+    /// would be circular: model-generated evidence proving the model's own output.
+    ///
+    /// A verbatim quote rather than character offsets, deliberately. Offsets are the
+    /// cleaner reference in theory and the worse one in practice — small on-device models
+    /// count characters unreliably, so an offset scheme would reject good tasks for reasons
+    /// that have nothing to do with grounding. A quote is easy to emit and trivial to check
+    /// by substring match against the raw capture.
+    @Guide(
+        description:
+            "The user's own words this task comes from, copied VERBATIM from the input text. Never paraphrase here, and never write words the user did not say."
+    )
+    let sourceQuote: String?
 
     @Guide(description: "Exactly one category name from the provided list.")
     let category: String

@@ -324,12 +324,16 @@ final class ModelMetrics {
         var lastFirstCardSource: String?
         /// Submit → the model's enrichment landing on the already-revealed set.
         var lastEnrichmentMs = -1
-        /// How often the model wanted a different structure than the one on screen.
-        var structureDisagreements = 0
-        /// How often that disagreement was ACTED on — the shown structure was our own
-        /// fallback, so the model's replaced it and the card set changed under the user.
-        /// The visible half of the number above; the one that should reach zero first.
-        var restructures = 0
+        /// AI results refused because they arrived after the reveal (`Interpretation`).
+        /// NOT an error — it is the guard working. It is evidence about the ROUTING policy:
+        /// a high rate on the fast path means the model had something to say and we chose
+        /// not to hear it, which is a product decision worth revisiting on numbers rather
+        /// than on instinct.
+        var refusedProposals = 0
+        /// Model drafts dropped because nothing in the capture supports their existence
+        /// (`AppBrain` grounding). This is the invented-task counter — the number that says
+        /// whether the conservative capture prompt is actually holding.
+        var ungroundedDrops = 0
         /// One provisional pass's cost — segmentation + resolve + owner proposal, on
         /// the thread the keyboard shares. The number the coalesce window is tuned on.
         var lastProvisionalMs = -1
@@ -432,22 +436,18 @@ final class ModelMetrics {
         stats[.captureTriage] = entry
     }
 
-    /// The model wanted a different structure than the one already revealed.
-    func recordStructureDisagreement() {
+    /// An AI result arrived after the reveal and was refused. See `Interpretation`.
+    func recordRefusedProposal() {
         var entry = stats[.captureTriage] ?? Stats()
-        entry.structureDisagreements += 1
+        entry.refusedProposals += 1
         stats[.captureTriage] = entry
     }
 
-    /// A disagreement we ACTED on — the shown structure was our own fallback read, so the
-    /// model's won and the card set changed under the user. The two counters are separate
-    /// on purpose: a disagreement we overruled is a tuning signal, one we acted on is a
-    /// visible event, and only the second is a promise broken. Both should trend to zero
-    /// as `Segmentation.readsAsOneThought` is tuned; the second reaching zero first is
-    /// the goal.
-    func recordRestructure() {
+    /// A model draft was dropped because the capture contains no evidence for it.
+    func recordUngroundedDrop(_ count: Int = 1) {
+        guard count > 0 else { return }
         var entry = stats[.captureTriage] ?? Stats()
-        entry.restructures += 1
+        entry.ungroundedDrops += count
         stats[.captureTriage] = entry
     }
 
@@ -492,11 +492,8 @@ final class ModelMetrics {
                 if let source = entry.lastFirstCardSource { line += "(\(source))" }
             }
             if entry.lastEnrichmentMs >= 0 { line += " · enrich \(entry.lastEnrichmentMs)ms" }
-            // "2/7 restr" — acted-on over merely-detected. The left number is the one
-            // the user saw happen.
-            if entry.structureDisagreements > 0 {
-                line += " · \(entry.restructures)/\(entry.structureDisagreements) restr"
-            }
+            if entry.refusedProposals > 0 { line += " · \(entry.refusedProposals) refused" }
+            if entry.ungroundedDrops > 0 { line += " · \(entry.ungroundedDrops) ungrounded" }
             if entry.lastCommitMs >= 0 { line += " · commit \(entry.lastCommitMs)ms" }
             if entry.lastPromptTokens >= 0 {
                 line += " · \(entry.lastPromptTokens)"

@@ -194,56 +194,6 @@ enum DraftMerge {
         return result
     }
 
-    /// Enrichment onto a set the user is ALREADY READING — the whole of "progressively
-    /// enrich; never progressively reinterpret", as a pure function so the rule can be
-    /// property-tested instead of trusted.
-    ///
-    /// The model's richer read (tightened titles, dates, owners, edge proposals) is
-    /// merged in, but the structure on screen wins absolutely: the result is rebuilt
-    /// from `shown`, in `shown`'s order, one entry per shown draft. A model that split
-    /// or joined differently cannot add a card, drop a card, or move one. That is not a
-    /// nicety — the reveal is the product's claim to have understood, and a set that
-    /// re-counts itself after the user has read it retracts the claim.
-    ///
-    /// **The clamp is conditional on provenance, and that is the whole point.** Holding
-    /// the shown structure protects the user's reading of something they themselves
-    /// punctuated. When the shown structure was instead a fallback — one card because
-    /// every boundary test failed — there is no reading to protect, and clamping turns a
-    /// bad guess into permanent data loss: the regression that motivated this discarded
-    /// three of four dictated errands, silently, while reporting `structureDisagreed`
-    /// and acting on nothing. Between losing the user's tasks and changing the card set
-    /// once, cleanly, the second is not close.
-    ///
-    /// So `holdStructure` is passed `true` only for `.typed` reads. For a
-    /// `.singleThought` read that the model restructures, the model wins and the caller
-    /// gets `restructured: true` so it can land the change as one settled transition
-    /// rather than a drip.
-    ///
-    /// `structureDisagreed` reports (for DEBUG metrics) that the model's structure
-    /// differed, so the trust predicate can be tuned on evidence. It merges with
-    /// `keepingUnmatched: true` for that measurement alone: without it, a model that
-    /// simply had nothing new to say about a card would drop it from the merge and be
-    /// recorded as having disagreed about the structure — which would make the one
-    /// number that tunes the trust predicate mostly false positives.
-    static func enrich(
-        _ fresh: [TaskDraft], onto shown: [TaskDraft], removed: RemovedDraftSet,
-        holdStructure: Bool = true
-    ) -> (drafts: [TaskDraft], structureDisagreed: Bool, restructured: Bool) {
-        guard !fresh.isEmpty else { return (shown, false, false) }
-        let merged = merge(fresh: fresh, into: shown, removed: removed, keepingUnmatched: true)
-        let disagreed = merged.count != shown.count
-        guard holdStructure else {
-            // The model's structure, enriched onto whatever it recognised of the shown
-            // cards — `merge` already transplanted identity and preserved user edits for
-            // the ones it matched.
-            return (merged, disagreed, disagreed)
-        }
-        let kept = shown.map { existing in
-            merged.first(where: { $0.id == existing.id }) ?? existing
-        }
-        return (kept, disagreed, false)
-    }
-
     /// Pass A / B / C′ for the additive merge. C′ is Pass C with the roles swapped —
     /// a MODEL card claiming this provisional candidate's clause — so a retitle is
     /// recognised from both directions and the provisional pass can't add a duplicate
