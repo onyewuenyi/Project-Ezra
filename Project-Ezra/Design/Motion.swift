@@ -92,7 +92,16 @@ enum Motion {
     /// They are also all SLOW. The orb must never read as a spinner, and rate is what decides
     /// that far more than shape: the same mesh at a third of these periods looks like a
     /// loading indicator.
-    static let orbDriftPeriods: [Double] = [7.3, 11.1, 13.7, 9.4]
+    static let orbDriftPeriods: [Double] = [4.3, 5.9, 3.5, 7.1]
+
+    /// The orb's breath, in seconds — the period it expands and contracts on.
+    ///
+    /// Named separately from the drift periods because it is a different idea, and reusing a
+    /// drift period for it (11.1s, in the first version) produced an orb that measurably
+    /// moved and perceptibly did not: a breath on a ten-second cycle is not a breath. This is
+    /// deliberately in the range a calm person actually breathes at, which is what the
+    /// gesture is imitating.
+    static let orbBreathPeriod: Double = 3.2
 
     /// Frame ceiling for the orb's timeline. The animation runs during exactly the window the
     /// on-device model is generating, so it is capped rather than free-running at display

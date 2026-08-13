@@ -52,19 +52,21 @@ struct RambleOrb: View {
             // Gather: 1 → 0 across `orbGatherSeconds`. Everything that should calm down as the
             // wait lengthens reads from this one number.
             let unsettled = Self.unsettled(at: elapsed)
+            let glow = breathGlow(elapsed: elapsed)
 
             ZStack {
                 mesh(elapsed: elapsed, unsettled: unsettled)
-                specular(elapsed: elapsed, unsettled: unsettled)
+                specular(elapsed: elapsed, unsettled: unsettled, glow: glow)
                 rim(unsettled: unsettled)
             }
             .frame(width: diameter, height: diameter)
             .clipShape(Circle())
             // The glow lives OUTSIDE the clip so the orb sits in its own light. It draws in as
-            // the orb gathers, which is the same gesture as the turbulence decaying.
+            // the orb gathers (the same gesture as the turbulence decaying) and swells with
+            // each breath, so the light the orb throws breathes with it.
             .shadow(
                 color: Palette.accentGlow,
-                radius: diameter * (0.10 + 0.07 * unsettled)
+                radius: diameter * (0.10 + 0.07 * unsettled + 0.05 * glow)
             )
             .scaleEffect(breathScale(elapsed: elapsed))
         }
@@ -109,7 +111,7 @@ struct RambleOrb: View {
         // Turbulence decays as the orb gathers, but never to zero: a perfectly still orb
         // would read as finished, and the system is still thinking. The floor matters more
         // than it looks — it is what the user sees for most of a long wait.
-        let amplitude = Float(0.075 + 0.085 * unsettled)
+        let amplitude = Float(0.105 + 0.075 * unsettled)
 
         func wander(
             _ home: SIMD2<Float>, _ xPeriod: Double, _ yPeriod: Double, _ phase: Double
@@ -181,13 +183,13 @@ struct RambleOrb: View {
     /// A soft off-centre highlight that drifts on its own slow period. This is what makes the
     /// orb read as a SPHERE rather than a disc with a pattern on it: a real ball has one place
     /// the light lands, and it is never dead centre.
-    private func specular(elapsed: TimeInterval, unsettled: Double) -> some View {
+    private func specular(elapsed: TimeInterval, unsettled: Double, glow: Double) -> some View {
         let period = Motion.orbDriftPeriods[2]
-        let dx = CGFloat(sin(elapsed * 2 * .pi / period)) * diameter * 0.06
-        let dy = CGFloat(cos(elapsed * 2 * .pi / (period * 1.4))) * diameter * 0.05
+        let dx = CGFloat(sin(elapsed * 2 * .pi / period)) * diameter * 0.11
+        let dy = CGFloat(cos(elapsed * 2 * .pi / (period * 1.4))) * diameter * 0.09
         return RadialGradient(
             colors: [
-                Color.white.opacity(0.30 - 0.12 * unsettled),
+                Color.white.opacity(0.26 - 0.10 * unsettled + 0.14 * glow),
                 Color.white.opacity(0.06),
                 .clear,
             ],
@@ -222,15 +224,29 @@ struct RambleOrb: View {
 
     // MARK: - Breath
 
-    /// Scale oscillation, with amplitude scaled DOWN as the orb grows: ±4% is a nudge at 96pt
-    /// and a lurch at 360pt, so a fixed percentage would make the big orb read as agitated.
-    /// What should stay constant is the perceived movement, which is roughly a fixed number of
-    /// points.
+    /// The breath — the gesture that makes this read as a thing that is alive rather than a
+    /// shape that is present.
+    ///
+    /// The first version scaled the amplitude DOWN as the orb grew, reasoning that a fixed
+    /// percentage would be a lurch at full size. The direction was right and the magnitude was
+    /// absurd: at 360pt it worked out to **±1.7% on an 11-second period**, which is to say a
+    /// sphere that measurably moved and perceptibly did not. Both numbers are now what the
+    /// gesture actually needs, and the size compensation is a gentle floor rather than a
+    /// division that collapses toward nothing.
     private func breathScale(elapsed: TimeInterval) -> CGFloat {
         guard !reduceMotion else { return 1 }
-        let travel = min(0.04, 6.0 / max(diameter, 1))
-        let period = Motion.orbDriftPeriods[1]
-        return 1 + CGFloat(sin(elapsed * 2 * .pi / period)) * travel
+        let travel = max(0.030, min(0.042, 14.0 / max(diameter, 1)))
+        let phase = sin(elapsed * 2 * .pi / Motion.orbBreathPeriod)
+        return 1 + CGFloat(phase) * travel
+    }
+
+    /// Light swelling with the breath, a beat behind it. A sphere that only changes SIZE reads
+    /// as mechanical; one that also brightens as it expands reads as something gathering
+    /// itself. The lag (a quarter period) is what keeps the two from looking like one effect.
+    private func breathGlow(elapsed: TimeInterval) -> Double {
+        guard !reduceMotion else { return 0 }
+        let phase = sin(elapsed * 2 * .pi / Motion.orbBreathPeriod - .pi / 2)
+        return 0.5 + 0.5 * phase  // 0…1
     }
 
     /// 1 at the moment the orb appears, easing to 0 over `Motion.orbGatherSeconds`, then
