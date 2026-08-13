@@ -20,7 +20,13 @@ enum LayoutMetrics {
     static let hitTarget: CGFloat = 44
     /// The Ramble orb — the object the capture field becomes while the system is
     /// making sense of a ramble, and which becomes the card composition at the reveal.
-    static let rambleOrb: CGFloat = 96
+    ///
+    /// Sized as a FRACTION of the surface's narrow dimension rather than a fixed diameter:
+    /// this beat is meant to own the screen, and "owns the screen" is a relationship to the
+    /// device, not a number of points. `rambleOrbMin` is the floor for a very short surface
+    /// (a landscape phone), so the orb never collapses to a dot.
+    static let rambleOrbScreenFraction: CGFloat = 0.85
+    static let rambleOrbMin: CGFloat = 120
     /// The voice hero control's diameter — the composer's listening-state stop button,
     /// the one control operated mid-thought at arm's length. Deliberately larger than
     /// `hitTarget`: it is the surface's focal point, not merely reachable.

@@ -379,6 +379,17 @@ struct ComposerView: View {
         let route: CaptureRoute = local.isEmpty ? .reasoning : CaptureRoute.route(for: captured)
         structureSource = route.metricName
 
+        // Verification seam: hold the Understanding beat so the orb can actually be looked
+        // at. The simulator's parse finishes in a couple of seconds, which is the right
+        // outcome and the wrong condition for reviewing a fourteen-second animation — before
+        // this, judging the orb meant catching it between two screenshots.
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-HoldUnderstanding") {
+            Motion.withMotion(Motion.heroSettle) { phase = .understanding }
+            return
+        }
+        #endif
+
         switch route {
         case .fast:
             interpretation.propose(local)
@@ -648,23 +659,33 @@ struct ComposerView: View {
     /// candidate titles: the engine may revise its interpretation arbitrarily behind
     /// this and the screen must not move.
     @ViewBuilder private var understandingSurface: some View {
-        Spacer(minLength: 0)
-        VStack(spacing: Spacing.lg) {
-            RambleOrb()
-                .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
-            Text("Making sense of it")
-                .font(.sectionHeader)
-                .foregroundStyle(Palette.primaryText)
-            if showReassurance {
-                Text("Still working — that was a big one.")
-                    .metadataStyle()
-                    .transition(.opacity)
+        // The orb is sized from the surface, not from itself: "owns the screen" is a
+        // relationship to the device, not a number of points. `GeometryReader` gives a
+        // CONCRETE size to work from — `maxHeight: .infinity` on this screen previously hung
+        // the layout pass and the composer never presented at all.
+        GeometryReader { proxy in
+            let orbSize = max(
+                LayoutMetrics.rambleOrbMin,
+                min(proxy.size.width, proxy.size.height) * LayoutMetrics.rambleOrbScreenFraction
+            )
+            VStack(spacing: Spacing.lg) {
+                Spacer(minLength: 0)
+                RambleOrb(diameter: orbSize)
+                    .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
+                Text("Making sense of it")
+                    .font(.sectionHeader)
+                    .foregroundStyle(Palette.primaryText)
+                if showReassurance {
+                    Text("Still working — that was a big one.")
+                        .metadataStyle()
+                        .transition(.opacity)
+                }
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Making sense of what you wrote")
-        Spacer(minLength: 0)
     }
 
     /// REVEAL / CONFIRM — the answer, as one composition. Tasks own the viewport.

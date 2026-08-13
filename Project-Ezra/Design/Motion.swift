@@ -80,6 +80,36 @@ enum Motion {
     static let orbBreath = Animation.easeInOut(duration: 2.4)
     static let ambient = Animation.easeInOut(duration: 6)
 
+    // MARK: - The Ramble orb's internal weather
+
+    /// The periods the orb's mesh control points travel on, in seconds.
+    ///
+    /// **Deliberately incommensurate** (no common divisor worth speaking of): the surface's
+    /// combined state has no short repeat, so the eye never catches a loop. That irregularity
+    /// is the entire difference between "alive" and "animating" — three points on 8s would
+    /// pulse in unison every eight seconds and instantly read as a mechanism.
+    ///
+    /// They are also all SLOW. The orb must never read as a spinner, and rate is what decides
+    /// that far more than shape: the same mesh at a third of these periods looks like a
+    /// loading indicator.
+    static let orbDriftPeriods: [Double] = [7.3, 11.1, 13.7, 9.4]
+
+    /// Frame ceiling for the orb's timeline. The animation runs during exactly the window the
+    /// on-device model is generating, so it is capped rather than free-running at display
+    /// rate — a fluid gradient gains nothing visible above this and the ANE needs the room.
+    static let orbFrameInterval: Double = 1.0 / 30.0
+
+    /// How long the orb takes to gather — a slow, one-way settle from diffuse haze into a
+    /// defined object.
+    ///
+    /// The answer to the one real complaint about a spinner-free wait: a fixed-amplitude
+    /// breath makes twenty seconds indistinguishable from stalled. The orb CONDENSES as the
+    /// wait lengthens — turbulence decays, the rim tightens — so time passing is legible in
+    /// the object itself. It reports nothing: the settle is not tied to generation progress
+    /// (there is no such signal, and inventing one would be a lie), and it never reaches a
+    /// state that reads as "done". A fire that has caught, not a progress bar.
+    static let orbGatherSeconds: Double = 14
+
     // MARK: - Reduce-motion helpers (imperative sites)
 
     // Declarative `.animation(_:value:)` sites keep the house `@Environment(
