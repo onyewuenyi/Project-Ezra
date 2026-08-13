@@ -152,38 +152,81 @@ struct MetricsRecorderTests {
 }
 
 @MainActor
-@Suite("Capability-card outcomes")
-struct CapabilityMetricsTests {
+@Suite("Advisor outcomes")
+struct AdvisorMetricsTests {
 
     private func freshDefaults() -> UserDefaults {
-        let name = "card-metrics-tests-\(UUID().uuidString)"
+        let name = "advisor-metrics-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defaults.removePersistentDomain(forName: name)
         return defaults
     }
 
-    @Test("Offered and acted count independently and persist across instances")
+    @Test("Offered, acted and dismissed count independently and persist across instances")
     func countersPersist() {
         let defaults = freshDefaults()
-        let metrics = CapabilityMetrics(defaults: defaults)
-        metrics.recordOffered(.unstick)
-        metrics.recordOffered(.unstick)
-        metrics.recordActed(.unstick)
-        metrics.recordOffered(.thinkingPartner)
+        let metrics = AdvisorMetrics(defaults: defaults)
+        metrics.recordOffered(.advise)
+        metrics.recordOffered(.advise)
+        metrics.recordActed(.advise, taskID: UUID(), status: .todo)
+        metrics.recordDismissed(.advise)
+        metrics.recordOffered(.decide)
 
-        let reloaded = CapabilityMetrics(defaults: defaults)
-        #expect(reloaded.stats[.unstick] == .init(offered: 2, acted: 1))
-        #expect(reloaded.stats[.thinkingPartner] == .init(offered: 1, acted: 0))
-        #expect(reloaded.stats[.breakDown] == .init(offered: 0, acted: 0))
+        let reloaded = AdvisorMetrics(defaults: defaults)
+        #expect(reloaded.stats[.advise] == .init(offered: 2, acted: 1, dismissed: 1))
+        #expect(reloaded.stats[.decide] == .init(offered: 1, acted: 0, dismissed: 0))
+        #expect(reloaded.actedEvents.count == 1)
     }
 
-    @Test("The footer line reads acted/offered and stays silent on a fresh install")
+    @Test("The footer reads acted/offered, silence shows alone, fresh installs stay silent")
     func footerLine() {
-        let metrics = CapabilityMetrics(defaults: freshDefaults())
+        let metrics = AdvisorMetrics(defaults: freshDefaults())
         #expect(metrics.footerLine == nil)  // no line beats a row of zeros
-        metrics.recordOffered(.thinkingPartner)
-        metrics.recordOffered(.breakDown)
-        metrics.recordActed(.breakDown)
-        #expect(metrics.footerLine == "cards: tp 0/1 · bd 1/1")
+        metrics.recordOffered(.nothing)
+        metrics.recordOffered(.decide)
+        metrics.recordActed(.decide, taskID: nil, status: .todo)
+        #expect(metrics.footerLine == "advisor: zip 1 · dec 1/1")
+    }
+
+    @Test("Progression judges moved work, not AI activity")
+    func progression() {
+        let context = TestStore.makeContext()
+        let metrics = AdvisorMetrics(defaults: freshDefaults())
+
+        // Advised and finished → progressed.
+        let done = TaskItem(title: "Renew passport", status: .todo, in: context)
+        metrics.recordActed(.advise, taskID: done.uuid, status: .todo)
+        done.complete()
+
+        // Advised twice and still sitting where the advice found it → not progressed,
+        // and the repeat intervention shows in the re-intervention rate.
+        let stuck = TaskItem(title: "Sort the garage", status: .todo, in: context)
+        metrics.recordActed(.advise, taskID: stuck.uuid, status: .todo)
+        metrics.recordActed(.decide, taskID: stuck.uuid, status: .todo)
+
+        let line = metrics.progressionLine(among: [done, stuck])
+        #expect(line == "moved 50% · re-int 1.5")
+    }
+
+    @Test("An action that itself moved the task still needs FURTHER movement to count")
+    func progressionBaseline() {
+        let context = TestStore.makeContext()
+        // "Do it now" acted from `.todo` and the task now sits `.doing`: that IS
+        // progress past the baseline. But an intervention that found it already
+        // `.doing` needs resolution to count.
+        let task = TaskItem(title: "Write the report", status: .doing, in: context)
+        #expect(AdvisorMetrics.hasProgressed(task, since: TaskStatus.todo.rawValue))
+        #expect(!AdvisorMetrics.hasProgressed(task, since: TaskStatus.doing.rawValue))
+        task.complete()
+        #expect(AdvisorMetrics.hasProgressed(task, since: TaskStatus.doing.rawValue))
+    }
+
+    @Test("The acted-event list is evidence, not history — it stays capped")
+    func actedEventsCap() {
+        let metrics = AdvisorMetrics(defaults: freshDefaults())
+        for _ in 0..<(AdvisorMetrics.maxActedEvents + 25) {
+            metrics.recordActed(.advise, taskID: UUID(), status: .todo)
+        }
+        #expect(metrics.actedEvents.count == AdvisorMetrics.maxActedEvents)
     }
 }

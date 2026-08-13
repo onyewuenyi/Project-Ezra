@@ -285,8 +285,8 @@ action. Binding corollaries:
   `promptOnlyFacts`). Internal reasoning signals must not become accidental UI.
 - Planning classification **informs** the advisor's composition (a signal, never a quota, never
   an override of deterministic ranking). Repeated deferral is a **bounded** intervention: the
-  advisor sees only the 2–3 band; 4+ is StallDiagnosis/Unstick territory — never escalating
-  re-plan pressure.
+  advisor sees only the 2–3 band; 4+ is StallDiagnosis / Task-Advisor territory — never
+  escalating re-plan pressure.
 - The advisor is told candidates arrive **already ranked** — a strong prior to deviate from.
 - `workIntent` is **system-owned by construction** (one write chain, no user-editing path,
   DEBUG-asserted) and its classifier is **evaluated**: a labeled kind field with a regression
@@ -301,6 +301,23 @@ Mid-day re-entry is a **delta turn** ("SINCE THIS MORNING: …" → the complete
 the morning transcript as continuity — reconstructed from a digest after a process restart. The
 candidate cap is **context-measured** (floor 8 / ceiling 24) instead of a fixed guess. On-device
 only; PCC stays dormant.
+
+**The Task Advisor** (2026-08-12, the S4 → Advisor pivot; full spec in `docs/task-model.md`)
+is the per-task counterpart on the detail screen: a judgment layer that replaced the three
+capability cards with one surface answering *"what would make this task easier right now?"*.
+The pivot mirrors this section's shape — "deterministic triggers decide which card" is reversed
+the way "the model never ranks" was reversed for the Today plan: the **model judges the shape of
+help** (`AdvisorMove`: nothing / advise / decide / createSteps / openBlocker), the deterministic
+system stays authoritative as sensors + gate + fallback, `ValidatedReading` is the trust
+boundary (drop/degrade, never substitute), a **facts fingerprint** keeps the judgment cached and
+calm (same task + same meaningful context → same reading; revealed = structurally immutable
+until the facts change), and **silence is a first-class outcome** at two independent tiers (the
+free deterministic gate, and the model's own `nothing`). Today answers *what deserves
+attention*; the Task Advisor answers *what is the best next move*. The quality signal is
+**progression, not AI activity** (`AdvisorMetrics`: % of advised tasks that later moved, plus a
+re-intervention rate); the acceptance test is the `-AdvisorDiagnostics` judgment eval. V1 is
+deliberately call-shaped: tool calling, streaming + salvage, and per-task sessions are each
+deferred behind a named tripwire until judgment quality is proven on device.
 
 ## 9. AI System — two engines + personal context
 

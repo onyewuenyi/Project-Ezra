@@ -172,10 +172,15 @@ struct SettingsView: View {
                     Text(line)
                         .metadataStyle()
                 }
-                // Offer-vs-acted per capability card (acted/offered) — whether the
-                // OFFER worked, the half the model metrics can't see.
-                if let cards = CapabilityMetrics.shared.footerLine {
-                    Text(cards)
+                // Per-move Advisor outcomes (acted/offered, plus the silence count),
+                // and the north-star derivation: % of advised tasks that later moved,
+                // with the re-intervention rate.
+                if let advisor = AdvisorMetrics.shared.footerLine {
+                    Text(advisor)
+                        .metadataStyle()
+                }
+                if let progression = AdvisorMetrics.shared.progressionLine(among: tasks) {
+                    Text(progression)
                         .metadataStyle()
                 }
                 #endif

@@ -1,6 +1,7 @@
 # Product Design Plan — the AI roadmap, audited against the shipped product
 
 **Status:** Product design (no implementation). Date: 2026-07-24.
+**Superseded in part (2026-08-12):** the per-task capability cards this audit names (`DecisionFramingService`/`ThinkingPartnerView`, the breakdown card, Unstick) were replaced by the **Task Advisor** judgment layer — see `docs/task-model.md` and `docs/PRD.md` §8. The verdicts below are a point-in-time record.
 **Inputs:** the Head-of-Product Reach×Impact prioritization (12 features), `docs/PRD.md`, `docs/task-primitive-v2-spec.md` (V1+V2 shipped), `prev-docs/product-guardrails.md`, `prev-docs/product-strategy-managing-chaos.md`, and a full code audit (AI/, Models/, Features/, tests).
 
 ---

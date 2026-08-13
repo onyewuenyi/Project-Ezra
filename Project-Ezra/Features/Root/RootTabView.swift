@@ -154,6 +154,9 @@ struct RootTabView: View {
             }
             await runCaptureDiagnosticsIfRequested()
             await runRambleEvalIfRequested()
+            #if DEBUG
+            await AdvisorDiagnostics.runIfRequested()
+            #endif
             await openCaptureIfRequested()
         }
     }

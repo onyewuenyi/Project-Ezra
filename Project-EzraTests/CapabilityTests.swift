@@ -276,5 +276,53 @@ struct CapabilityTests {
             for: task, among: [task], partnerCardVisible: false)
         #expect(capabilities.contains(.unstick(.reallyADecision)))
     }
-}
 
+    // MARK: - The Advisor's pre-gate (a cost heuristic, never a semantic verdict)
+
+    @Test("A clean small task judges to silence for free — no model call spent")
+    func cleanTaskIsNotWorthy() {
+        let context = context()
+        let task = task("Call the dentist", effort: 15, in: context)
+        #expect(!TaskCapabilities.advisorWorthy(for: task, among: [task]))
+    }
+
+    @Test("Each worthy signal opens the gate on its own")
+    func worthySignals() {
+        let context = context()
+        let now = Date()
+
+        let flagged = task("Pick a school", in: context)
+        flagged.needsDecision = true
+        #expect(TaskCapabilities.advisorWorthy(for: flagged, among: [flagged], now: now))
+
+        let worded = task("Should we switch dentists", in: context)
+        #expect(TaskCapabilities.advisorWorthy(for: worded, among: [worded], now: now))
+
+        let big = task("Renovate the kitchen", effort: 90, in: context)
+        #expect(TaskCapabilities.advisorWorthy(for: big, among: [big], now: now))
+
+        let stalled = task("Sort the garage", in: context)
+        stalled.deferralCount = 3
+        #expect(TaskCapabilities.advisorWorthy(for: stalled, among: [stalled], now: now))
+
+        let blocked = task("Fix the boiler", in: context)
+        blocked.addExternalBlocker("the engineer", among: [blocked])
+        #expect(TaskCapabilities.advisorWorthy(for: blocked, among: [blocked], now: now))
+
+        let doing = task("Write the report", status: .doing, in: context)
+        #expect(TaskCapabilities.advisorWorthy(for: doing, among: [doing], now: now))
+
+        let overdue = task("File the form", in: context)
+        overdue.dueDate = now.addingTimeInterval(-3 * 86_400)
+        #expect(TaskCapabilities.advisorWorthy(for: overdue, among: [overdue], now: now))
+    }
+
+    @Test("A resolved task is never worthy — whatever it carries")
+    func resolvedIsNeverWorthy() {
+        let context = context()
+        let done = task("Should we move to Lisbon", effort: 120, in: context)
+        done.needsDecision = true
+        done.complete()
+        #expect(!TaskCapabilities.advisorWorthy(for: done, among: [done]))
+    }
+}

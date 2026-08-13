@@ -33,20 +33,12 @@ enum CapabilityProfiles {
         var maximumResponseTokens: Int?
     }
 
-    /// The Thinking Partner: the hardest cognitive content in the app (options,
-    /// tradeoffs, a grounded recommendation), on demand with the user watching.
-    /// `.moderate` reasoning is the prior — `.deep` is the candidate promotion once
-    /// the device pass shows the 20s budget absorbs it.
-    static let decisionFraming = Config(
-        temperature: 0.7, reasoningLevel: .moderate, maximumResponseTokens: 500)
-
-    /// Steps should be conservative and repeatable, not creative.
-    static let breakdown = Config(
-        temperature: 0.3, reasoningLevel: nil, maximumResponseTokens: 400)
-
-    /// One or two sentences, restate-only.
-    static let unstickNarration = Config(
-        temperature: 0.5, reasoningLevel: nil, maximumResponseTokens: 120)
+    /// The Task Advisor: one ambient compositional reading (observation · guidance ·
+    /// next move · payload) that absorbed the retired framing/breakdown/narration
+    /// calls. `.moderate` reasoning inside the 20s card budget is the prior — `.deep`
+    /// is the candidate promotion once the device pass shows the budget absorbs it.
+    static let taskAdvisor = Config(
+        temperature: 0.5, reasoningLevel: .moderate, maximumResponseTokens: 500)
 
     /// One concrete move, at most 12 words.
     static let kickoff = Config(

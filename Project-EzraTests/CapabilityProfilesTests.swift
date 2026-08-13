@@ -15,11 +15,11 @@ import Testing
 @Suite("Capability profiles — pinned priors")
 struct CapabilityProfilesTests {
 
-    @Test("Framing thinks hardest and says the most")
-    func framing() {
-        let config = CapabilityProfiles.decisionFraming
+    @Test("The Advisor thinks hardest and says the most")
+    func advisor() {
+        let config = CapabilityProfiles.taskAdvisor
         #expect(config.reasoningLevel == .moderate)
-        #expect(config.temperature == 0.7)
+        #expect(config.temperature == 0.5)
         #expect(config.maximumResponseTokens == 500)
     }
 
@@ -27,8 +27,7 @@ struct CapabilityProfilesTests {
     func capOrdering() {
         let caps = [
             CapabilityProfiles.workIntent, CapabilityProfiles.kickoff,
-            CapabilityProfiles.unstickNarration, CapabilityProfiles.breakdown,
-            CapabilityProfiles.decisionFraming,
+            CapabilityProfiles.taskAdvisor,
         ].map { $0.maximumResponseTokens ?? .max }
         #expect(caps == caps.sorted())
         #expect(caps.allSatisfy { $0 != .max })  // nobody runs uncapped

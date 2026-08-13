@@ -59,17 +59,17 @@ struct TaskDetailView: View {
     @State private var showAddPerson = false
     @State private var newPersonName = ""
     @State private var appeared = false
-    /// One "offered" record per page VISIT — reset when the pager swipes away, so
-    /// coming back counts as a fresh offer while idle re-renders count as nothing.
-    @State private var offersRecorded = false
     /// The kickoff line under the relabeled CTA, once it lands. Never persisted.
     @State private var kickoffStep: String?
     @State private var kickoffWork: Task<Void, Never>?
     @State private var actionPulse = 0
     @State private var showAllActivity = false
-    /// Set when Unstick routes the user into the breakdown card, so the section can
-    /// render even for a task whose eligibility the user is only now being told about.
-    @State private var showBreakdown = false
+    /// The Advisor's judgment cache — ambient, fingerprint-keyed, shared across pages.
+    @ObservedObject private var advisorStore = TaskAdvisorStore.shared
+    /// A blocker opened from the Advisor's openBlocker move — a nested single-page
+    /// detail, because the pager's peer list is snapshotted and the blocker may not
+    /// be a peer.
+    @State private var openedBlocker: TaskItem?
     /// The in-flight re-classification, held so it can be cancelled. Unlike the card
     /// views this runs unprompted, so it is the one most likely to outlive the user's
     /// interest in this page.
@@ -101,13 +101,11 @@ struct TaskDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 titleSection.rise(0, appeared, reduceMotion)
-                decisionSection.rise(1, appeared, reduceMotion)
-                breakdownSection.rise(2, appeared, reduceMotion)
-                unstickSection.rise(3, appeared, reduceMotion)
-                propertyCard.rise(4, appeared, reduceMotion)
-                descriptionSection.rise(5, appeared, reduceMotion)
-                whySection.rise(6, appeared, reduceMotion)
-                activitySection.rise(7, appeared, reduceMotion)
+                advisorSection.rise(1, appeared, reduceMotion)
+                propertyCard.rise(2, appeared, reduceMotion)
+                descriptionSection.rise(3, appeared, reduceMotion)
+                whySection.rise(4, appeared, reduceMotion)
+                activitySection.rise(5, appeared, reduceMotion)
             }
             .padding(Spacing.lg)
         }
@@ -129,13 +127,15 @@ struct TaskDetailView: View {
         .sensoryFeedback(.impact(flexibility: .soft), trigger: actionPulse)
         .task {
             Motion.withMotion(Motion.settle) { appeared = true }
-            // Prewarm the on-device model when the Thinking Partner will render, so the
-            // first framing tap isn't paying the cold model-load cost. Only for the page
-            // actually on screen — a neighbour in the pager hasn't earned the load.
-            if isActive, capabilities.contains(.thinkingPartner) {
+            // The Advisor's ambient trigger — a no-op unless the facts fingerprint
+            // changed. Mounted neighbours prewarm the model instead (the pager keeps
+            // them mounted, so a swipe lands on a warm model without spending a
+            // generation on a page nobody is looking at).
+            if isActive {
+                advisorStore.ensure(task: task, among: allTasks)
+            } else if TaskCapabilities.advisorWorthy(for: task, among: allTasks) {
                 ModelWarmup.prewarmSharedSession()
             }
-            if isActive { recordCapabilityOffers() }
             // A task re-entered mid-flight gets its first move too — the commitment is
             // still live, and the bar it renders in is now always on screen. Bounded
             // (60-token cap) and silent on any non-success, like the tap path.
@@ -169,12 +169,11 @@ struct TaskDetailView: View {
                 // classification still running is spend with nobody waiting on it.
                 classifyWork?.cancel()
                 kickoffWork?.cancel()
-                // Leaving ends the visit; swiping back is a fresh offer.
-                offersRecorded = false
+                advisorStore.cancel(taskID: task.uuid)
             } else {
                 // `.task` ran at mount, when a pager neighbour wasn't active yet —
-                // becoming the page on screen is the moment the cards become an offer.
-                recordCapabilityOffers()
+                // becoming the page on screen is the moment the Advisor judges.
+                advisorStore.ensure(task: task, among: allTasks)
                 if task.status == .doing, kickoffStep == nil { fetchKickoff() }
             }
         }
@@ -511,88 +510,68 @@ struct TaskDetailView: View {
         .accessibilityLabel("Step: \(step.title), \(done ? "done" : "open")")
     }
 
-    // MARK: - Decision (the judgment-call resolution)
+    // MARK: - Advisor (the judgment layer)
 
-    /// The reason to offer a breakdown, from either route: offered proactively on a
-    /// healthy big task, or revealed after Unstick explained that size is why it stalled.
-    private var breakdownReason: BreakdownEligibility.Reason? {
-        for capability in capabilities {
-            if case .breakDown(let reason) = capability { return reason }
-            if showBreakdown, case .unstick(.tooBig(let reason)) = capability { return reason }
-        }
-        return nil
-    }
-
-    /// "This keeps sliding" — the inertia capability. Present only when the task has
-    /// demonstrably stalled, and it names WHY rather than just that it has.
-    ///
-    /// Never absent off-device: `StallDetector` is deterministic end to end, so this
-    /// renders identically with Apple Intelligence off — unlike the other two cards.
-    @ViewBuilder
-    private var unstickSection: some View {
-        if let diagnosis = capabilities.compactMap({ capability -> StallDiagnosis? in
-            if case .unstick(let diagnosis) = capability { return diagnosis }
-            return nil
-        }).first {
-            UnstickView(
-                diagnosis: diagnosis,
-                deferralCount: Int(task.deferralCount),
-                narrationFacts: UnstickFacts(task: task, diagnosis: diagnosis, among: allTasks),
-                isActive: isActive,
-                onBreakDown: { unstickActed { showBreakdown = true } },
-                // A human accepting the card's suggestion, so it escalates the axis-3
-                // flag (Decision is no longer a work-intent) — forced-top ranking, the
-                // decision section, and the Thinking Partner all follow from the flag.
-                // `touchHuman` keeps the Unstick rule: every action clears the stall.
-                onMakeDecision: {
-                    unstickActed {
+    /// The one Advisor surface — replaced the decision / breakdown / unstick cards.
+    /// The store owns the judgment; this section only renders its state and wires the
+    /// moves to the existing mutation seams. The flagged-decision affordances render
+    /// regardless of what the model chose to talk about.
+    private var advisorSection: some View {
+        AdvisorView(
+            state: advisorStore.state(for: task),
+            flagged: task.needsDecision && !task.status.isResolved,
+            isJudgmentCall: task.isJudgmentCall,
+            deferralCount: Int(task.deferralCount),
+            diagnosis: StallDetector.diagnose(task, among: allTasks),
+            blockers: task.activeBlockerTasks(among: allTasks),
+            onDecide: { choice in advisorActed(.decide) { markDecided(choice: choice) } },
+            // Escalating is a human act accepting the reading's suggestion — the
+            // axis-3 flag, through the same seam Unstick's rung used.
+            onEscalate: {
+                advisorActed(.decide) {
+                    Motion.withMotion(Motion.decide) {
                         task.escalateToDecision()
                         task.touchHuman()
                     }
-                },
-                onDoItNow: { unstickActed { applyStatus(.doing) } },
-                onDefer: { unstickActed { setDue(dayOffset: 7) } },
-                onKill: { unstickActed { applyStatus(.canceled) } }
-            )
+                    context.saveChanges()
+                }
+            },
+            onCreateSteps: { accepted, proposed in
+                advisorActed(.createSteps) { accept(accepted, proposed: proposed) }
+            },
+            onOpenBlocker: { blocker in
+                advisorActed(.openBlocker) { openedBlocker = blocker }
+            },
+            onDoItNow: { advisorActed(.advise) { applyStatus(.doing) } },
+            onDefer: { advisorActed(.advise) { setDue(dayOffset: 7) } },
+            onKill: { advisorActed(.advise) { applyStatus(.canceled) } },
+            onDismiss: { advisorStore.dismiss(taskID: task.uuid) },
+            onRetry: { advisorStore.retry(task: task, among: allTasks) }
+        )
+        .taskDetailSheet($openedBlocker)
+    }
+
+    /// Every Advisor action funnels here: one acted record (with the lifecycle
+    /// position it acted FROM — the progression metric's baseline), the stall-clearing
+    /// rule (a card its own buttons can't dismiss is a scold — any action taken while
+    /// a stall diagnosis is present resets the deferral clock via `touchHuman`), then
+    /// the move itself.
+    private func advisorActed(_ move: AdvisorMove, _ action: () -> Void) {
+        AdvisorMetrics.shared.recordActed(move, taskID: task.uuid, status: task.status)
+        if StallDetector.diagnose(task, among: allTasks) != nil {
+            task.touchHuman()
         }
+        actionPulse += 1
+        action()
     }
 
     /// Accept a breakdown: create the selected steps as real child tasks.
     ///
     /// `proposed` is the full set the model offered, so each deselection is recorded as
-    /// a `Correction` — the user telling the classifier it over-reached is exactly the
+    /// a `Correction` — the user telling the model it over-reached is exactly the
     /// signal the correction loop wants, and it exists nowhere else.
-    /// Record each capability the page is actually SHOWING as an offer — mirroring the
-    /// render gates, so an off-device breakdown (omitted whole) never counts as offered.
-    /// The telemetry answers "does anyone use these cards?"; counting cards nobody was
-    /// shown would answer a different, flattering question.
-    /// Every Unstick action funnels here: one "acted" record, then the move itself.
-    private func unstickActed(_ action: () -> Void) {
-        CapabilityMetrics.shared.recordActed(.unstick)
-        action()
-    }
-
-    private func recordCapabilityOffers() {
-        guard !offersRecorded else { return }
-        offersRecorded = true
-        for capability in capabilities {
-            switch capability {
-            case .thinkingPartner:
-                let flagged = task.needsDecision && !task.status.isResolved
-                if flagged || modelAvailable {
-                    CapabilityMetrics.shared.recordOffered(.thinkingPartner)
-                }
-            case .breakDown:
-                if modelAvailable { CapabilityMetrics.shared.recordOffered(.breakDown) }
-            case .unstick:
-                CapabilityMetrics.shared.recordOffered(.unstick)
-            }
-        }
-    }
-
     private func accept(_ steps: [BreakdownStep], proposed: [BreakdownStep]) {
         guard !steps.isEmpty else { return }
-        CapabilityMetrics.shared.recordActed(.breakDown)
         actionPulse += 1
         Motion.withMotion(Motion.decide) {
             task.splitInto(steps, in: context)
@@ -609,141 +588,6 @@ struct TaskDetailView: View {
         // was a moment ago — see `reclassifyWorkIntent`.
         reclassifyWorkIntent()
         context.saveChanges()
-    }
-
-    /// Everything this task is offered, computed once per body evaluation. The render
-    /// layer tells the trigger whether the partner card is actually drawn (flag path,
-    /// or wording + model), so Unstick's choice rung folds when it would duplicate it
-    /// — and survives off-device, where the partner card that replaces it is absent.
-    private var capabilities: [Capability] {
-        let partnerVisible =
-            (task.needsDecision && !task.status.isResolved) || modelAvailable
-        return TaskCapabilities.available(
-            for: task, among: allTasks, partnerCardVisible: partnerVisible)
-    }
-
-    /// Whether a model exists to produce card CONTENT. The capability triggers stay
-    /// deterministic — they must answer in the sim and with Apple Intelligence off — so
-    /// this is a separate question asked at the render layer, never inside
-    /// `TaskCapabilities`. Read once here rather than per section: it reads
-    /// `SystemLanguageModel.default.availability` on every call.
-    private var modelAvailable: Bool { AppBrain.onDeviceModelAvailable() }
-
-    /// "Break this down" — the complexity capability. Absent off-device (the service
-    /// returns nil), and absent entirely for a task that isn't big or compound.
-    @ViewBuilder
-    private var breakdownSection: some View {
-        // Every part of this card is model output, so with no model there is nothing to
-        // draw. Rendering the header alone used to leave a titled empty box, and worse,
-        // a "Break this down" button that silently vanished when tapped.
-        if let reason = breakdownReason, modelAvailable {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                HStack(spacing: Spacing.xs) {
-                    Image(systemName: "square.stack.3d.down.right")
-                        .font(.glyphSmall())
-                        .foregroundStyle(Palette.accentFlat)
-                    Text("This looks like several steps")
-                        .font(.sectionHeader)
-                        .foregroundStyle(Palette.primaryText)
-                }
-                BreakdownView(
-                    context: BreakdownContext(task: task), reason: reason, isActive: isActive,
-                    onAccept: { accept($0, proposed: $1) })
-            }
-            .padding(Spacing.md)
-            .background(
-                Palette.primarySurface,
-                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(Palette.border, lineWidth: 0.5)
-            }
-        }
-    }
-
-    /// Capability-driven: the detail renders whatever `TaskCapabilities` returns, without
-    /// knowing why any of it was offered.
-    ///
-    /// The Thinking Partner appears when the task is a genuine decision (the
-    /// `needsDecision` flag OR choice-shaped wording — `DecisionShape`). A flagged
-    /// decision shows the full card (reason + "Mark decided" + framing); a
-    /// wording-only decision shows the lighter card (framing, no flag fabricated,
-    /// no clear button).
-    @ViewBuilder
-    private var decisionSection: some View {
-        let flagged = task.needsDecision && !task.status.isResolved
-        // Gate the FRAMING, never the section. A flagged decision must keep its reason
-        // line and its "Mark decided" button with no model present — those are human
-        // affordances, and `resolveDecision()` is the only thing that clears the flag.
-        // An intent-only decision has nothing but framing to show, so it drops out.
-        if capabilities.contains(.thinkingPartner), flagged || modelAvailable {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                HStack(spacing: Spacing.xs) {
-                    Image(systemName: "hand.raised.fill")
-                        .font(.glyphSmall())
-                        .foregroundStyle(Palette.decisionAccent)
-                    Text(flagged ? "Needs a decision" : "A decision to make")
-                        .font(.sectionHeader)
-                        .foregroundStyle(Palette.primaryText)
-                }
-                if flagged {
-                    Text(decisionReasonText)
-                        .supportingStyle()
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if modelAvailable {
-                    ThinkingPartnerView(
-                        context: DecisionContext(task: task, among: allTasks),
-                        isActive: isActive,
-                        // Flagged: deciding happens on the option, and the answer is
-                        // kept. Wording-only: the one escalation, pin-to-top (a human
-                        // act through the same seam Unstick's folded rung used).
-                        onDecide: flagged ? { choice in markDecided(choice: choice) } : nil,
-                        onEscalate: flagged
-                            ? nil
-                            : {
-                                actionPulse += 1
-                                Motion.withMotion(Motion.decide) {
-                                    task.escalateToDecision()
-                                    task.touchHuman()
-                                }
-                                context.saveChanges()
-                            })
-                }
-                if flagged {
-                    Button {
-                        markDecided()
-                    } label: {
-                        Label("Mark decided", systemImage: "checkmark.seal")
-                            .font(.controlLabel)
-                            .foregroundStyle(Palette.onAccent)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                            .background(Palette.accentGradient, in: Capsule())
-                    }
-                    .buttonStyle(.pressableProminent)
-                }
-            }
-            .padding(Spacing.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Palette.primarySurface,
-                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(
-                        flagged ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.border),
-                        lineWidth: flagged ? 1.5 : 0.5)
-            }
-        }
-    }
-
-    private var decisionReasonText: String {
-        task.isJudgmentCall
-            ? "This is a values call only you can make — Ezra won't decide it for you."
-            : "Ezra wasn't confident enough to file this cleanly. Take a look and set it straight."
     }
 
     private func markDecided(choice: String? = nil) {

@@ -22,8 +22,10 @@ import Foundation
 
 /// Which capability made the call. The metrics key, and the label in the DEBUG footer.
 enum ModelFeature: String, CaseIterable, Sendable {
-    case breakdown
-    case decisionFraming
+    /// The Task Advisor's one ambient reading — the judgment layer on task detail
+    /// (absorbed the retired breakdown / decisionFraming / unstickNarration calls).
+    /// Its timeout row is the re-entry tripwire for streaming + salvage.
+    case taskAdvisor
     case workIntent
     /// The composer's live parse — the most-executed model call in the product, and
     /// (until this) the only one generating no evidence to tune its deadline with.
@@ -36,9 +38,6 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// The existing-pair duplicate judge (`DuplicateSweep`) — background-tier,
     /// hard-capped per run; the metrics row is how a wrong floor gets caught.
     case duplicateSweep
-    /// The Unstick card's phrasing of its deterministic diagnosis — the inertia
-    /// capability's voice. The diagnosis never comes from the model; only the sentence.
-    case unstickNarration
     /// The one concrete first move offered under the CTA the moment the user taps
     /// Start — the execution system's activation-energy remover. Silence on any
     /// non-success; the button behaves identically without it.
@@ -47,13 +46,11 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// Short label for the diagnostics footer.
     var label: String {
         switch self {
-        case .breakdown: return "breakdown"
-        case .decisionFraming: return "framing"
+        case .taskAdvisor: return "advisor"
         case .workIntent: return "workIntent"
         case .captureTriage: return "capture"
         case .householdNarrative: return "narrative"
         case .duplicateSweep: return "dupSweep"
-        case .unstickNarration: return "unstick"
         case .kickoff: return "kickoff"
         }
     }

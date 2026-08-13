@@ -119,7 +119,7 @@ struct ModelDeadlineTests {
         // `onDeviceModelAvailable()` is false under XCTest, so `perform` must return
         // before constructing a session — this is what keeps the whole suite off the
         // beta simulator's intelligence daemon.
-        let outcome = await ModelRun.perform(.breakdown, deadline: 5) {
+        let outcome = await ModelRun.perform(.taskAdvisor, deadline: 5) {
             Issue.record("the operation must not run when no model is available")
             return 0
         }

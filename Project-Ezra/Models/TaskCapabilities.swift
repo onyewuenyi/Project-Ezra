@@ -35,6 +35,31 @@ enum Capability: Hashable {
 }
 
 enum TaskCapabilities {
+
+    /// The Advisor's deterministic pre-gate: should this task's page spend a model call?
+    ///
+    /// **A cost heuristic, never a semantic verdict.** Every task HAS an Advisor; a task
+    /// this gate filters out gets a judgment of deterministic silence (`.quiet(.gate)`)
+    /// for zero model cost — it is NOT "this task isn't worthy of intelligence", and
+    /// this list must not calcify (the `CaptureRoute` precedent: "simple inputs never
+    /// use AI" is policy, not architecture). The model keeps its own `nothing` past the
+    /// gate — two independent silence mechanisms, both first-class judgments.
+    static func advisorWorthy(
+        for task: TaskItem, among tasks: [TaskItem] = [], now: Date = Date()
+    ) -> Bool {
+        guard !task.status.isResolved else { return false }
+        if task.needsDecision { return true }
+        if DecisionShape.reads(title: task.title) { return true }
+        if BreakdownEligibility.evaluate(task, among: tasks) != nil { return true }
+        if StallDetector.diagnose(task, among: tasks, now: now) != nil { return true }
+        if task.hasActiveBlockers(among: tasks) { return true }
+        if task.status == .doing { return true }
+        if let due = task.dueDate, let days = TaskItem.daysUntil(due, now: now), days < 0 {
+            return true
+        }
+        return false
+    }
+
     /// Everything this task should be offered, in render order.
     ///
     /// - **Thinking Partner** when it is a genuine choice: it carries the open

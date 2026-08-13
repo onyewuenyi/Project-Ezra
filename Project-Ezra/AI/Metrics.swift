@@ -529,100 +529,161 @@ final class ModelMetrics {
     }
 }
 
-// MARK: - Capability-card outcomes (does anyone USE these cards?)
+// MARK: - Advisor outcomes (judge the judgment, not the activity)
 
-/// Whether a capability card is ACTED ON, per kind — the half `ModelMetrics` can't see.
-/// That class measures whether the *model* worked; this one measures whether the *offer*
-/// did. An ignored card costs attention on every render, and every S4 threshold
-/// (the 60/30-minute breakdown bars, deferral ≥ 3, the subsumption rules) is currently
-/// a guess — these counters are the evidence they get tuned or pruned on.
+/// What became of each Advisor reading, per move — the half `ModelMetrics` can't see.
+/// That class measures whether the *model* worked; this one measures whether the
+/// *judgment* did. Three per-move outcomes plus two derivations:
 ///
-/// Local-only, never transmitted, same charter as `ModelMetrics`: this exists so the
-/// offer heuristics are argued from numbers, not intuition. Offered = the card rendered
-/// on an ACTIVE page (once per visit — the pager keeps neighbours mounted, and a
-/// mounted neighbour nobody looked at is not an offer). Acted = any of the card's own
-/// actions tapped.
+/// - **offered / acted / dismissed** — a reading revealed on an active page, its action
+///   tapped, or explicitly dismissed. `nothing` counts offered-only: silence is a
+///   first-class outcome, and its count is the honesty denominator. Dismissal is
+///   information — repeated dismissals signal a judgment-quality problem, not an
+///   engagement problem.
+/// - **Progression** (the north star): % of advised tasks that later PROGRESSED —
+///   status advanced or resolved since the intervention. Derived lazily from a capped
+///   acted-event list; AI activity is not the quality signal, moved work is.
+/// - **Re-intervention rate** (diagnostic): interventions per advised task before it
+///   progressed. One intervention → progress reads like an intelligent coworker;
+///   advise→act→advise→act reads agentic and annoying.
+///
+/// Local-only, never transmitted, same charter as `ModelMetrics`.
 @MainActor
-final class CapabilityMetrics {
-    static let shared = CapabilityMetrics()
-
-    /// The card kinds, deliberately flattened from `Capability` (which carries per-case
-    /// payloads): the question here is "which OFFER", not "which diagnosis".
-    enum Kind: String, CaseIterable {
-        case thinkingPartner
-        case breakDown
-        case unstick
-
-        var label: String {
-            switch self {
-            case .thinkingPartner: return "tp"
-            case .breakDown: return "bd"
-            case .unstick: return "un"
-            }
-        }
-    }
+final class AdvisorMetrics {
+    static let shared = AdvisorMetrics()
 
     struct Stats: Equatable {
         var offered = 0
         var acted = 0
+        var dismissed = 0
     }
 
+    /// One advisor action, with the lifecycle position it acted FROM — progression is
+    /// judged against this, so an action that itself moved the task (Do-it-now →
+    /// `.doing`) still needs the task to move FURTHER to count as progressed.
+    struct ActedEvent: Codable, Equatable {
+        var taskID: UUID
+        var date: Date
+        var move: String
+        var statusAtAction: String
+    }
+
+    /// The acted-event list is evidence, not history — enough for the derivations,
+    /// never a transcript.
+    static let maxActedEvents = 200
+
     private let defaults: UserDefaults
-    private(set) var stats: [Kind: Stats] = [:]
+    private(set) var stats: [AdvisorMove: Stats] = [:]
+    private(set) var actedEvents: [ActedEvent] = []
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        for kind in Kind.allCases {
-            stats[kind] = Stats(
-                offered: defaults.integer(forKey: Key.offered(kind)),
-                acted: defaults.integer(forKey: Key.acted(kind)))
+        for move in AdvisorMove.allCases {
+            stats[move] = Stats(
+                offered: defaults.integer(forKey: Key.offered(move)),
+                acted: defaults.integer(forKey: Key.acted(move)),
+                dismissed: defaults.integer(forKey: Key.dismissed(move)))
+        }
+        if let data = defaults.data(forKey: Key.actedEvents),
+            let events = try? JSONDecoder().decode([ActedEvent].self, from: data)
+        {
+            actedEvents = events
         }
     }
 
-    func recordOffered(_ kind: Kind) {
-        stats[kind, default: Stats()].offered += 1
-        defaults.set(stats[kind]?.offered ?? 0, forKey: Key.offered(kind))
+    func recordOffered(_ move: AdvisorMove) {
+        stats[move, default: Stats()].offered += 1
+        defaults.set(stats[move]?.offered ?? 0, forKey: Key.offered(move))
     }
 
-    func recordActed(_ kind: Kind) {
-        stats[kind, default: Stats()].acted += 1
-        defaults.set(stats[kind]?.acted ?? 0, forKey: Key.acted(kind))
+    func recordActed(_ move: AdvisorMove, taskID: UUID?, status: TaskStatus, now: Date = Date()) {
+        stats[move, default: Stats()].acted += 1
+        defaults.set(stats[move]?.acted ?? 0, forKey: Key.acted(move))
+        guard let taskID else { return }
+        actedEvents.append(
+            ActedEvent(taskID: taskID, date: now, move: move.rawValue, statusAtAction: status.rawValue))
+        if actedEvents.count > Self.maxActedEvents {
+            actedEvents.removeFirst(actedEvents.count - Self.maxActedEvents)
+        }
+        if let data = try? JSONEncoder().encode(actedEvents) {
+            defaults.set(data, forKey: Key.actedEvents)
+        }
     }
 
-    /// One DEBUG-footer line: `cards: tp 3/9 · bd 1/7 · un 4/5` (acted/offered).
-    /// Nil when nothing has ever been offered — no line beats a row of zeros.
+    func recordDismissed(_ move: AdvisorMove) {
+        stats[move, default: Stats()].dismissed += 1
+        defaults.set(stats[move]?.dismissed ?? 0, forKey: Key.dismissed(move))
+    }
+
+    /// One DEBUG-footer line: `advisor: adv 1/4 · dec 2/3 · zip 6` (acted/offered;
+    /// `nothing` shows its offered count alone — silence has no action to take).
+    /// Nil when nothing has ever been judged — no line beats a row of zeros.
     var footerLine: String? {
-        let parts = Kind.allCases.compactMap { kind -> String? in
-            guard let entry = stats[kind], entry.offered > 0 else { return nil }
-            return "\(kind.label) \(entry.acted)/\(entry.offered)"
+        let parts = AdvisorMove.allCases.compactMap { move -> String? in
+            guard let entry = stats[move], entry.offered > 0 else { return nil }
+            if move == .nothing { return "\(Self.label(move)) \(entry.offered)" }
+            return "\(Self.label(move)) \(entry.acted)/\(entry.offered)"
         }
         guard !parts.isEmpty else { return nil }
-        return "cards: " + parts.joined(separator: " · ")
+        return "advisor: " + parts.joined(separator: " · ")
     }
 
-    /// Wipe the offer/act counts (Settings ▸ Reset everything), for the same reason
-    /// `ModelMetrics.reset` does: the offers were made against work that is now gone.
-    func reset() {
-        for kind in Kind.allCases {
-            stats[kind] = Stats()
-            defaults.removeObject(forKey: Key.offered(kind))
-            defaults.removeObject(forKey: Key.acted(kind))
+    /// The north-star derivation, lazy and read-only over the live set: `moved 62% ·
+    /// re-int 1.3`. A task counts as progressed when it resolved, or its lifecycle
+    /// moved past where the intervention found it. Tasks no longer in the set (deleted)
+    /// leave the denominator. Nil until there is at least one judged task.
+    func progressionLine(among tasks: [TaskItem]) -> String? {
+        guard !actedEvents.isEmpty else { return nil }
+        let byTask = Dictionary(grouping: actedEvents, by: \.taskID)
+        var judged = 0
+        var progressed = 0
+        for (taskID, events) in byTask {
+            guard let task = tasks.first(where: { $0.uuid == taskID }) else { continue }
+            judged += 1
+            let first = events.min(by: { $0.date < $1.date })!
+            if Self.hasProgressed(task, since: first.statusAtAction) { progressed += 1 }
         }
+        guard judged > 0 else { return nil }
+        let percent = Int((Double(progressed) / Double(judged) * 100).rounded())
+        let reIntervention = Double(actedEvents.count) / Double(byTask.count)
+        return "moved \(percent)% · re-int \(String(format: "%.1f", reIntervention))"
+    }
+
+    /// Did the task move past where the intervention found it? Resolution always
+    /// counts; `.todo → .doing` counts; anything else is standing still.
+    static func hasProgressed(_ task: TaskItem, since statusAtAction: String) -> Bool {
+        if task.status.isResolved { return true }
+        return statusAtAction == TaskStatus.todo.rawValue && task.status == .doing
+    }
+
+    /// The move's footer label. Short, stable, and never user-facing.
+    static func label(_ move: AdvisorMove) -> String {
+        switch move {
+        case .nothing: return "zip"
+        case .advise: return "adv"
+        case .decide: return "dec"
+        case .createSteps: return "steps"
+        case .openBlocker: return "blk"
+        }
+    }
+
+    /// Wipe everything (Settings ▸ Reset everything), for the same reason
+    /// `ModelMetrics.reset` does: the judgments were made against work that is now gone.
+    func reset() {
+        for move in AdvisorMove.allCases {
+            stats[move] = Stats()
+            defaults.removeObject(forKey: Key.offered(move))
+            defaults.removeObject(forKey: Key.acted(move))
+            defaults.removeObject(forKey: Key.dismissed(move))
+        }
+        actedEvents = []
+        defaults.removeObject(forKey: Key.actedEvents)
     }
 
     private enum Key {
-        static func offered(_ k: Kind) -> String { "cards.\(k.rawValue).offered" }
-        static func acted(_ k: Kind) -> String { "cards.\(k.rawValue).acted" }
-    }
-}
-
-extension Capability {
-    /// The telemetry bucket this offer lands in — diagnosis payloads flattened away.
-    var metricsKind: CapabilityMetrics.Kind {
-        switch self {
-        case .thinkingPartner: return .thinkingPartner
-        case .breakDown: return .breakDown
-        case .unstick: return .unstick
-        }
+        static func offered(_ m: AdvisorMove) -> String { "advisor.\(m.rawValue).offered" }
+        static func acted(_ m: AdvisorMove) -> String { "advisor.\(m.rawValue).acted" }
+        static func dismissed(_ m: AdvisorMove) -> String { "advisor.\(m.rawValue).dismissed" }
+        static let actedEvents = "advisor.actedEvents"
     }
 }
