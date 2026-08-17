@@ -156,6 +156,9 @@ struct RootTabView: View {
             await runRambleEvalIfRequested()
             #if DEBUG
             await AdvisorDiagnostics.runIfRequested()
+            // Coverage reads the LIVE store (the fixtures next door answer a different
+            // question), so it runs here where the real context is in scope.
+            AdvisorCoverageDiagnostics.runIfRequested(in: context)
             #endif
             await openCaptureIfRequested()
         }

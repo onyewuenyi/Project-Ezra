@@ -183,6 +183,11 @@ struct SettingsView: View {
                     Text(progression)
                         .metadataStyle()
                 }
+                // What share of the real list the Advisor speaks on, and why it is silent
+                // on the rest. Free to render here: this view already fetches every task.
+                // A DIAGNOSTIC, never a target — see `AdvisorCoverage`.
+                Text(AdvisorCoverage.measure(tasks).line)
+                    .metadataStyle()
                 #endif
             }
             .frame(maxWidth: .infinity, alignment: .leading)

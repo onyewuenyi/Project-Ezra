@@ -325,4 +325,78 @@ struct CapabilityTests {
         done.complete()
         #expect(!TaskCapabilities.advisorWorthy(for: done, among: [done]))
     }
+
+    // MARK: - The gate reason is the primitive; the Bool is derived
+
+    /// **The regression pin for the whole coverage refactor.** `advisorWorthy` used to be
+    /// a chain of boolean rungs; it is now derived from `advisorGateReason`. This asserts
+    /// the two agree across every shape the gate distinguishes, which is what makes that
+    /// change provably behaviour-neutral rather than merely believed to be.
+    ///
+    /// It must keep passing through the gate INVERSION too — at that point the reasons
+    /// change meaning, but "the Bool is exactly `reason.isWorthy`" must still hold, or the
+    /// coverage sweep starts explaining a verdict the app didn't reach.
+    @Test("Every gate reason agrees with the worthy Bool it derives")
+    func gateReasonAgreesWithWorthy() {
+        let context = context()
+        let now = Date()
+
+        var shapes: [(String, TaskItem, [TaskItem])] = []
+
+        // resolved
+        let done = task("Pay the water bill", effort: 15, in: context)
+        done.complete(now: now)
+        shapes.append(("resolved", done, []))
+
+        // plainly executable — the shape that must stay silent
+        shapes.append(("plain", task("Call the dentist", effort: 15, in: context), []))
+
+        // decision flag
+        let flagged = task("Pick a nursery", effort: 15, in: context)
+        flagged.needsDecision = true
+        shapes.append(("decisionFlag", flagged, []))
+
+        // decision wording
+        shapes.append(
+            (
+                "decisionWording", task("Should we move to Lisbon", effort: 15, in: context), []
+            ))
+
+        // large effort
+        shapes.append(("largeEffort", task("Renew passport", effort: 120, in: context), []))
+
+        // in progress
+        let doing = task("Sort the garage", effort: 15, status: .doing, in: context)
+        shapes.append(("doing", doing, []))
+
+        // overdue
+        let late = task("File the taxes", effort: 15, in: context)
+        late.dueDate = Calendar.current.date(byAdding: .day, value: -3, to: now)
+        shapes.append(("overdue", late, []))
+
+        // blocked
+        let blocker = task("Get the code", effort: 15, in: context)
+        let blocked = task("Order the photos", effort: 15, in: context)
+        if let blockerID = blocker.uuid {
+            blocked.addTaskBlocker(blockerID, among: [blocker, blocked])
+        }
+        shapes.append(("blocked", blocked, [blocker, blocked]))
+
+        for (label, task, among) in shapes {
+            let reason = TaskCapabilities.advisorGateReason(for: task, among: among, now: now)
+            let worthy = TaskCapabilities.advisorWorthy(for: task, among: among, now: now)
+            #expect(worthy == reason.isWorthy, "\(label): \(reason.rawValue)")
+        }
+    }
+
+    @Test("Resolved short-circuits every other rung")
+    func resolvedWinsOverEverySignal() {
+        let context = context()
+        // Deliberately trips several worthy rungs at once, then resolves.
+        let task = task("Should we move to Lisbon", effort: 240, in: context)
+        task.needsDecision = true
+        task.complete(now: Date())
+        #expect(TaskCapabilities.advisorGateReason(for: task) == .resolved)
+    }
+
 }

@@ -34,6 +34,47 @@ enum Capability: Hashable {
     case unstick(StallDiagnosis)
 }
 
+/// WHY the Advisor's deterministic pre-gate reached its verdict.
+///
+/// The reason is the primitive and `advisorWorthy` is derived from it, rather than the
+/// other way round. That inversion exists so the gate can be MEASURED: "41 of 58 tasks
+/// are worthy" is not actionable, but "14 are plain, 3 are already decomposed" says
+/// which way the boundary should move, and whether silence is rising because tasks are
+/// genuinely simple or because decomposition is doing its job.
+///
+/// Two cases mean silence for entirely different reasons and are deliberately NOT
+/// merged: `.plain` (nothing here to improve) and `.decomposed` (the work moved into
+/// the steps). Collapsing them would destroy exactly the signal this enum exists for.
+enum AdvisorGateReason: String, CaseIterable, Sendable {
+    // ── Silent ──
+    case resolved
+    case decomposed
+    case plain
+
+    // ── Worthy ──
+    case decisionFlag
+    case decisionWording
+    case largeEffort
+    case compoundTitle
+    case planningIntent
+    case stalled
+    case blocked
+    case doing
+    case overdue
+
+    /// Does this reason open the gate? The single place the Bool is decided.
+    var isWorthy: Bool {
+        switch self {
+        case .resolved, .decomposed, .plain: return false
+        default: return true
+        }
+    }
+
+    /// Silent reasons first, so a coverage table reads top-down from "why we said
+    /// nothing" to "why we spoke".
+    static var reportingOrder: [AdvisorGateReason] { allCases }
+}
+
 enum TaskCapabilities {
 
     /// The Advisor's deterministic pre-gate: should this task's page spend a model call?
@@ -44,20 +85,42 @@ enum TaskCapabilities {
     /// this list must not calcify (the `CaptureRoute` precedent: "simple inputs never
     /// use AI" is policy, not architecture). The model keeps its own `nothing` past the
     /// gate — two independent silence mechanisms, both first-class judgments.
+    ///
+    /// **The reason is the primitive; this Bool is derived** (`AdvisorGateReason`), so
+    /// the gate's verdict and the coverage sweep's explanation can never drift apart.
     static func advisorWorthy(
         for task: TaskItem, among tasks: [TaskItem] = [], now: Date = Date()
     ) -> Bool {
-        guard !task.status.isResolved else { return false }
-        if task.needsDecision { return true }
-        if DecisionShape.reads(title: task.title) { return true }
-        if BreakdownEligibility.evaluate(task, among: tasks) != nil { return true }
-        if StallDetector.diagnose(task, among: tasks, now: now) != nil { return true }
-        if task.hasActiveBlockers(among: tasks) { return true }
-        if task.status == .doing { return true }
-        if let due = task.dueDate, let days = TaskItem.daysUntil(due, now: now), days < 0 {
-            return true
+        advisorGateReason(for: task, among: tasks, now: now).isWorthy
+    }
+
+    /// The gate, stated as a reason.
+    ///
+    /// Rung order is load-bearing and is preserved EXACTLY as the boolean gate ran it:
+    /// the first rung that fires wins, so a task that is both stalled and blocked
+    /// reports `.stalled`. That is a reporting choice, not a semantic claim about which
+    /// matters more — and keeping the order identical is what makes this refactor
+    /// provably behaviour-neutral (`CapabilityTests.gateReasonAgreesWithWorthy`).
+    static func advisorGateReason(
+        for task: TaskItem, among tasks: [TaskItem] = [], now: Date = Date()
+    ) -> AdvisorGateReason {
+        guard !task.status.isResolved else { return .resolved }
+        if task.needsDecision { return .decisionFlag }
+        if DecisionShape.reads(title: task.title) { return .decisionWording }
+        if let breakdown = BreakdownEligibility.evaluate(task, among: tasks) {
+            switch breakdown {
+            case .largeEffort: return .largeEffort
+            case .compoundTitle: return .compoundTitle
+            case .planningIntent: return .planningIntent
+            }
         }
-        return false
+        if StallDetector.diagnose(task, among: tasks, now: now) != nil { return .stalled }
+        if task.hasActiveBlockers(among: tasks) { return .blocked }
+        if task.status == .doing { return .doing }
+        if let due = task.dueDate, let days = TaskItem.daysUntil(due, now: now), days < 0 {
+            return .overdue
+        }
+        return .plain
     }
 
     /// Everything this task should be offered, in render order.
