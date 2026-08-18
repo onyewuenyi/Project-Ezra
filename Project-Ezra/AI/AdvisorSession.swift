@@ -97,10 +97,25 @@ struct YesterdayOutcomeTool: Tool {
 
 // MARK: - Profile
 
-/// The advisor's session configuration — instructions bound to how it runs. `.deep`
-/// reasoning (the pinned on-device prior), the existing 600-token output cap,
-/// `.allowed` tool calling, and a history window so a day of turns never outgrows
-/// the context (the delta-turn contract makes every response complete on its own).
+/// The advisor's session configuration — instructions bound to how it runs: the existing
+/// 600-token output cap, `.allowed` tool calling, and a history window so a day of turns
+/// never outgrows the context (the delta-turn contract makes every response complete on
+/// its own).
+///
+/// **No reasoning level, and that is a finding (2026-08-17).** This asked for `.deep`,
+/// which made every on-device Today generation fail with `unsupportedCapability` —
+/// visible in the device log as `[TodayPlan] tier onDevice failed: unsupportedCapability
+/// (availability: available)`, so the day's plan silently fell through to the
+/// deterministic tail every single time. `SystemLanguageModel` reports
+/// `capabilities.contains(.reasoning) == false`; Apple's own guidance is that models
+/// differ in which capabilities they support and `contains()` exists to be checked first.
+///
+/// `.light`/`.moderate`/`.deep` belong to reasoning-capable paths, PCC among them — and
+/// PCC is not the fix, because the product constraint is on-device. The lesson is the
+/// same one the Task Advisor learned in the same hour: **quality here cannot be bought
+/// with a reasoning dial.** What this path DOES have is `guidedGeneration` and
+/// `toolCalling` (both true on device), which is why this profile's tools matter more
+/// than its reasoning ever did.
 struct AdvisorProfile: LanguageModelSession.DynamicProfile {
     let instructions: String
     let box: AdvisorToolContext
@@ -113,7 +128,6 @@ struct AdvisorProfile: LanguageModelSession.DynamicProfile {
             TaskDetailsTool(box: box)
             YesterdayOutcomeTool(box: box)
         }
-        .reasoningLevel(.deep)
         .maximumResponseTokens(TodayPlanSession.responseTokenCap)
         .toolCallingMode(.allowed)
         .historyTransform { history in

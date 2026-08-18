@@ -21,6 +21,7 @@
 #if DEBUG
 import CoreData
 import Foundation
+import FoundationModels
 
 @MainActor
 enum AdvisorDiagnostics {
@@ -30,15 +31,22 @@ enum AdvisorDiagnostics {
         let expected: Set<AdvisorMove>
         /// nil = the gate itself should answer (deterministic silence).
         let expectGateQuiet: Bool
+        /// The facts genuinely favour no option, so a recommendation is WRONG here —
+        /// scored, not merely printed: without this, `decide` + an invented pick passes
+        /// a fixture that exists to say "don't recommend". A product principle only
+        /// counts once it is a behavioural contract.
+        let expectAbstention: Bool
         let build: (NSManagedObjectContext) -> (TaskItem, [TaskItem])
 
         init(
             _ name: String, expected: Set<AdvisorMove> = [], gateQuiet: Bool = false,
+            abstains: Bool = false,
             build: @escaping (NSManagedObjectContext) -> (TaskItem, [TaskItem])
         ) {
             self.name = name
             self.expected = expected
             self.expectGateQuiet = gateQuiet
+            self.expectAbstention = abstains
             self.build = build
         }
     }
@@ -82,7 +90,8 @@ enum AdvisorDiagnostics {
                 in: context)
             return (task, [task])
         },
-        Fixture("ambiguous decision — abstention expected", expected: [.decide]) { context in
+        Fixture("ambiguous decision — abstention expected", expected: [.decide], abstains: true) {
+            context in
             let task = TaskItem(title: "Pick between the two schools", status: .todo, in: context)
             task.needsDecision = true
             task.isJudgmentCall = true
@@ -99,6 +108,20 @@ enum AdvisorDiagnostics {
         guard ProcessInfo.processInfo.arguments.contains("-AdvisorDiagnostics") else { return }
         print("=== ADVISOR DIAGNOSTICS ===")
         print("model available: \(AppBrain.onDeviceModelAvailable())")
+        // Which capabilities this silicon actually has. `availability == .available` says
+        // there IS a model; it does not say the model can do what a profile asks of it,
+        // and the difference between those two is invisible until a call fails. Printed
+        // because every Advisor generation on this device returned `unsupportedCapability`
+        // while availability read healthy — the profile requests something the hardware
+        // does not offer, and guessing which one costs a device round-trip per guess.
+        let caps = SystemLanguageModel.default.capabilities
+        print(
+            "capabilities: reasoning=\(caps.contains(.reasoning)) "
+                + "guidedGeneration=\(caps.contains(.guidedGeneration)) "
+                + "toolCalling=\(caps.contains(.toolCalling)) vision=\(caps.contains(.vision))")
+        print(
+            "advisor profile asks for: reasoningLevel="
+                + String(describing: CapabilityProfiles.taskAdvisor.reasoningLevel))
         let context = PersistenceStack.scratch
         let service = TaskAdvisorService()
         var agreements = 0
@@ -131,7 +154,13 @@ enum AdvisorDiagnostics {
 
             switch outcome {
             case .success(let reading):
-                let agreed = fixture.expected.contains(reading.move)
+                // Agreement is the move AND, where the facts favour nobody, the
+                // abstention. A confident pick on an ambiguous decision is a miss even
+                // when the move is right.
+                let abstained = reading.recommendation == nil
+                let agreed =
+                    fixture.expected.contains(reading.move)
+                    && (!fixture.expectAbstention || abstained)
                 if agreed { agreements += 1 }
                 var line =
                     "\(fixture.name): \(agreed ? "✓" : "✗") \(reading.move.rawValue) "
@@ -140,6 +169,9 @@ enum AdvisorDiagnostics {
                     line +=
                         reading.recommendation.map { " · recommended “\($0.label)”" }
                         ?? " · abstained"
+                }
+                if fixture.expectAbstention, !abstained {
+                    line += " — expected abstention"
                 }
                 print(line)
                 print("    “\(reading.observation)”")
