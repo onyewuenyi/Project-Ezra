@@ -49,6 +49,18 @@ enum AdvisorCoverageDiagnostics {
         // Restated so the number that goes in a commit message can be copied from one
         // line rather than reassembled from the table.
         print("  " + report.line)
+
+        // The two lines that otherwise live only on the Settings diagnostics card. They
+        // are the BASELINE the gate inversion gets judged against, and a baseline you
+        // have to read off a screenshot is one that gets transcribed slightly wrong.
+        // Printing them here makes capturing it a single headless command, and makes the
+        // after-measurement literally comparable to the before.
+        print("  — baseline —")
+        print("  " + (AdvisorMetrics.shared.footerLine ?? "advisor: (no outcomes recorded yet)"))
+        print(
+            "  "
+                + (AdvisorMetrics.shared.progressionLine(among: tasks)
+                    ?? "moved: (no acted events yet)"))
     }
 }
 
