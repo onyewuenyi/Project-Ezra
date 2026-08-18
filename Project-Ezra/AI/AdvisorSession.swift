@@ -129,7 +129,24 @@ struct AdvisorProfile: LanguageModelSession.DynamicProfile {
             YesterdayOutcomeTool(box: box)
         }
         .maximumResponseTokens(TodayPlanSession.responseTokenCap)
-        .toolCallingMode(.allowed)
+        // `.toolCallingMode(.allowed)` REMOVED (2026-08-17). It is the documented default,
+        // so stating it bought nothing — and on device it cost everything: the session
+        // failed every generation with
+        //
+        //   Unrecognized system-instruction prefix ID:
+        //   com.apple.fm_api.tool_calls_override … invalidClientData
+        //
+        // i.e. the framework could not apply the override this modifier installs, so the
+        // whole request was rejected as malformed client data. Note the device reports
+        // `capabilities.contains(.toolCalling) == true` — tool calling itself is fine and
+        // the tools above still work. It is the MODE MODIFIER that is unusable here,
+        // which is a different fault from the reasoning-level one and had to be found
+        // separately.
+        //
+        // Re-add only with a device run attached: this is the second beta-surface
+        // modifier in one day to fail while its capability reported available, so treat
+        // "the API exists and the capability is true" as insufficient evidence that a
+        // profile modifier is safe to ship.
         .historyTransform { history in
             Array(history.suffix(Self.historyWindow))
         }
