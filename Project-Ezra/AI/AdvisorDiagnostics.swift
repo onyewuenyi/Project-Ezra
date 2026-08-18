@@ -104,6 +104,19 @@ enum AdvisorDiagnostics {
         },
     ]
 
+    /// How many times each fixture runs. Three is the smallest number that can
+    /// distinguish "usually" from "once" — a majority needs two, and two-of-two cannot
+    /// tell a stable answer from a coin flip that landed twice. Raise it with
+    /// `-AdvisorRepeats N` when a tuning decision needs a tighter read; each extra pass
+    /// costs roughly eight seconds per worthy fixture.
+    static var repeats: Int {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-AdvisorRepeats"), args.indices.contains(i + 1),
+            let n = Int(args[i + 1]), n > 0
+        else { return 3 }
+        return n
+    }
+
     static func runIfRequested() async {
         guard ProcessInfo.processInfo.arguments.contains("-AdvisorDiagnostics") else { return }
         print("=== ADVISOR DIAGNOSTICS ===")
@@ -126,6 +139,7 @@ enum AdvisorDiagnostics {
         let service = TaskAdvisorService()
         var agreements = 0
         var judged = 0
+        var unstable = 0
 
         for fixture in fixtures {
             let (task, among) = fixture.build(context)
@@ -147,45 +161,70 @@ enum AdvisorDiagnostics {
             var facts = TaskAdvisorFacts.make(task: task, among: among)
             facts.relatedLines = await TaskAdvisorService.relatedLines(
                 for: facts, among: among)
-            let started = Date()
-            let outcome = await service.read(facts)
-            let ms = Int(Date().timeIntervalSince(started) * 1000)
-            judged += 1
 
-            switch outcome {
-            case .success(let reading):
-                // Agreement is the move AND, where the facts favour nobody, the
-                // abstention. A confident pick on an ambiguous decision is a miss even
-                // when the move is right.
-                let abstained = reading.recommendation == nil
-                let agreed =
-                    fixture.expected.contains(reading.move)
-                    && (!fixture.expectAbstention || abstained)
-                if agreed { agreements += 1 }
-                var line =
-                    "\(fixture.name): \(agreed ? "✓" : "✗") \(reading.move.rawValue) "
-                    + "(expected \(fixture.expected.map(\.rawValue).sorted().joined(separator: "/")), \(ms)ms)"
-                if reading.move == .decide {
-                    line +=
-                        reading.recommendation.map { " · recommended “\($0.label)”" }
-                        ?? " · abstained"
+            // REPEATED, because one sample of a stochastic system is an anecdote. At
+            // temperature 0.5 this eval returned 5/8, 6/8, 7/8 and 6/8 across four runs —
+            // and two of those had byte-identical prompts and binaries. Reading a single
+            // run as a measurement credited prompt edits with movement that was noise,
+            // which is exactly the mistake this harness exists to prevent.
+            var moves: [String] = []
+            var agreedCount = 0
+            var times: [Int] = []
+            var observation = ""
+            var failure: String?
+
+            for _ in 0..<repeats {
+                let started = Date()
+                let outcome = await service.read(facts)
+                times.append(Int(Date().timeIntervalSince(started) * 1000))
+
+                switch outcome {
+                case .success(let reading):
+                    // Agreement is the move AND, where the facts favour nobody, the
+                    // abstention. A confident pick on an ambiguous decision is a miss even
+                    // when the move is right.
+                    let abstained = reading.recommendation == nil
+                    let agreed =
+                        fixture.expected.contains(reading.move)
+                        && (!fixture.expectAbstention || abstained)
+                    if agreed { agreedCount += 1 }
+                    moves.append(reading.move.rawValue + (abstained ? "" : "*"))
+                    if observation.isEmpty { observation = reading.observation }
+                case .unavailable:
+                    failure = "no model (fallback path); run on device"
+                case .timedOut:
+                    failure = "timed out — the salvage tripwire"
+                    moves.append("timeout")
+                case .cancelled:
+                    failure = "cancelled"
+                case .failed(let label):
+                    failure = "failed (\(label))"
+                    moves.append("error")
                 }
-                if fixture.expectAbstention, !abstained {
-                    line += " — expected abstention"
-                }
-                print(line)
-                print("    “\(reading.observation)”")
-            case .unavailable:
-                print("\(fixture.name): — no model (fallback path); run on device")
-            case .timedOut:
-                print("\(fixture.name): ✗ timed out (\(ms)ms) — the salvage tripwire")
-            case .cancelled:
-                print("\(fixture.name): — cancelled")
-            case .failed(let label):
-                print("\(fixture.name): ✗ failed (\(label))")
             }
+            judged += 1
+            // A fixture counts as agreed only on a MAJORITY, so a lucky single hit does
+            // not read as a pass.
+            let majority = agreedCount * 2 > repeats
+            if majority { agreements += 1 }
+            if agreedCount > 0, !majority { unstable += 1 }
+            if agreedCount == 0, repeats > 1, Set(moves).count > 1 { unstable += 1 }
+
+            let expected = fixture.expected.map(\.rawValue).sorted().joined(separator: "/")
+            let spread = times.isEmpty ? "—" : "\(times.min()!)–\(times.max()!)ms"
+            var line =
+                "\(fixture.name): \(majority ? "✓" : "✗") \(agreedCount)/\(repeats) "
+                + "[\(moves.joined(separator: ", "))] (expected \(expected), \(spread))"
+            if let failure { line += " — \(failure)" }
+            print(line)
+            if !observation.isEmpty { print("    “\(observation)”") }
         }
-        print("agreement: \(agreements)/\(judged)")
+        print("agreement: \(agreements)/\(judged) fixtures (majority of \(repeats) runs each)")
+        if unstable > 0 {
+            // The number that says whether the eval can be trusted to guide a tuning
+            // decision at all. A fixture that flips between runs is not evidence.
+            print("unstable: \(unstable) fixture(s) gave different answers across runs")
+        }
         print("=== END ADVISOR DIAGNOSTICS ===")
     }
 }
