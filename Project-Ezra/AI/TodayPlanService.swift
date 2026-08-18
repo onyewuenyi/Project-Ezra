@@ -410,7 +410,18 @@ extension AppBrain {
             @unknown default: return "languageModelError"
             }
         }
-        return String(describing: type(of: error))
+        // An error from NEITHER public vocabulary. The bare type name was all this used
+        // to report, which is how `[TodayPlan] tier onDevice failed: GenerativeError`
+        // stood in the log as an unactionable fact: `GenerativeError` is not in the public
+        // SDK at all — a private type leaking through the API — so there is no case to
+        // switch on and the name alone says nothing about what went wrong.
+        //
+        // Carry the description too. It is the only channel an unmapped error has, and a
+        // diagnostic that names a failure without describing it costs a device round-trip
+        // per guess (the `unsupportedCapability` hunt is the worked example).
+        let name = String(describing: type(of: error))
+        let detail = String(describing: error)
+        return detail.isEmpty || detail == name ? name : "\(name): \(detail)"
     }
 
     /// The current on-device model availability, as a short label for the footer.

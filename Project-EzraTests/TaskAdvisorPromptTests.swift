@@ -46,15 +46,87 @@ struct TaskAdvisorPromptTests {
         }
     }
 
-    @Test("The honesty rules are stated: silence is good, evidence gates advice")
+    @Test("The honesty rules are stated: evidence gates advice")
     func honestyRules() {
         let instructions = TaskAdvisorService.instructions
-        #expect(instructions.contains("Silence beats noise"))
+        // "Silence beats noise" was DELETED (2026-08-17). It made silence the posture
+        // rather than one honest answer among five, and the first device eval showed the
+        // cost: the model reached for `advise` or said nothing on tasks that plainly
+        // warranted `decide` or `createSteps`. See `silenceIsTheExceptionNotTheDefault`.
+        #expect(!instructions.contains("Silence beats noise"))
         #expect(instructions.contains("Recommendation requires evidence"))
         #expect(instructions.contains("honest abstention beats a coin flip"))
         #expect(instructions.contains("never contradict them"))  // sensors are fixed
         #expect(instructions.contains("A Start button already exists"))
         #expect(instructions.contains("You never decide, start, or change anything"))
+    }
+
+    @Test("The move is commitment-sized, not the whole task")
+    func commitmentSized() {
+        let instructions = TaskAdvisorService.instructions
+        #expect(instructions.contains("SMALLEST USEFUL COMMITMENT"))
+        #expect(instructions.contains("not trying to finish the"))
+    }
+
+    @Test("Every sentence earns its space — depth is layered, not omitted")
+    func earnsItsSpace() {
+        let instructions = TaskAdvisorService.instructions
+        #expect(instructions.contains("Every sentence must earn its space"))
+        // Was "leave guidance empty". Guidance is no longer expensive: it sits behind the
+        // disclosure, so the instruction is to LAYER depth rather than drop it.
+        #expect(instructions.contains("Guidance is the second layer"))
+        // Matched short of the line wrap — the prompt breaks between "20" and "words".
+        #expect(instructions.contains("ONE sentence, at most 20"))
+    }
+
+    // MARK: - The posture inversion (2026-08-17)
+
+    @Test("Silence is the exception, not the default — position is the gradient")
+    func silenceIsTheExceptionNotTheDefault() {
+        let instructions = TaskAdvisorService.instructions
+        // Order in the move list IS the instruction. `nothing` led it; a small model reads
+        // the first option as the preferred one, and the eval showed exactly that bias.
+        let advise = instructions.range(of: "- advise")
+        let nothing = instructions.range(of: "- nothing")
+        #expect(advise != nil && nothing != nil)
+        if let a = advise, let n = nothing { #expect(a.lowerBound < n.lowerBound) }
+        #expect(instructions.contains("A short useful line beats both"))
+        #expect(instructions.contains("fallback, not the default"))
+    }
+
+    @Test("Every emission must name what got better")
+    func emissionMustNameAGain() {
+        let instructions = TaskAdvisorService.instructions
+        #expect(instructions.contains("what became better for the person"))
+        // The enumeration is load-bearing: an unqualified "justify yourself" bar makes a
+        // small model resolve uncertainty toward silence, recreating the problem.
+        #expect(instructions.contains("named the real obstacle"))
+        #expect(instructions.contains("said what a fact MEANS"))
+    }
+
+    @Test("The design law is stated AND demonstrated")
+    func neverRestateTheScreen() {
+        let instructions = TaskAdvisorService.instructions
+        #expect(instructions.contains("Never restate what the screen already shows"))
+        // Worked contrast pairs, because an abstract rule is a hope: a small model at
+        // temperature 0.5 follows examples far more reliably than principles. The first
+        // device eval produced a textbook restatement on the kitchen fixture, which is
+        // the pair now written into the prompt.
+        #expect(instructions.contains("BAD:"))
+        #expect(instructions.contains("GOOD:"))
+        #expect(instructions.contains("Policy #88102"))
+    }
+
+    @Test("Certainty lives in the grammar, and urgency is never invented")
+    func certaintyLadder() {
+        let instructions = TaskAdvisorService.instructions
+        // The four rungs — the product's substitute for a confidence score, which it
+        // refuses to render.
+        #expect(instructions.contains("Certainty lives in your grammar, never in a number"))
+        #expect(instructions.contains("appears to be"))
+        #expect(instructions.contains("It may be worth"))
+        #expect(instructions.contains("not enough information"))
+        #expect(instructions.contains("Never invent urgency"))
     }
 
     @Test("The per-task prompt IS the facts block — nothing else rides along")
