@@ -30,8 +30,9 @@ struct TaskAdvisorService {
     /// user could be shown survived the trust boundary.
     func read(_ facts: TaskAdvisorFacts) async -> ModelResult<ValidatedReading> {
         let outcome = await ModelRun.perform(.taskAdvisor, deadline: ModelDeadline.cardSeconds) {
-            let session = CapabilityProfiles.session(
-                instructions: Self.instructions, config: CapabilityProfiles.taskAdvisor)
+            // The warm spare when one is waiting; a cold build otherwise. Either way the
+            // next spare starts warming, so a pager swipe lands on a hot prefix.
+            let session = Self.sessionPool.take(instructions: Self.instructions)
             return try await session.respond(
                 to: Self.prompt(for: facts), generating: TaskAdvisorReading.self
             ).content
@@ -47,6 +48,24 @@ struct TaskAdvisorService {
         case .cancelled: return .cancelled
         case .failed(let label): return .failed(label)
         }
+    }
+
+    /// Prewarmed sessions. The builder constructs the real profile — instructions and
+    /// config both — so the prefix being warmed is the prefix that will be sent, which is
+    /// the whole difference between this and the anonymous warm-up it replaces.
+    static let sessionPool = AdvisorSessionPool<LanguageModelSession> { instructions in
+        let session = CapabilityProfiles.session(
+            instructions: instructions, config: CapabilityProfiles.taskAdvisor)
+        session.prewarm()
+        return session
+    }
+
+    /// Warm the Advisor's prefix while a detail page settles. A no-op off-device and
+    /// under tests; safe to call on every page activation because `prepare` skips when a
+    /// matching spare is already waiting.
+    static func prewarm() {
+        guard AppBrain.onDeviceModelAvailable() else { return }
+        sessionPool.prepare(instructions: instructions)
     }
 
     /// The related-work package, computed at generation time (never in `make` — the

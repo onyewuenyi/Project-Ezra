@@ -133,8 +133,17 @@ struct TaskDetailView: View {
             // generation on a page nobody is looking at).
             if isActive {
                 advisorStore.ensure(task: task, among: allTasks)
-            } else if TaskCapabilities.advisorWorthy(for: task, among: allTasks) {
-                ModelWarmup.prewarmSharedSession()
+            } else {
+                // Warm the ADVISOR'S OWN prefix, not an anonymous session. This used to
+                // call `ModelWarmup.prewarmSharedSession()`, which paid the cost and left
+                // the Advisor's ~2KB instruction block cold anyway — the same mistake
+                // CLAUDE.md records for capture.
+                //
+                // The `advisorWorthy` condition is gone too. It was about to become a
+                // guard that lies: the gate inversion makes nearly every neighbour worthy,
+                // so it would filter nothing while still reading as a filter. `isActive`
+                // is the real bound, and it is the one the pager already uses.
+                TaskAdvisorService.prewarm()
             }
             // A task re-entered mid-flight gets its first move too — the commitment is
             // still live, and the bar it renders in is now always on screen. Bounded
@@ -176,6 +185,27 @@ struct TaskDetailView: View {
                 advisorStore.ensure(task: task, among: allTasks)
                 if task.status == .doing, kickoffStep == nil { fetchKickoff() }
             }
+        }
+        // THE LOOP CLOSES HERE. Act → the task changes → the Advisor re-judges → the
+        // reading becomes the next reading. Without this the Advisor is a static
+        // recommendation generator: it would still say "this is blocked" after the
+        // blocker was cleared.
+        //
+        // Keying on `updatedAt` rather than per-action calls is deliberate — EVERY
+        // mutation helper bumps it (a documented model invariant), so one hook covers
+        // advisor actions, property-chip edits, and status changes alike. `ensure`
+        // no-ops on an unchanged fingerprint, so an edit that doesn't change the
+        // judgment costs nothing.
+        .onChange(of: task.updatedAt) { _, _ in
+            guard isActive else { return }
+            advisorStore.ensure(task: task, among: allTasks)
+        }
+        // Resolving a blocker changes the BLOCKER's state, not this task's `updatedAt`,
+        // so the hook above cannot see it — and this is exactly the "blocker cleared →
+        // you're ready to continue" moment.
+        .onChange(of: openedBlocker == nil) { _, closed in
+            guard closed, isActive else { return }
+            advisorStore.ensure(task: task, among: allTasks)
         }
         .onDisappear {
             // Backstop for a dismiss mid-edit (focus never formally left the field). The
