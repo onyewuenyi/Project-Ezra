@@ -67,9 +67,17 @@ struct TaskAdvisorReading: Sendable {
     )
     let nextMove: String
 
+    /// The move, constrained at the DECODER (`.anyOf`), not merely requested in prose.
+    /// A `description` is prompt text the model may violate; a `GenerationGuide` is
+    /// enforced by constrained decoding, so an off-vocabulary emission is structurally
+    /// impossible rather than silently degrading to `.advise` and losing a real
+    /// `decide` reading. The field stays a `String` and `AdvisorMove(lenient:)` stays
+    /// the reader: constrain the model where possible, keep an application-level
+    /// escape hatch where necessary.
     @Guide(
         description:
-            "Exactly one of: nothing, advise, decide, createSteps, openBlocker. Use nothing when you have nothing useful to add — that is a good answer. Use advise when the words are the help and no button applies."
+            "Use nothing when you have nothing useful to add — that is a good answer. Use advise when the words are the help and no button applies.",
+        .anyOf(AdvisorMove.allCases.map(\.rawValue))
     )
     let action: String
 
@@ -143,6 +151,11 @@ struct ValidatedReading: Sendable, Equatable {
     let recommendation: AdvisorRecommendation?
     /// Non-empty only for `.createSteps` — already `BreakdownStep`s, ready for `splitInto`.
     let steps: [BreakdownStep]
+    /// The deterministic facts this reading was made from, in the user's terms — what
+    /// "Why this?" reveals. **Bound to the reading, never recomputed later**, so the
+    /// evidence can't drift from the reading that used it. The model contributes
+    /// nothing to it (see `TaskAdvisorFacts.userVisibleEvidence`).
+    var evidence: [String] = []
 
     /// The silence value — what `.nothing` validates to.
     static let silence = ValidatedReading(
@@ -155,14 +168,65 @@ extension TaskAdvisorReading {
     /// The trust boundary. Returns nil only when nothing usable survives (an empty
     /// observation on a non-nothing move) — which the service reports as
     /// `noUsableOutput`, never renders.
+    /// The first `limit` sentences, trimmed.
+    ///
+    /// Uses `enumerateSubstrings(.bySentences)` rather than splitting on ".", which would
+    /// cut "This is ~15 min. of work." in half — measured: the tokenizer keeps that one
+    /// whole, where a naive split does not.
+    ///
+    /// It is NOT abbreviation-proof, which was worth measuring rather than assuming. A
+    /// leading title splits off as its own fragment — "Dr. Patel's referral is the
+    /// blocker." enumerates as ["Dr.", "Patel's referral is the blocker."] — so a plain
+    /// count-based clamp would return the word "Dr." as the whole observation. Hence
+    /// `minimumMeaningful`: the clamp counts sentences but never returns a fragment too
+    /// short to BE one, and keeps taking until it has something substantive. That handles
+    /// the general case without a brittle list of abbreviations to maintain.
+    ///
+    /// A single pathologically long sentence passes through UNCHANGED and on purpose:
+    /// that is a prompt problem, and it should surface in the eval's word count where it
+    /// can be fixed, not be hidden here behind a silent ellipsis.
+    static func clamped(_ text: String, sentences limit: Int) -> String {
+        guard limit > 0 else { return "" }
+        var kept: [String] = []
+        let ns = text as NSString
+        ns.enumerateSubstrings(
+            in: NSRange(location: 0, length: ns.length),
+            options: [.bySentences, .substringNotRequired]
+        ) { _, range, _, stop in
+            let piece = ns.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !piece.isEmpty else { return }
+            kept.append(piece)
+            let soFar = kept.joined(separator: " ")
+            if kept.count >= limit, soFar.count >= Self.minimumMeaningful {
+                stop.pointee = true
+            }
+        }
+        return kept.isEmpty ? text : kept.joined(separator: " ")
+    }
+
+    /// Below this many characters, a "sentence" is a tokenizer artefact (a title, an
+    /// initial) rather than a thought, and the clamp keeps reading.
+    static let minimumMeaningful = 16
+
     func validated(against facts: TaskAdvisorFacts) -> ValidatedReading? {
         let move = AdvisorMove(lenient: action) ?? .advise
         if move == .nothing { return .silence }
 
-        let observation = trimmed(observation)
+        // Brevity is enforced HERE, not requested in the prompt. "One sentence" is a hope
+        // when it is only an instruction; a small model at temperature 0.5 will sometimes
+        // add the helpful second sentence, and by then the card has already grown. The
+        // clamp is the same shape as `sanitizedOptions` — a COLLECTION CLAMP over
+        // sentences, never a rewrite, never a mid-word cut, never an ellipsis.
+        let observation = Self.clamped(trimmed(observation), sentences: 1)
         guard !observation.isEmpty else { return nil }
-        let guidance = nonEmpty(guidance)
-        let nextMove = nonEmpty(nextMove)
+        // Guidance gets TWO. It sits behind the disclosure, so the person reading it has
+        // asked for more — clamping a request for depth to one sentence answers a
+        // different question than the one they asked.
+        let guidance = nonEmpty(guidance).map { Self.clamped($0, sentences: 2) }
+        let nextMove = nonEmpty(nextMove).map { Self.clamped($0, sentences: 1) }
+        // The evidence is attached HERE, where the facts are still in hand, so a
+        // reading always carries the receipt it was made from.
+        let evidence = facts.userVisibleEvidence
 
         switch move {
         case .nothing:
@@ -171,43 +235,46 @@ extension TaskAdvisorReading {
         case .decide:
             let choices = Self.sanitizedOptions(options)
             guard choices.count >= 2 else {
-                return advise(observation, guidance, nextMove)
+                return advise(observation, guidance, nextMove, evidence)
             }
             return ValidatedReading(
                 move: .decide, observation: observation, guidance: guidance, nextMove: nextMove,
-                options: choices, recommendation: grounded(in: choices), steps: [])
+                options: choices, recommendation: grounded(in: choices), steps: [],
+                evidence: evidence)
 
         case .createSteps:
             let cleaned = BreakdownStep.sanitized(
                 steps.map { BreakdownStep(title: $0.title, effortMinutes: $0.effortMinutes) })
             guard cleaned.count >= 2 else {
-                return advise(observation, guidance, nextMove)
+                return advise(observation, guidance, nextMove, evidence)
             }
             return ValidatedReading(
                 move: .createSteps, observation: observation, guidance: guidance,
-                nextMove: nextMove, options: [], recommendation: nil, steps: cleaned)
+                nextMove: nextMove, options: [], recommendation: nil, steps: cleaned,
+                evidence: evidence)
 
         case .openBlocker:
             guard !facts.blockerTitles.isEmpty else {
-                return advise(observation, guidance, nextMove)
+                return advise(observation, guidance, nextMove, evidence)
             }
             return ValidatedReading(
                 move: .openBlocker, observation: observation, guidance: guidance,
-                nextMove: nextMove, options: [], recommendation: nil, steps: [])
+                nextMove: nextMove, options: [], recommendation: nil, steps: [],
+                evidence: evidence)
 
         case .advise:
-            return advise(observation, guidance, nextMove)
+            return advise(observation, guidance, nextMove, evidence)
         }
     }
 
     private func advise(
-        _ observation: String, _ guidance: String?, _ nextMove: String?
+        _ observation: String, _ guidance: String?, _ nextMove: String?, _ evidence: [String]
     )
         -> ValidatedReading
     {
         ValidatedReading(
             move: .advise, observation: observation, guidance: guidance, nextMove: nextMove,
-            options: [], recommendation: nil, steps: [])
+            options: [], recommendation: nil, steps: [], evidence: evidence)
     }
 
     /// Trim, drop empties, de-duplicate case-insensitively, clamp to 4. Order kept —

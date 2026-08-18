@@ -192,4 +192,53 @@ struct TaskAdvisorReadingTests {
         #expect(validated?.options.isEmpty == true)
         #expect(validated?.steps.isEmpty == true)
     }
+
+    // MARK: - Brevity is a contract, not a request (2026-08-17)
+
+    @Test("A three-sentence observation keeps its first sentence, verbatim")
+    func observationClampsToOneSentence() {
+        let text = "The quote hasn't come back in nine days. You could chase it. Or pick another supplier."
+        let clamped = TaskAdvisorReading.clamped(text, sentences: 1)
+        #expect(clamped == "The quote hasn't come back in nine days.")
+        // No ellipsis, no mid-word cut — a clamp is a collection operation, not a trim.
+        #expect(!clamped.contains("…"))
+        #expect(!clamped.contains("..."))
+    }
+
+    @Test("Abbreviations don't produce a one-word observation")
+    func abbreviationsSurviveTheClamp() {
+        // MEASURED, not assumed. `.bySentences` keeps "~15 min." whole (a naive split on
+        // "." would not) but DOES split a leading title: "Dr. Patel's…" enumerates as
+        // ["Dr.", "Patel's referral is the blocker."]. A plain count-based clamp would
+        // therefore have returned the word "Dr." as the entire observation.
+        let text = "Dr. Patel's referral is the blocker. Chase it Monday."
+        let clamped = TaskAdvisorReading.clamped(text, sentences: 1)
+        #expect(clamped == "Dr. Patel's referral is the blocker.")
+        #expect(clamped.count >= TaskAdvisorReading.minimumMeaningful)
+
+        let est = "This is ~15 min. of work. The rest can wait."
+        #expect(TaskAdvisorReading.clamped(est, sentences: 1) == "This is ~15 min. of work.")
+    }
+
+    @Test("Guidance keeps two sentences — depth was asked for")
+    func guidanceClampsToTwo() {
+        let text = "The part is discontinued. A generic fits most models. Ask the plumber first."
+        #expect(
+            TaskAdvisorReading.clamped(text, sentences: 2)
+                == "The part is discontinued. A generic fits most models.")
+    }
+
+    @Test("One long sentence passes through untouched — that is a prompt problem, not a UI one")
+    func oneLongSentenceIsNotTruncated() {
+        let long = String(repeating: "and then something else happened ", count: 12) + "finally."
+        #expect(TaskAdvisorReading.clamped(long, sentences: 1) == long)
+    }
+
+    @Test("Empty and single-sentence text are unchanged")
+    func degenerateInputs() {
+        #expect(TaskAdvisorReading.clamped("", sentences: 1) == "")
+        #expect(TaskAdvisorReading.clamped("Just one.", sentences: 1) == "Just one.")
+        #expect(TaskAdvisorReading.clamped("No terminator", sentences: 1) == "No terminator")
+    }
+
 }
