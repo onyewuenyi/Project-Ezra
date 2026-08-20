@@ -588,6 +588,12 @@ final class AppBrain {
         let haystack = normalizedForGrounding(rawText)
         if let quote = intent.sourceQuote, !quote.isEmpty {
             let needle = normalizedForGrounding(quote)
+            // Rung 1: a verified quote is sufficient — paraphrases can share zero
+            // words with their source ("Clean the living room" ← "take care of the
+            // house"), so a lexical check against the quote or the capture cannot
+            // distinguish a good paraphrase from an unrelated fabricated title.
+            // The remaining guard is RambleEvalTests: a model that consistently
+            // attaches real quotes to unrelated titles fails the accuracy floor.
             if !needle.isEmpty, haystack.contains(needle) { return true }
         }
         let captureWords = CorrectionProfile.significantWords(rawText)

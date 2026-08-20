@@ -800,9 +800,17 @@ final class AdvisorMetrics {
             // a footer that simply drops the row looks like a product with no opinion.
             parts.append("lift n/a")
         }
-        if !actedEvents.isEmpty {
-            let byTask = Dictionary(grouping: actedEvents, by: \.taskID)
-            let reIntervention = Double(actedEvents.count) / Double(byTask.count)
+        // Re-intervention over LIVE tasks only, so every number in this line describes
+        // the same population — `progression(among:)` already intersects its cohorts
+        // with the live set, and deleted or merged tasks would otherwise inflate this
+        // one denominator while moved% answered a different cohort. (Cherry-picked
+        // intent from a parallel review branch; the code it patched predates v5's
+        // cohort rework, so the fix is translated rather than merged.)
+        let liveIDs = Set(tasks.compactMap(\.uuid))
+        let liveEvents = actedEvents.filter { liveIDs.contains($0.taskID) }
+        if !liveEvents.isEmpty {
+            let byTask = Dictionary(grouping: liveEvents, by: \.taskID)
+            let reIntervention = Double(liveEvents.count) / Double(byTask.count)
             parts.append("re-int \(String(format: "%.1f", reIntervention))")
         }
         guard !parts.isEmpty else { return nil }

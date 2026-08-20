@@ -33,6 +33,10 @@ struct TaskAdvisorFacts: Sendable, Equatable {
     /// Days past due (positive), nil when not overdue. Prompt-only; NOT in the
     /// fingerprint — it ticks with the calendar, and `dueDate` carries the fact.
     var overdueDays: Int?
+    /// Days until due (non-negative), nil when overdue or no due date. Precomputed at
+    /// `make()` time so `promptBlock` never calls `Date()` at render time. Prompt-only;
+    /// NOT in the fingerprint.
+    var daysUntilDue: Int?
     var isUrgent: Bool
     var needsDecision: Bool
     var isJudgmentCall: Bool
@@ -90,6 +94,12 @@ struct TaskAdvisorFacts: Sendable, Equatable {
             guard let days = TaskItem.daysUntil(due, now: now), days < 0 else { return nil }
             return -days
         }
+        let daysUntil =
+            overdue == nil
+            ? task.dueDate.flatMap { due -> Int? in
+                guard let days = TaskItem.daysUntil(due, now: now), days >= 0 else { return nil }
+                return days
+            } : nil
         return TaskAdvisorFacts(
             id: task.uuid,
             title: task.title,
@@ -101,6 +111,7 @@ struct TaskAdvisorFacts: Sendable, Equatable {
             effortMinutes: task.effortMinutes,
             dueDate: task.dueDate,
             overdueDays: overdue,
+            daysUntilDue: daysUntil,
             isUrgent: task.isUrgent,
             needsDecision: task.needsDecision,
             isJudgmentCall: task.isJudgmentCall,
@@ -159,8 +170,7 @@ struct TaskAdvisorFacts: Sendable, Equatable {
         if let effort = effortMinutes { lines.append("ESTIMATED: ~\(effort) min") }
         if let overdueDays {
             lines.append("DUE: \(overdueDays) day\(overdueDays == 1 ? "" : "s") overdue")
-        } else if let dueDate {
-            let days = TaskItem.daysUntil(dueDate, now: Date()) ?? 0
+        } else if let days = daysUntilDue {
             lines.append(days == 0 ? "DUE: today" : "DUE: in \(days) day\(days == 1 ? "" : "s")")
         }
         if isUrgent { lines.append("URGENT: flagged by the person") }

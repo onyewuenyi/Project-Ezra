@@ -134,7 +134,7 @@ struct TaskAdvisorPromptTests {
         let facts = TaskAdvisorFacts(
             id: UUID(), title: "Fix the boiler", notes: nil, category: "Home",
             rawCapture: "", reasoning: "", status: .todo, effortMinutes: nil,
-            dueDate: nil, overdueDays: nil, isUrgent: false, needsDecision: false,
+            dueDate: nil, overdueDays: nil, daysUntilDue: nil, isUrgent: false, needsDecision: false,
             isJudgmentCall: false, decisionShaped: false, deferralCount: 0, quietDays: 0,
             blockerTitles: ["Get the part"], blockerIDs: [], dependentTitles: [],
             childIDs: [], openStepTitles: [], stepLabel: nil, parentTitle: nil,

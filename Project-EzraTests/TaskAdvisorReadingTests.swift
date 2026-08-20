@@ -22,7 +22,7 @@ struct TaskAdvisorReadingTests {
         TaskAdvisorFacts(
             id: UUID(), title: "Renew passport", notes: nil, category: "Admin",
             rawCapture: "", reasoning: "", status: .todo, effortMinutes: 90,
-            dueDate: nil, overdueDays: nil, isUrgent: false, needsDecision: false,
+            dueDate: nil, overdueDays: nil, daysUntilDue: nil, isUrgent: false, needsDecision: false,
             isJudgmentCall: false, decisionShaped: false, deferralCount: 0, quietDays: 0,
             blockerTitles: blockers, blockerIDs: [], dependentTitles: [], childIDs: [],
             openStepTitles: [], stepLabel: nil, parentTitle: nil, diagnosis: nil,

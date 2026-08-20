@@ -191,6 +191,7 @@ enum AdvisorDiagnostics {
             // which is exactly the mistake this harness exists to prevent.
             var moves: [String] = []
             var agreedCount = 0
+            var skippedRuns = 0
             var times: [Int] = []
             var observation = ""
             var failure: String?
@@ -213,29 +214,44 @@ enum AdvisorDiagnostics {
                     moves.append(reading.move.rawValue + (abstained ? "" : "*"))
                     if observation.isEmpty { observation = reading.observation }
                 case .unavailable:
+                    // NOT a judgment — no model means nothing was judged, and counting
+                    // it as disagreement made every model-less simulator run read as
+                    // 0/N agreement. (Cherry-picked intent from a parallel review
+                    // branch, translated into the repeated-runs harness.)
                     failure = "no model (fallback path); run on device"
+                    skippedRuns += 1
                 case .timedOut:
                     failure = "timed out — the salvage tripwire"
                     moves.append("timeout")
                 case .cancelled:
                     failure = "cancelled"
+                    skippedRuns += 1
                 case .failed(let label):
                     failure = "failed (\(label))"
                     moves.append("error")
                 }
             }
+            // A fixture none of whose runs produced a judgment is SKIPPED, not
+            // failed — the agreement score answers "does the model pick the right
+            // move?", and a run with no model answers a different question.
+            let judgedRuns = repeats - skippedRuns
+            guard judgedRuns > 0 else {
+                print("\(fixture.name): — skipped (\(failure ?? "no judged runs"))")
+                continue
+            }
             judged += 1
-            // A fixture counts as agreed only on a MAJORITY, so a lucky single hit does
-            // not read as a pass.
-            let majority = agreedCount * 2 > repeats
+            // A fixture counts as agreed only on a MAJORITY of its JUDGED runs, so a
+            // lucky single hit does not read as a pass — and a half-skipped fixture
+            // is not graded against runs that never judged.
+            let majority = agreedCount * 2 > judgedRuns
             if majority { agreements += 1 }
             if agreedCount > 0, !majority { unstable += 1 }
-            if agreedCount == 0, repeats > 1, Set(moves).count > 1 { unstable += 1 }
+            if agreedCount == 0, judgedRuns > 1, Set(moves).count > 1 { unstable += 1 }
 
             let expected = fixture.expected.map(\.rawValue).sorted().joined(separator: "/")
             let spread = times.isEmpty ? "—" : "\(times.min()!)–\(times.max()!)ms"
             var line =
-                "\(fixture.name): \(majority ? "✓" : "✗") \(agreedCount)/\(repeats) "
+                "\(fixture.name): \(majority ? "✓" : "✗") \(agreedCount)/\(judgedRuns) "
                 + "[\(moves.joined(separator: ", "))] (expected \(expected), \(spread))"
             if let failure { line += " — \(failure)" }
             print(line)

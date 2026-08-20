@@ -54,6 +54,16 @@ struct GroundingTests {
                 intent("Pick up food", quote: "  Pick Up   Food  "), in: Self.capture))
     }
 
+    @Test("Known gap: a real quote attached to an unrelated title passes rung 1")
+    func realQuoteFabricatedTitlePassesRungOne() {
+        // A model that correctly identifies a real phrase as its evidence but emits a
+        // fabricated unrelated title bypasses the guard. A lexical fix would also reject
+        // legitimate heavy paraphrases (see quoteRescuesLegitimateParaphrase below), so
+        // this gap is held by RambleEvalTests' accuracy floor rather than a structural check.
+        let attack = intent("Buy new printer paper", quote: "pick up food from the store")
+        #expect(AppBrain.grounded(attack, in: Self.capture))  // currently passes — known gap
+    }
+
     @Test("A verified quote carries a heavy paraphrase the lexical rung would reject")
     func quoteRescuesLegitimateParaphrase() {
         // This is why the quote is the primary rung: a good reading can share no words at
