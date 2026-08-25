@@ -63,6 +63,9 @@ struct EzraExport: Codable, Equatable {
         var captureID: UUID?
         var deferralCount: Int
         var carriedOverCount: Int
+        /// Breakdown position within the parent — nil for anything that is not a step,
+        /// so the common case exports clean instead of as a sea of zeroes.
+        var sortIndex: Int?
         var lastHumanTouchAt: Date?
         var relationships: [Edge]
     }
@@ -222,6 +225,7 @@ enum DataExport {
             captureID: task.captureID,
             deferralCount: Int(task.deferralCount),
             carriedOverCount: Int(task.carriedOverCount),
+            sortIndex: task.parentTaskID == nil ? nil : Int(task.sortIndex),
             lastHumanTouchAt: task.lastHumanTouchAt,
             relationships: task.relationships.map { edge in
                 EzraExport.Edge(

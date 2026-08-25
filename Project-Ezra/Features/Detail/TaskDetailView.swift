@@ -669,15 +669,14 @@ struct TaskDetailView: View {
     /// agree about what "next" means. Read-only beyond navigation — steps are real
     /// rows on My Tasks, where every action already lives.
     ///
-    /// Display order is stable (createdAt, then uuid) but NOT the model's proposed
-    /// sequence: `splitInto` stamps siblings with one shared `createdAt` and persists
-    /// no ordinal. When step order earns real product weight, the fix is an additive
-    /// `sortIndex` written by `splitInto` — never an inference from timestamps.
+    /// Display order IS the model's proposed sequence: `splitInto` persists it as
+    /// `sortIndex`, and `children(among:)` is the one ordered derivation every step
+    /// surface shares.
     private var stepsSpine: some View {
+        // `children(among:)` is the one ordered derivation: `sortIndex` (the model's
+        // proposed sequence, stamped by `splitInto`), then createdAt + uuid for
+        // pre-`sortIndex` stores.
         let steps = task.children(among: allTasks)
-            .sorted {
-                ($0.createdAt, $0.uuid?.uuidString ?? "") < ($1.createdAt, $1.uuid?.uuidString ?? "")
-            }
         let currentID = steps.first { !$0.status.isResolved }?.uuid
         return VStack(alignment: .leading, spacing: Spacing.xs) {
             if let progress = task.stepProgress(among: allTasks) {

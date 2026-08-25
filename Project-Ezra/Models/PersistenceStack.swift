@@ -307,7 +307,32 @@ enum PersistenceStack {
     /// per-process seeded). Compared at launch to catch the one mistake that silently eats
     /// real data: editing the CURRENT `.xcdatamodel` version in place, which leaves Core
     /// Data no source model to migrate from.
-    static var modelDigest: String {
+    static var modelDigest: String { digest(of: model) }
+
+    /// Every model version compiled into the app, digested. This is what lets the
+    /// tripwire tell the two kinds of model change apart, which a single digest
+    /// cannot: **adding a NEW version** leaves the previous version's digest in this
+    /// set (its `.mom` still ships, so lightweight migration has its source model —
+    /// safe, silent), while **editing the current version in place** removes it (the
+    /// shape the on-disk store was built against no longer exists as authored — the
+    /// disaster the tripwire exists for). Before this, the correct act and the
+    /// mistake produced the same assertion, and the documented remedy was clearing
+    /// `appModelDigest` from UserDefaults by hand — a tripwire that cries wolf on
+    /// the safe path teaches exactly the reflex that later eats the store.
+    static var bundledModelVersionDigests: Set<String> {
+        var digests: Set<String> = [modelDigest]
+        let urls =
+            Bundle.main.urls(forResourcesWithExtension: "mom", subdirectory: "ProjectEzra.momd")
+            ?? []
+        for url in urls {
+            if let version = NSManagedObjectModel(contentsOf: url) {
+                digests.insert(digest(of: version))
+            }
+        }
+        return digests
+    }
+
+    private static func digest(of model: NSManagedObjectModel) -> String {
         model.entityVersionHashesByName
             .sorted { $0.key < $1.key }
             .map { "\($0.key):\($0.value.base64EncodedString())" }

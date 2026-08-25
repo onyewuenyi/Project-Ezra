@@ -274,4 +274,54 @@ struct BreakdownSplitTests {
         let id = parent.uuid!
         #expect((after[id]?.effectiveAttention ?? 0) > (before[id]?.effectiveAttention ?? 0))
     }
+
+    @Test("The model's sequence survives the split — sortIndex, never timestamp inference")
+    func splitPersistsTheModelsSequence() {
+        let context = context()
+        let parent = TaskItem(title: "Plan the launch", status: .todo, in: context)
+        // Titles chosen so ALPHABETICAL and uuid order cannot accidentally match the
+        // proposed sequence: only the persisted ordinal can reproduce it.
+        let proposed = [
+            BreakdownStep(title: "Zip up the announcement", effortMinutes: 15),
+            BreakdownStep(title: "Ask legal to sign off", effortMinutes: 30),
+            BreakdownStep(title: "Mail the customers", effortMinutes: 15),
+        ]
+        let created = parent.splitInto(proposed, in: context)
+
+        #expect(created.map(\.sortIndex) == [0, 1, 2])
+        // The one ordered derivation returns them in breakdown order — every sibling
+        // shares one `createdAt`, so without the ordinal this collapses to uuid order.
+        let ordered = parent.children(among: [parent] + created.shuffled())
+        #expect(ordered.map(\.title) == proposed.map(\.title))
+    }
+
+    @Test("Pre-sortIndex stores keep their old order — zero ties fall back, stably")
+    func legacyZeroTiesFallBack() {
+        let context = context()
+        let parent = TaskItem(title: "Old container", status: .todo, in: context)
+        let created = parent.splitInto(
+            [
+                BreakdownStep(title: "First", effortMinutes: 15),
+                BreakdownStep(title: "Second", effortMinutes: 15),
+                BreakdownStep(title: "Third", effortMinutes: 15),
+            ], in: context)
+        // Simulate a store written before the attribute existed: every ordinal 0.
+        for step in created { step.sortIndex = 0 }
+
+        let once = parent.children(among: [parent] + created).map(\.uuid)
+        let again = parent.children(among: [parent] + created.reversed()).map(\.uuid)
+        #expect(once == again)  // stable regardless of input order — the old behaviour
+    }
+
+    @Test("The additive model version is additive in fact — the old shape still ships")
+    func oldModelVersionStillShips() {
+        // The tripwire's widened premise: a digest that moved because a NEW version
+        // was added must find the OLD version's digest still in the bundle. If this
+        // set ever collapses to one member, either a version was deleted or the
+        // current one was edited in place — both are the store-eating mistake.
+        let digests = PersistenceStack.bundledModelVersionDigests
+        #expect(digests.contains(PersistenceStack.modelDigest))
+        #expect(digests.count >= 2)
+    }
+
 }

@@ -373,7 +373,7 @@ extension TaskItem {
     ) -> [TaskItem] {
         guard !steps.isEmpty, let selfID = uuid else { return [] }
         var created: [TaskItem] = []
-        for step in steps {
+        for (index, step) in steps.enumerated() {
             let child = TaskItem(
                 title: step.title,
                 category: category,
@@ -390,6 +390,9 @@ extension TaskItem {
                 createdAt: now,
                 in: context)
             child.confirmedAt = now  // the accept tap is the confirm
+            // The model's sequence, finally persisted — siblings share one `now`, so
+            // without this the order died at the exact write meant to keep it.
+            child.sortIndex = Int32(index)
             child.linkParent(selfID)
             context.insert(child)
             created.append(child)

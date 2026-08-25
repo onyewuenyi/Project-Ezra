@@ -84,16 +84,28 @@ struct Project_EzraApp: App {
         // editing the CURRENT `.xcdatamodel` version in place. Lightweight migration needs
         // the OLD version to still exist in the `.xcdatamodeld`; without it the store
         // simply fails to open and the self-heal below destroys it. Always add a NEW model
-        // version (Xcode ▸ Editor ▸ Add Model Version) instead.
+        // version (Xcode ▸ Editor ▸ Add Model Version, or hand-author the directory).
+        //
+        // The wire distinguishes the safe act from the mistake by membership, not by
+        // change: a digest that moved because a NEW version was added leaves the old
+        // digest in `bundledModelVersionDigests` (its .mom still ships — migration has
+        // its source), so it passes silently. A digest that moved because the current
+        // version was edited in place is in NO shipped version, and that is the assert.
+        // The first shape of this check compared only the current digest, so doing the
+        // RIGHT thing trapped every DEBUG launch until `appModelDigest` was cleared by
+        // hand — training exactly the dismiss-the-alarm reflex that later eats a store.
         let digestKey = "appModelDigest"
         let digest = PersistenceStack.modelDigest
         let knownDigest = UserDefaults.standard.string(forKey: digestKey)
-        if let knownDigest, knownDigest != digest, storedGeneration == schemaGeneration {
+        if let knownDigest, knownDigest != digest, storedGeneration == schemaGeneration,
+            !PersistenceStack.bundledModelVersionDigests.contains(knownDigest)
+        {
             assertionFailure(
                 """
-                The Core Data model changed but `schemaGeneration` did not. If you edited \
-                the current .xcdatamodel version IN PLACE, the existing store can no longer \
-                be migrated and is about to be destroyed. Add a new model version instead.
+                The Core Data model changed and the version this store was built against \
+                no longer exists in the bundle. If you edited the current .xcdatamodel \
+                version IN PLACE, the store can no longer be migrated and is about to be \
+                destroyed. Restore the old version and add a NEW one instead.
                 """)
         }
         UserDefaults.standard.set(digest, forKey: digestKey)

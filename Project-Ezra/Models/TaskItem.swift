@@ -321,6 +321,18 @@ final class TaskItem: NSManagedObject {
     // plan seam (`TodayPlanStore`) and the graph mutations; read live by
     // `TaskRanking.currentRelevance`.
 
+    /// The task's position within its parent's breakdown — the MODEL'S proposed
+    /// sequence, preserved. `BreakdownStep.sanitized` deliberately never reorders
+    /// ("sequence is the model's contribution") and `splitInto` used to throw that
+    /// sequence away at write time: every sibling shared one `createdAt`, so display
+    /// order fell back to uuid — stable, but arbitrary. Written ONLY by `splitInto`
+    /// from the accepted steps' order; 0 for every non-step task (and for steps
+    /// created before this attribute existed, whose ties fall back to createdAt +
+    /// uuid — exactly the old behaviour, so the migration changes nothing
+    /// retroactively). Additive, defaulted, no `schemaGeneration` bump: bumping is
+    /// what wipes, and this is a shape change, not a meaning change.
+    @NSManaged var sortIndex: Int32
+
     /// Times this task appeared in a committed Today plan and was left UNTOUCHED —
     /// the true skip signal (`currentRelevance` pulls it down). Distinct from
     /// `carriedOverCount`: conflating them would penalize actively-worked multi-day
@@ -759,14 +771,24 @@ extension TaskItem {
         return StepProgress(done: steps.count { $0.status.isResolved }, total: steps.count)
     }
 
-    /// The tasks that name this one as their parent — its steps.
+    /// The tasks that name this one as their parent — its steps, in breakdown order.
     ///
     /// Distinct from `dependents(among:)`, which is the BLOCKING reverse edge (tasks
     /// waiting on this one). Two different graphs: `.parent` is containment, `.blocks`
     /// is sequencing, and conflating them is an easy and silent mistake.
+    ///
+    /// Ordered here, in the ONE derivation, so every consumer — the container spine,
+    /// the property card's steps section, `openSteps`, the chain stack — agrees on
+    /// what "first step" means. `sortIndex` is the model's proposed sequence;
+    /// `createdAt` + uuid is the tiebreak that keeps pre-`sortIndex` stores exactly
+    /// as they displayed before (all zeros → the old stable-but-arbitrary order).
     func children(among tasks: [TaskItem]) -> [TaskItem] {
         guard let selfID = uuid else { return [] }
         return tasks.filter { $0.parentTaskID == selfID }
+            .sorted {
+                ($0.sortIndex, $0.createdAt, $0.uuid?.uuidString ?? "")
+                    < ($1.sortIndex, $1.createdAt, $1.uuid?.uuidString ?? "")
+            }
     }
 
     /// The Blocking flag, derived: true when any other unresolved task's blocker
