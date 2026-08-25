@@ -2,9 +2,10 @@
 //  SampleFlowFixtures.swift
 //  Project-Ezra
 //
-//  Deterministic fixture data covering every core user flow except onboarding
-//  (see prev-docs/mock-data-user-flows.md for the full walkthrough and how to
-//  reproduce each state by hand). Unlike `-SeedSampleData` (which runs real text
+//  Deterministic fixture data covering every core user flow except onboarding —
+//  and, since the walkthrough doc was retired with the status vocabulary it
+//  described, the readable record of what those flows are. Unlike `-SeedSampleData`
+//  (which runs real text
 //  through the live triage engine, so results depend on which engine is active),
 //  this constructs TaskItem/ChangeLogEntry directly so status, confidence, and
 //  autonomy are exact and identical on every run.
@@ -24,7 +25,7 @@ enum SampleFlowFixtures {
         let day: TimeInterval = 24 * 3600
 
         // MARK: Flow 1 — Daily Brief
-        // TodayView takes the top 3 actionable (Ready/In Progress, unblocked, mine)
+        // BriefView takes the top 3 actionable (Ready/In Progress, unblocked, mine)
         // tasks by (soonest due, then confidence desc); the rest count toward
         // "heldCount". Four silent-filed Ready tasks here means at least one is always
         // held back, so the footnote has something to report.
@@ -306,7 +307,7 @@ enum SampleFlowFixtures {
         waterBill.status = .doing
         expenseReport.status = .doing
 
-        // Human activity for the Inbox feed: a completion by Maya, an assignment, and a
+        // Human activity for the Activity feed: a completion by Maya, an assignment, and a
         // decision — each a reversible `.human` change-log entry carrying an `actorID`.
         let mayaChore = TaskItem(
             title: "Drop the kids at practice", category: "Family", status: .todo,

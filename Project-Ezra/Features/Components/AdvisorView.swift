@@ -8,16 +8,22 @@
 //  never names a capability and never says "nothing to do here": silence allocates
 //  zero visual attention.
 //
-//  Replaced the three capability cards (Thinking Partner · Breakdown · Unstick). The
-//  moves compose into this one card body; the store owns the judgment and its cache,
-//  this view only renders `AdvisorState` and hands taps to the parent's mutation
-//  closures — the reading itself mutates nothing.
+//  Three rules decide almost every layout choice here:
 //
-//  Two structural invariants live here:
-//  - A flagged decision ALWAYS gets its reason line and "Mark decided", regardless of
-//    the model's move or availability — `resolveDecision()` stays the only clearer.
-//  - The loading treatment is calm, not computational: the kicker resolves in place;
-//    no spinner, no progress, no "analyzing…" copy. The reading arrives as one thought.
+//  1. **The reading is part of the task, not a card on top of it.** An interpretation
+//     renders containerless, in the same rhythm as the task's own description and
+//     provenance sections. Only the flagged-decision block keeps card chrome — that
+//     is a persistent HUMAN OBLIGATION, not the Advisor's interpretation, and it
+//     carries the design system's Needs-Decision edge stroke.
+//  2. **Everything above the rule is understanding; everything below it is action.**
+//     One hairline does the work a second container would have done badly.
+//  3. **The Advisor never competes with the task's primary action.** The pinned CTA
+//     owns `accentGradient` on a full-width capsule; nothing in here may wear it.
+//     The Advisor recommends, the CTA executes — two gradient capsules on one screen
+//     is the UI contradicting that sentence.
+//
+//  Absent by design: spinners, progress, "analyzing…" copy, sparkles, robots, badges.
+//  The user experiences a conclusion arriving, never a machine working.
 //
 
 import SwiftUI
@@ -49,83 +55,113 @@ struct AdvisorView: View {
     /// Step titles the user deselected before creating — reset whenever the judgment
     /// changes, because a deselection belongs to one proposal.
     @State private var declined: Set<String> = []
+    /// "Why this?" — collapsed by default. Expanding is not an action and is never
+    /// counted as one.
+    @State private var showEvidence = false
 
     var body: some View {
-        if isVisible {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                kicker
-                stateContent
-                if flagged { flaggedDecisionBlock }
-            }
-            .padding(Spacing.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Palette.primarySurface,
-                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(
-                        flagged
-                            ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.border),
-                        lineWidth: flagged ? 1.5 : 0.5)
+        if showsReading || flagged {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                if showsReading { readingSection }
+                if flagged { obligationBlock }
             }
             .animation(reduceMotion ? nil : Motion.settle, value: state)
-            .onChange(of: state) { _, _ in declined = [] }
+            .onChange(of: state) { _, _ in
+                declined = []
+                showEvidence = false
+            }
             .accessibilityElement(children: .contain)
         }
     }
 
-    /// Silence occupies zero visual attention — unless the task carries an open
-    /// decision flag, whose human affordances can never depend on what the model
-    /// chose to talk about.
-    private var isVisible: Bool {
+    /// Silence occupies zero visual attention. `.unevaluated` (no judgment yet) and
+    /// `.quiet` (a judgment OF silence) render identically here and mean opposite
+    /// things — the distinction lives in the store, where it is load-bearing.
+    private var showsReading: Bool {
         switch state {
-        case .quiet, .dismissed: return flagged
-        case .loading, .revealed, .fallback, .failed: return true
+        case .unevaluated, .quiet, .dismissed: return false
+        // A fallback with neither a diagnosis template nor a rung-0 reading has nothing
+        // to say, and must render as SILENCE rather than as the word ADVISOR over an
+        // empty box. The kicker is drawn by `readingSection`, so this predicate is the
+        // only place that can prevent an orphaned label.
+        case .fallback(let reading): return diagnosis != nil || reading != nil
+        case .loading, .revealed, .failed: return true
         }
     }
 
-    private var kicker: some View {
-        Text("Advisor")
-            .metadataStyle()
-            .textCase(.uppercase)
-            .tracking(0.8)
+    // MARK: - The reading (containerless — part of the task)
+
+    private var readingSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("Advisor")
+                .metadataStyle()
+                .textCase(.uppercase)
+                .tracking(0.8)
+            stateContent
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var stateContent: some View {
         switch state {
-        case .quiet, .dismissed:
-            // Visible only when flagged — the decision block below carries the card.
+        case .unevaluated, .quiet, .dismissed:
             EmptyView()
 
-        case .loading:
-            // The kicker holds the space; this line resolves into the reading in
-            // place. A bare hairline at rest — deliberately not a skeleton, not a
-            // spinner, not copy about thinking.
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Palette.border)
-                .frame(width: 96, height: 2)
-                .transition(.opacity)
+        case .loading(let deliberate):
+            if deliberate {
+                // The bounded presence-time exception (Challenge 9). Deep reasoning on a
+                // hard question runs in seconds, and this is the one surface in the
+                // product with no cover for it — no orb, no Recap, just the user looking
+                // at the task. Hiding a wait that long is not calm, it is broken.
+                //
+                // So it is marked, not narrated: one thinking mark, "Thinking", gone on
+                // reveal or on silence. It is deliberately NOT a progress affordance and
+                // deliberately not per-activity ("analyzing…", "searching…"), which would
+                // be chain-of-thought theater — the user needs to know Ezra is working
+                // and that it will stop, nothing more.
+                //
+                // Most deep judgments never reach here at all: they precompute off the
+                // open-moment and arrive already cached. This is the exception's face.
+                ThinkingLine()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+            } else {
+                // Reserved rhythm only. The kicker holds the space and the reading settles
+                // into it — no placeholder geometry, because even a hairline announces
+                // "working", and latency should never become a product event.
+                Color.clear.frame(height: Spacing.lg)
+            }
 
         case .revealed(let reading):
             readingContent(reading).transition(.opacity)
 
-        case .fallback:
-            fallbackContent
+        case .fallback(let reading):
+            // One template per situation: a diagnosed stall keeps its richer template
+            // (headline PLUS its action links), and everything else — the flagged
+            // decision, the blocked task, the overdue one — gets rung 0's fact-only
+            // reading through the same renderer the model path uses.
+            if diagnosis != nil {
+                fallbackContent
+            } else if let reading {
+                readingContent(reading, dismissable: false).transition(.opacity)
+            }
 
         case .failed:
             RetryLine(message: "That didn't finish.") { onRetry() }
         }
     }
 
-    // MARK: - The reading
-
+    /// `dismissable` is false for a rung-0 fallback: `TaskAdvisorStore.dismiss` only
+    /// accepts `.revealed`, so the row would silently no-op — and there is nothing to
+    /// decline anyway. Dismissal records "the Advisor had an opinion and the human
+    /// declined it"; fact-only content is an execution path, not an opinion.
     @ViewBuilder
-    private func readingContent(_ reading: ValidatedReading) -> some View {
+    private func readingContent(
+        _ reading: ValidatedReading, dismissable: Bool = true
+    ) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            // The thought leads: observation in primary ink, guidance beneath it.
+            // ── Understanding ──
             Text(reading.observation)
                 .font(.supporting)
                 .foregroundStyle(Palette.primaryText)
@@ -135,31 +171,87 @@ struct AdvisorView: View {
                     .supportingStyle()
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let nextMove = reading.nextMove {
-                HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
-                    Image(systemName: "arrow.turn.down.right")
-                        .font(.glyphCaption())
-                        .foregroundStyle(Palette.accentFlat)
-                    Text(nextMove)
-                        .font(.controlLabel)
-                        .foregroundStyle(Palette.primaryText)
-                        .fixedSize(horizontal: false, vertical: true)
+            evidenceDisclosure(reading)
+
+            // ── Action ──
+            if hasActionSide(reading) {
+                Rectangle()
+                    .fill(Palette.border)
+                    .frame(height: 0.5)
+                    .padding(.vertical, Spacing.xxs)
+                if let nextMove = reading.nextMove {
+                    HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                        Text("→")
+                            .font(.controlLabel)
+                            .foregroundStyle(Palette.accentFlat)
+                        Text(nextMove)
+                            .font(.controlLabel)
+                            .foregroundStyle(Palette.primaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                moveBody(reading)
             }
+            if dismissable { dismissRow }
+        }
+    }
 
-            moveBody(reading)
+    /// Is there anything below the rule? A words-only reading with nothing to point at
+    /// draws no rule — the separator means "action follows", so it must not lie.
+    private func hasActionSide(_ reading: ValidatedReading) -> Bool {
+        if reading.nextMove != nil { return true }
+        switch reading.move {
+        case .decide, .createSteps, .openBlocker: return true
+        case .advise, .nothing: return false
+        }
+    }
 
-            HStack(spacing: Spacing.md) {
-                Spacer(minLength: 0)
-                Button("Dismiss") { onDismiss() }
-                    .font(.controlLabel)
-                    .foregroundStyle(Palette.mutedText)
-                    .buttonStyle(.pressableLink)
+    private var dismissRow: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Button("Dismiss") { onDismiss() }
+                .font(.controlLabel)
+                .foregroundStyle(Palette.mutedText)
+                .buttonStyle(.pressableLink)
+        }
+    }
+
+    // MARK: - Why this? (evidence, never reasoning)
+
+    @ViewBuilder
+    private func evidenceDisclosure(_ reading: ValidatedReading) -> some View {
+        if !reading.evidence.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Button {
+                    Motion.withMotion(Motion.settle) { showEvidence.toggle() }
+                } label: {
+                    Text(showEvidence ? "Hide" : "Why this?")
+                        .font(.chipLabel)
+                        .foregroundStyle(Palette.mutedText)
+                }
+                .buttonStyle(.pressableLink)
+                if showEvidence {
+                    // The facts the reading was made from, in the user's own terms —
+                    // never the model's reasoning, and never a sentence it wrote.
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(reading.evidence, id: \.self) { line in
+                            HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                                Text("•")
+                                Text(line)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .font(.chipLabel)
+                            .foregroundStyle(Palette.secondaryText)
+                        }
+                    }
+                    .transition(.opacity)
+                }
             }
         }
     }
 
-    /// The intervention, subordinate to the thought. At most one action affordance.
+    // MARK: - Per-move action bodies (at most one button)
+
     @ViewBuilder
     private func moveBody(_ reading: ValidatedReading) -> some View {
         switch reading.move {
@@ -187,66 +279,25 @@ struct AdvisorView: View {
     private func decideBody(_ reading: ValidatedReading) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             ForEach(Array(reading.options.enumerated()), id: \.offset) { _, option in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 5))
-                            .foregroundStyle(Palette.accentFlat)
-                        Text(option.label)
-                            .font(.controlLabel)
-                            .foregroundStyle(Palette.primaryText)
-                        // Deciding happens ON the option — one tap resolves the flag
-                        // and records WHICH option won. Only for flagged tasks, where
-                        // there is an open decision to resolve.
-                        if flagged {
-                            Spacer(minLength: Spacing.xs)
-                            Button("Decide") { onDecide(option.label) }
-                                .font(.controlLabel)
-                                .foregroundStyle(Palette.accentFlat)
-                                .buttonStyle(.pressableLink)
-                        }
-                    }
-                    if !option.tradeoff.isEmpty {
-                        Text(option.tradeoff)
-                            .supportingStyle()
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.leading, Spacing.md)
-                    }
-                }
+                optionRow(option, isBestFit: reading.recommendation?.label == option.label)
             }
-            // The grounded best fit — only ever one of the reading's own options
-            // (`validated` drops anything else). Recommendation, never resolution:
-            // the human decides.
             if let best = reading.recommendation {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
-                        Image(systemName: "sparkles")
-                            .font(.glyphCaption())
-                            .foregroundStyle(Palette.accentFlat)
-                        Text("Best fit · \(best.label)")
-                            .font(.controlLabel)
-                            .foregroundStyle(Palette.primaryText)
-                        if flagged {
-                            Spacer(minLength: Spacing.xs)
-                            Button("Decide this") { onDecide(best.label) }
-                                .font(.controlLabel)
-                                .foregroundStyle(Palette.onAccent)
-                                .padding(.horizontal, Spacing.sm)
-                                .padding(.vertical, 3)
-                                .background(Palette.accentFlat, in: Capsule())
-                                .buttonStyle(.pressableLink)
-                        }
-                    }
+                // Evidence favoured one — so there is one button, and it names the
+                // choice. Secondary treatment: the pinned CTA is still the screen's
+                // primary action.
+                VStack(alignment: .leading, spacing: Spacing.xs) {
                     if !best.why.isEmpty {
                         Text(best.why)
                             .supportingStyle()
                             .fixedSize(horizontal: false, vertical: true)
-                            .padding(.leading, Spacing.md)
+                    }
+                    if flagged {
+                        secondaryButton("Choose \(best.label)") { onDecide(best.label) }
                     }
                 }
             }
-            // Wording-only choices get the one escalation: pin it to the top of the
-            // stack as a visible decision — a human act through the same seam.
+            // No recommendation → NO primary button. The options are the action, and
+            // the Advisor doesn't invent a conclusion because the UI wants a button.
             if !flagged {
                 Button {
                     onEscalate()
@@ -260,6 +311,34 @@ struct AdvisorView: View {
         }
     }
 
+    private func optionRow(_ option: AdvisorChoice, isBestFit: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                Image(systemName: isBestFit ? "largecircle.fill.circle" : "circle")
+                    .font(.glyphCaption())
+                    .foregroundStyle(isBestFit ? Palette.accentFlat : Palette.mutedText)
+                Text(option.label)
+                    .font(.controlLabel)
+                    .foregroundStyle(Palette.primaryText)
+                // Deciding happens ON the option — quiet, because the emphasized path
+                // is the grounded best fit when there is one.
+                if flagged {
+                    Spacer(minLength: Spacing.xs)
+                    Button("Decide") { onDecide(option.label) }
+                        .font(.controlLabel)
+                        .foregroundStyle(Palette.accentFlat)
+                        .buttonStyle(.pressableLink)
+                }
+            }
+            if !option.tradeoff.isEmpty {
+                Text(option.tradeoff)
+                    .supportingStyle()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, Spacing.md)
+            }
+        }
+    }
+
     // MARK: createSteps
 
     @ViewBuilder
@@ -269,14 +348,9 @@ struct AdvisorView: View {
             ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
                 stepRow(step, isAccepted: !declined.contains(step.title))
             }
-            Button {
+            secondaryButton(accepted.count == 1 ? "Create 1 step" : "Create \(accepted.count) steps") {
                 onCreateSteps(accepted, steps)
-            } label: {
-                Text(accepted.count == 1 ? "Create 1 step" : "Create \(accepted.count) steps")
-                    .font(.controlLabel)
-                    .foregroundStyle(accepted.isEmpty ? Palette.mutedText : Palette.accentFlat)
             }
-            .buttonStyle(.pressableLink)
             .disabled(accepted.isEmpty)
         }
     }
@@ -344,15 +418,16 @@ struct AdvisorView: View {
 
     // MARK: - Off-device fallback (an execution path, not a judgment)
 
-    /// Deterministic template parity with the old surface: the stall headline and the
-    /// moves that work without a model. The breakdown is absent whole (its content was
-    /// all model output), and a wording-only choice keeps its escalation.
+    /// Deterministic template parity: the stall headline and the moves that work
+    /// without a model. The breakdown is absent whole (its content was all model
+    /// output), and a wording-only choice keeps its escalation.
     @ViewBuilder
     private var fallbackContent: some View {
         if let diagnosis {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 Text(diagnosis.headline(deferralCount: deferralCount))
-                    .supportingStyle()
+                    .font(.supporting)
+                    .foregroundStyle(Palette.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: Spacing.md) {
                     switch diagnosis {
@@ -384,9 +459,13 @@ struct AdvisorView: View {
         .buttonStyle(.pressableLink)
     }
 
-    // MARK: - Flagged decision block (always renders while the flag is open)
+    // MARK: - The obligation (a card; not the Advisor's interpretation)
 
-    private var flaggedDecisionBlock: some View {
+    /// An open decision flag is a standing human obligation, so unlike the reading it
+    /// keeps card chrome and the Needs-Decision edge — and it renders whatever the
+    /// model said, and whether or not a model exists. `resolveDecision()` is the only
+    /// thing that clears the flag.
+    private var obligationBlock: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(spacing: Spacing.xs) {
                 Image(systemName: "hand.raised.fill")
@@ -403,17 +482,56 @@ struct AdvisorView: View {
             )
             .supportingStyle()
             .fixedSize(horizontal: false, vertical: true)
-            Button {
-                onDecide(nil)
-            } label: {
-                Label("Mark decided", systemImage: "checkmark.seal")
+
+            // When the reading is already offering options, deciding happens THERE and
+            // this demotes to the escape hatch. Either way it is never a full-width
+            // gradient capsule — that treatment belongs to the pinned CTA alone.
+            if offersOptions {
+                Button("Mark decided") { onDecide(nil) }
                     .font(.controlLabel)
-                    .foregroundStyle(Palette.onAccent)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(Palette.accentGradient, in: Capsule())
+                    .foregroundStyle(Palette.accentFlat)
+                    .buttonStyle(.pressableLink)
+            } else {
+                secondaryButton("Mark decided", fullWidth: true) { onDecide(nil) }
             }
-            .buttonStyle(.pressableProminent)
         }
+        .padding(Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            Palette.primarySurface,
+            in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(Palette.accentGradient, lineWidth: 1.5)
+        }
+    }
+
+    private var offersOptions: Bool {
+        if case .revealed(let reading) = state { return !reading.options.isEmpty }
+        return false
+    }
+
+    // MARK: - Shared secondary control
+
+    /// The Advisor's one emphasis level: a bordered capsule. Deliberately NOT
+    /// `accentGradient` — see the header's third rule.
+    private func secondaryButton(
+        _ title: String, fullWidth: Bool = false, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.controlLabel)
+                .foregroundStyle(Palette.accentFlat)
+                .frame(maxWidth: fullWidth ? .infinity : nil)
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, Spacing.xs)
+                .frame(minHeight: LayoutMetrics.hitTarget)
+                .background(Palette.elevatedSurface, in: Capsule())
+                .overlay {
+                    Capsule().strokeBorder(Palette.border, lineWidth: 0.5)
+                }
+        }
+        .buttonStyle(.pressable)
     }
 }

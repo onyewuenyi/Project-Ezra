@@ -176,31 +176,43 @@ struct SegmentationTests {
 
     // MARK: - The trust predicate (what may be revealed without the model)
 
-    /// `structureIsCertain` is the gate between "show it now" and "wait behind the orb".
-    /// It answers one question: did the split come from punctuation and layout the USER
-    /// typed, or from an inference about prose? Only the former may be presented as the
-    /// answer — a guess shown as truth is the one thing the reveal cannot survive.
+    /// `structure(of:)` answers ONE question: did the user draw these boundaries, or did
+    /// we infer them? Only boundaries the user drew may be presented as the answer.
+    ///
+    /// It used to be a three-state `confidence`, and the middle state (`.singleThought`)
+    /// was a word ceiling plus a verb lexicon deciding that an unpunctuated sentence
+    /// probably described one task. That is a semantic judgment about task boundaries —
+    /// the judgment the semantic authority exists to make — so it was deleted along with
+    /// `readsAsOneThought`, `maxSingleThoughtWords`, and the on-device gate that was
+    /// built to make the call properly and measured too slow to be worth it.
 
-    @Test("Typed structure is certain — lines, bullets, and a comma list")
-    func typedStructureIsCertain() {
-        #expect(Segmentation.structureIsCertain("Renew passport\nCall mom\nBuy diapers"))
-        #expect(Segmentation.structureIsCertain("- Renew passport\n- Call mom"))
-        #expect(Segmentation.structureIsCertain("Buy milk, call mom, book flights"))
+    @Test("Structure the user typed is explicit — lines, bullets, and a comma list")
+    func typedStructureIsExplicit() {
+        #expect(Segmentation.structure(of: "Renew passport\nCall mom\nBuy diapers").isExplicit)
+        #expect(Segmentation.structure(of: "- Renew passport\n- Call mom").isExplicit)
+        #expect(Segmentation.structure(of: "Buy milk, call mom, book flights").isExplicit)
     }
 
-    @Test("A single thought is certain however it is phrased")
-    func oneItemIsAlwaysCertain() {
-        #expect(Segmentation.structureIsCertain("renew my passport"))
-        #expect(Segmentation.structureIsCertain("figure out whether we should book the hotel"))
-        #expect(Segmentation.structureIsCertain(""))
-    }
-
-    @Test("Connective prose is NOT certain — that split is an inference, so it waits")
-    func connectiveProseIsUncertain() {
-        #expect(!Segmentation.structureIsCertain("renew my passport and call mom"))
+    @Test("A lone sentence is UNSTRUCTURED however obviously single it reads")
+    func oneItemIsNeverExplicit() {
+        // The deliberate consequence of the collapse, and the case most likely to be
+        // "fixed" by someone who thinks it is a bug: "renew my passport" is obviously one
+        // task, and saying so is semantic work this function is not allowed to do. It
+        // goes to the authority.
+        #expect(Segmentation.structure(of: "renew my passport") == .unstructured)
         #expect(
-            !Segmentation.structureIsCertain(
-                "i need to renew my passport and then book flights and also call mom"))
+            Segmentation.structure(of: "figure out whether we should book the hotel")
+                == .unstructured)
+        #expect(Segmentation.structure(of: "") == .unstructured)
+    }
+
+    @Test("Connective prose is UNSTRUCTURED — that split is our inference, not their input")
+    func connectiveProseIsUnstructured() {
+        #expect(Segmentation.structure(of: "renew my passport and call mom") == .unstructured)
+        #expect(
+            Segmentation.structure(
+                of: "i need to renew my passport and then book flights and also call mom")
+                == .unstructured)
     }
 
     @Test("explicitItems reads punctuation only — it never splits a connective")
@@ -210,68 +222,43 @@ struct SegmentationTests {
         #expect(Segmentation.explicitItems(from: "Buy milk, call mom").count == 2)
     }
 
-
     // MARK: - One item is not evidence of one thought (the 2026-08-11 regression)
 
-    /// The gate used to return "certain" for ANY one-item read, which is exactly
-    /// backwards: one item out of a long dictation means every boundary test failed, not
-    /// that the user said one thing. Shipped consequence — a four-errand ramble became a
-    /// single task titled with the raw transcript, silently dropped the other three, and
-    /// rewrote its own title twenty seconds later when the model disagreed.
+    /// The old gate returned "certain" for ANY one-item read, which is exactly backwards:
+    /// one item out of a long dictation means every boundary test failed, not that the
+    /// user said one thing. Shipped consequence — a four-errand ramble became a single
+    /// task titled with the raw transcript, silently dropped the other three, and rewrote
+    /// its own title twenty seconds later when the model disagreed.
+    ///
+    /// The two-state model makes that regression unrepresentable rather than merely
+    /// detected: an unpunctuated run has no user-drawn boundaries, so it cannot be local
+    /// no matter how it reads.
 
-    @Test("The dictated four-errand run-on from the 08-11 recording is NOT one thought")
-    func dictatedRunOnIsNotOneThought() {
+    @Test("The dictated four-errand run-on from the 08-11 recording never reveals locally")
+    func dictatedRunOnIsNotExplicit() {
         let ramble =
             "Cook dinner at 3PM make odd duck reservation tonight take my wife to dinner "
             + "next week book reservation at tiki tomorrow at 1pm"
         // The splitter genuinely cannot cut this — no connectives, just juxtaposition.
         #expect(Segmentation.items(from: ramble).count == 1)
         // Which is precisely why it must NOT be revealed as the answer.
-        #expect(!Segmentation.readsAsOneThought(ramble))
-        #expect(Segmentation.confidence(ramble) == .ambiguous)
-        #expect(!Segmentation.structureIsCertain(ramble))
+        #expect(Segmentation.structure(of: ramble) == .unstructured)
+        #expect(CaptureRoute.route(for: ramble) == .cloud)
     }
 
-    @Test("Errands butted together without connectives read as several")
-    func interiorVerbsMeanSeveralItems() {
-        #expect(!Segmentation.readsAsOneThought("cook dinner tonight book the flights tomorrow"))
-        #expect(!Segmentation.readsAsOneThought("call the plumber pay the water bill"))
-    }
-
-    @Test("A verb in a subordinate position doesn't split a single thought")
-    func subordinateVerbsAreNotItemStarts() {
-        // after a modal
-        #expect(Segmentation.readsAsOneThought("figure out whether we should book the hotel this week"))
-        // after an infinitive marker
-        #expect(Segmentation.readsAsOneThought("schedule a call to fix the sink"))
-        // after a determiner — the "verb" is a noun
-        #expect(Segmentation.readsAsOneThought("send the book to my sister"))
-        // after a conjunction — shares the previous verb's object
-        #expect(Segmentation.readsAsOneThought("pick up and drop off the kids"))
-    }
-
-    @Test("Ordinary single errands stay on the instant path")
-    func realSingleThoughtsStayCertain() {
-        for item in [
-            "renew my passport", "buy diapers", "call Mom about Thanksgiving",
-            "figure out whether we should book the hotel this week",
-        ] {
-            #expect(Segmentation.confidence(item) == .singleThought, "\(item)")
-        }
-    }
-
-    @Test("A paragraph is never one thought, however it is punctuated")
-    func lengthAloneCanDisqualify() {
-        let paragraph = String(repeating: "something ", count: 25)
-        #expect(!Segmentation.readsAsOneThought(paragraph))
-    }
-
-    @Test("Typed structure is typed, single items are single — the two are not the same")
-    func confidenceDistinguishesProvenance() {
-        #expect(Segmentation.confidence("Renew passport\nCall mom") == .typed)
-        #expect(Segmentation.confidence("Buy milk, call mom") == .typed)
-        #expect(Segmentation.confidence("renew my passport") == .singleThought)
-        #expect(Segmentation.confidence("renew my passport and call mom") == .ambiguous)
-    }
+    /// Deleted with `readsAsOneThought` (2026-08-22): `interiorVerbsMeanSeveralItems`,
+    /// `subordinateVerbsAreNotItemStarts`, `realSingleThoughtsStayCertain`,
+    /// `lengthAloneCanDisqualify`, `confidenceDistinguishesProvenance`.
+    ///
+    /// They were good tests of a function that should not have existed. Every one of
+    /// them pinned some corner of a lexical rule inferring task boundaries — a modal
+    /// before a verb, a determiner making a verb a noun, a 25-word ceiling — and the
+    /// whole point of the collapse is that inferring boundaries is not deterministic
+    /// code's job. Keeping them would have preserved the interpretation in the test
+    /// suite after removing it from the product.
+    ///
+    /// The behaviour they protected did not go unmeasured: `RambleEval`'s segmentation
+    /// floor scores exactly this, end to end, against labeled ground truth, on whichever
+    /// arm actually runs.
 
 }

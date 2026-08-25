@@ -111,10 +111,21 @@ struct PlanTaskSnapshot: Sendable, Codable, Hashable {
 
 /// Which intelligence produced (or will produce) a briefing. `.deterministic` is the
 /// always-available tail — it can't fail, so the chain always terminates.
-enum PlanTier: String, Codable, Sendable {
+enum PlanTier: String, Codable, Sendable, CaseIterable {
     case onDevice
-    case pcc
+    case cloud
     case deterministic
+
+    /// Where this tier sits on the intelligence ladder. The Brief has no memory rung
+    /// (the day cache is a plays-once product rule, not a re-served judgment), so the
+    /// mapping is total and one-way.
+    var rung: IntelligenceRung {
+        switch self {
+        case .onDevice: return .onDevice
+        case .cloud: return .cloud
+        case .deterministic: return .facts
+        }
+    }
 }
 
 /// One action on the plan: a task id plus the advisor's one-line reasoning for it.
@@ -145,7 +156,7 @@ struct TodayPlanRequest: Sendable {
     var deltaContext: String? = nil
 
     /// The fixed context-budget cap — the fallback until the session's measured
-    /// budget lands (`AdvisorSession.measuredCandidateCap`), and the sim/test value.
+    /// budget lands (`BriefSession.measuredCandidateCap`), and the sim/test value.
     static let candidateCap = 12
 
     /// The deterministic fallback's action count: the typical throughput when known,
@@ -247,7 +258,7 @@ protocol TodayPlanGenerator: Sendable {
 
 // MARK: - Guided-generation schema
 
-/// The advisor briefing the on-device / PCC model fills in. It selects and orders the
+/// The advisor briefing the on-device / cloud model fills in. It selects and orders the
 /// actions itself — the schema does not constrain it to a given order.
 @Generable
 struct AdvisorBriefing {

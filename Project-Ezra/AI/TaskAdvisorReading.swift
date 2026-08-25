@@ -217,6 +217,16 @@ extension TaskAdvisorReading {
         // add the helpful second sentence, and by then the card has already grown. The
         // clamp is the same shape as `sanitizedOptions` — a COLLECTION CLAMP over
         // sentences, never a rewrite, never a mid-word cut, never an ellipsis.
+        //
+        // **This is also the depth guardrail, and it takes no rung parameter on purpose.**
+        // As models get stronger the temptation is to let a better one say more, and that
+        // is exactly backwards: sophistication must show up as a better diagnosis and
+        // sharper silence, never as more text. A deep reading that turns "you haven't
+        // picked a restaurant, and everything else depends on it" into seven hundred words
+        // has not become more intelligent — it has become a pile of work disguised as
+        // help. The visible contract (one judgment, at most one move) is therefore
+        // constant across every rung, which is also what lets providers be swapped without
+        // the product changing shape.
         let observation = Self.clamped(trimmed(observation), sentences: 1)
         guard !observation.isEmpty else { return nil }
         // Guidance gets TWO. It sits behind the disclosure, so the person reading it has

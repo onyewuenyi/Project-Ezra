@@ -46,6 +46,13 @@ enum AdvisorCoverageDiagnostics {
         print("=== ADVISOR COVERAGE ===")
         print(report.table)
         print("  swept in \(ms)ms")
+        // The floor, printed next to the gate it answers for: of the tasks the gate
+        // judged worthy, how many does rung 0 speak to with no model at all?
+        let floor = AdvisorCoverage.floorCoverage(tasks)
+        if floor.worthy > 0 {
+            let pct = Int(Double(floor.covered) / Double(floor.worthy) * 100 + 0.5)
+            print("  rung-0 floor: \(floor.covered)/\(floor.worthy) worthy tasks speak (\(pct)%)")
+        }
         // Restated so the number that goes in a commit message can be copied from one
         // line rather than reassembled from the table.
         print("  " + report.line)

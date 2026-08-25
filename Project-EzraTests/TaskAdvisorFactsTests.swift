@@ -148,5 +148,35 @@ struct TaskAdvisorFactsTests {
         task.workIntent = .planning
         let facts = TaskAdvisorFacts.make(task: task, among: [task])
         #expect(facts.promptBlock.contains("INTERNAL: planning work"))
+        // …and it must never reach the user through "Why this?" — axis 2 is
+        // system-owned, and internal reasoning signals must not become accidental UI.
+        #expect(!facts.userVisibleEvidence.contains { $0.lowercased().contains("planning") })
+    }
+
+    @Test("Evidence is the facts in the user's terms — traceable, never narrative")
+    func evidenceIsFacts() {
+        let context = context()
+        let now = Date()
+        let task = TaskItem(title: "Fix the boiler", status: .todo, in: context)
+        let blocker = TaskItem(title: "Get the part quote", status: .todo, in: context)
+        task.addTaskBlocker(blocker.uuid!, among: [task, blocker])
+        task.deferralCount = 4
+        task.isUrgent = true
+        task.dueDate = now.addingTimeInterval(-2 * 86_400)
+
+        let evidence = TaskAdvisorFacts.make(task: task, among: [task, blocker], now: now)
+            .userVisibleEvidence
+
+        #expect(evidence.contains("You've set this aside 4 times in a row"))
+        #expect(evidence.contains("It's waiting on “Get the part quote”"))
+        #expect(evidence.contains("It's 2 days overdue"))
+        #expect(evidence.contains("You marked it urgent"))
+    }
+
+    @Test("A clean task has no evidence to show — nothing to explain")
+    func cleanTaskHasNoEvidence() {
+        let context = context()
+        let task = TaskItem(title: "Call the dentist", status: .todo, effortMinutes: 15, in: context)
+        #expect(TaskAdvisorFacts.make(task: task, among: [task]).userVisibleEvidence.isEmpty)
     }
 }

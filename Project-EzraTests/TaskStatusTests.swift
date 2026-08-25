@@ -53,7 +53,7 @@ struct TaskStatusTests {
 
     // MARK: - setStatus, the single write seam
 
-    @Test("A todo ↔ doing move logs a coalescing 'edited' entry, kept out of the Inbox feed")
+    @Test("A todo ↔ doing move logs a coalescing 'edited' entry, kept out of the Activity feed")
     func liveMoveLogsEdit() throws {
         let context = context()
         let task = TaskItem(title: "x", status: .todo, in: context)
@@ -68,7 +68,7 @@ struct TaskStatusTests {
         #expect(edit.oldValue == "todo")
         #expect(edit.newValue == "doing")
         // Nudging a task in and out of flight is not household news.
-        #expect(!edit.isInboxVisible)
+        #expect(!edit.isActivityVisible)
     }
 
     @Test("Resolving through setStatus routes to the resolution seams, not an edit entry")

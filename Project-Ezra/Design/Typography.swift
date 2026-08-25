@@ -69,10 +69,10 @@ extension Font {
 
     // Micro-chip labels — the sub-`metadata` tier the chips used to hardcode as
     // `.system(size: 10/11)`. Tokenized so the whole app tracks Dynamic Type instead
-    // of freezing at a fixed point size (assumed-mark, AITag, AssessmentChip, stack badge).
+    // of freezing at a fixed point size (assumed-mark, ProvenanceTag, AssessmentChip, stack badge).
     /// 11pt Semibold — micro-chip labels & counts (AssessmentChip label, stack count).
     static var chipLabel: Font { scaledToken(11, .semibold, relativeTo: .caption2) }
-    /// 10pt Semibold — the tightest chip text (AITag, dense chip labels).
+    /// 10pt Semibold — the tightest chip text (ProvenanceTag, dense chip labels).
     static var chipLabelTight: Font { scaledToken(10, .semibold, relativeTo: .caption2) }
 }
 

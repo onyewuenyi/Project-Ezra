@@ -10,6 +10,9 @@ import SwiftUI
 
 @main
 struct Project_EzraApp: App {
+    /// Configures Firebase at launch — see `AppDelegate` for why the cloud rung's
+    /// availability is a consequence of this line having run.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     /// One AppBrain for the whole app: owns engine selection + processing state.
     @State private var brain = AppBrain()
     /// The single daily nudge. Constructed at launch because it must be the
@@ -27,7 +30,7 @@ struct Project_EzraApp: App {
         // Generation 5 = the attention-surface → Today-sequence redirect (adds the
         // `CapacityLog` entity; retro/attention data retired). Generation 6 = the Linear
         // redesign (adds TaskItem `stageRaw`/`creatorID` + ChangeLogEntry `actorID` — the
-        // stage sub-state, task authorship, and human-actor attribution for the Inbox
+        // stage sub-state, task authorship, and human-actor attribution for Activity
         // feed). Generation 7 = the attention-substrate redirect: retires user-facing
         // Priority (drops TaskItem `priorityRaw`/`parentTaskID`/`blockersData`) for the
         // `isUrgent`/`isPinned` signals + a persisted `attentionData` score and a
@@ -125,7 +128,10 @@ struct Project_EzraApp: App {
     /// multi-coordinator pattern this codebase avoids everywhere else. (Ruled out as the
     /// cause of the suite's makeContext EXC_BAD_ACCESS — that reproduced with this guard
     /// active — but the interference is real regardless.)
-    private static let isHostingUnitTests = NSClassFromString("XCTestCase") != nil
+    ///
+    /// `AppDelegate` reads this too, to skip `FirebaseApp.configure()` under a suite —
+    /// which is what keeps the cloud rung dormant in tests. Not private for that reason.
+    static let isHostingUnitTests = NSClassFromString("XCTestCase") != nil
 
     var body: some Scene {
         WindowGroup {

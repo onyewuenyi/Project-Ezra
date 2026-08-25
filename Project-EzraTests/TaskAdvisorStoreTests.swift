@@ -82,7 +82,13 @@ struct TaskAdvisorStoreTests {
         // Under XCTest `AppBrain.onDeviceModelAvailable()` is false by design, so the
         // ambient trigger settles on the deterministic template path.
         store.ensure(task: task, among: [task])
-        #expect(store.state(for: task) == .fallback)
+        // And the fallback CARRIES rung-0 content rather than being an empty labelled
+        // surface — the ladder promises a template fallback on every rung.
+        guard case .fallback(let reading) = store.state(for: task) else {
+            Issue.record("expected .fallback, got \(store.state(for: task))")
+            return
+        }
+        #expect(reading?.observation.isEmpty == false)
     }
 
     @Test("Same fingerprint → same judgment, no re-evaluation; changed facts re-judge")
@@ -102,14 +108,24 @@ struct TaskAdvisorStoreTests {
         // worthy, and with no model that means fallback).
         task.effortMinutes = 120
         store.ensure(task: task, among: [task])
-        #expect(store.state(for: task) == .fallback)
+        if case .fallback = store.state(for: task) {
+        } else {
+            Issue.record("expected .fallback, got \(store.state(for: task))")
+        }
     }
 
-    @Test("An unknown task reads as quiet — every task HAS an Advisor, most are silent")
-    func unknownTaskIsQuiet() {
+    @Test("A never-opened task is unevaluated, NOT a judgment of silence")
+    func unknownTaskIsUnevaluated() {
         let context = context()
         let store = freshStore()
         let task = TaskItem(title: "Anything", status: .todo, in: context)
+
+        // The two render identically and mean opposite things: "no judgment has been
+        // made" versus "a judgment was made, and it was silence". Modelling them the
+        // same way is how a store starts lying about what it knows.
+        #expect(store.state(for: task) == .unevaluated)
+
+        store.ensure(task: task, among: [task])
         #expect(store.state(for: task) == .quiet(.gate))
     }
 }

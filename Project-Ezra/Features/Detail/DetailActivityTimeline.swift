@@ -5,11 +5,11 @@
 //  The per-task Activity timeline on the full-screen detail — a Linear-style vertical
 //  rail: connected avatar/glyph dots read top-down oldest → newest, each row an
 //  actor · change · relative-time line. This is the detail's OWN surface: it shows manual
-//  field edits (the "edited" entries the Inbox deliberately hides) alongside AI actions
+//  field edits (the "edited" entries Activity deliberately hides) alongside AI actions
 //  and human resolutions, and it's the only place those edits can be undone (via a
-//  per-row context menu), since the Inbox never lists them.
+//  per-row context menu), since Activity never lists them.
 //
-//  It differs from the Inbox's `ActivityRow` on purpose: the Inbox is a newest-first FEED
+//  It differs from Activity's `ActivityRow` on purpose: Activity is a newest-first FEED
 //  (a glanceable log with swipe-Undo); this is a STORY (created → edited → done), grounded
 //  by a creation anchor so it's never empty and always starts somewhere.
 //
@@ -61,7 +61,7 @@ struct DetailActivityTimeline: View {
         let actorID: UUID?
         let undone: Bool
         /// Whether this row offers a context-menu Undo (reversible, not-yet-undone edits
-        /// — the entries the Inbox can't reach).
+        /// — the entries Activity can't reach).
         let canUndo: Bool
     }
 
@@ -90,7 +90,7 @@ struct DetailActivityTimeline: View {
                     undone: entry.undone,
                     // Anything the change log marked reversible can be undone from the
                     // task’s own trail. This used to be gated to field edits only, which
-                    // left a reassignment undoable from the Inbox but not from the task
+                    // left a reassignment undoable from Activity but not from the task
                     // it happened to. `ChangeLogUndo.revert` already handles every verb.
                     canUndo: entry.isReversible && !entry.undone))
         }

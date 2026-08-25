@@ -110,17 +110,9 @@ struct RevealBoundaryTests {
         #expect(interpretation.drafts.count == 2)
     }
 
-    // MARK: - Routing
-
-    @Test("Routing sends a typed list and a single thought fast, prose to reasoning")
-    func routing() {
-        #expect(CaptureRoute.route(for: "Renew passport\nCall mom") == .fast)
-        #expect(CaptureRoute.route(for: "pick up food from the store later today") == .fast)
-        #expect(CaptureRoute.route(for: "renew my passport and call mom") == .reasoning)
-        // The dictation that started all of this: four errands, no connectives.
-        #expect(
-            CaptureRoute.route(
-                for: "Cook dinner at 3PM make odd duck reservation tonight take my wife to "
-                    + "dinner next week book reservation at tiki tomorrow at 1pm") == .reasoning)
-    }
+    // A routing test lived here and was deleted (2026-08-22). A reveal-boundary suite
+    // should never have owned one: this file is about `Interpretation` refusing a late
+    // proposal, which is true regardless of who produced it. That coupling is the only
+    // reason a routing change ever touched this file. Routing is pinned in
+    // `CaptureRouteTests`, where it belongs.
 }

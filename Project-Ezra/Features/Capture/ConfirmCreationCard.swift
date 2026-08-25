@@ -162,22 +162,33 @@ struct ConfirmCreationCard: View, Equatable {
             && lhs.rosterNames == rhs.rosterNames && lhs.presentation == rhs.presentation
     }
 
-    /// Low confidence is a VISUAL state, never a queue: the candidate appears
-    /// immediately, dimmed with a quiet question mark, and resolves (undims) if
-    /// more talking or a re-parse raises the model's confidence. Judgment calls
-    /// stay crisp — the model is certain; the call is just yours.
-    private var isUncertain: Bool {
-        draft.confidence < 0.5 && !draft.isJudgmentCall
-    }
+    /// **Uncertainty is no longer a visual state** (2026-08-22).
+    ///
+    /// A dim and a "Not sure" chip used to render at `confidence < 0.5`. That threshold
+    /// was calibrated against a deterministic-first pipeline whose confidence ceiling was
+    /// 0.85 — sub-0.5 was ordinary output. It is not ordinary now: the semantic authority
+    /// reads the capture, and a reveal that hedges about its own answer invites the user
+    /// to audit every card, which is precisely the cognitive work this product exists to
+    /// remove. The reveal is the assertion *I understood you*; a card that says "probably"
+    /// is not an assertion.
+    ///
+    /// The dim was also counterproductive on its own terms — it reduced legibility of the
+    /// one card it was asking you to check, including the title field and the delete
+    /// button, the two affordances for fixing whatever it was worried about.
+    ///
+    /// Confidence is still recorded (`CaptureProvenance`, `ModelMetrics`, the eval). It
+    /// is an internal routing and measurement property, not a thing the user is shown.
+    /// What IS shown is `draft.unresolved` — a specific detail they said that we could
+    /// not land. See `askChips`.
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(alignment: .top, spacing: Spacing.sm) {
-                // The "?" that used to sit here is gone. A grey glyph at the leading edge
-                // and a grey glyph at the trailing edge, same size and same tone, where
-                // one is an unexplained status and the other destroys the card — neither
-                // said what it was. Uncertainty is now a WORD, in the chip row
-                // (`notSureChip`), and the delete control is the only glyph in this row.
+                // The "?" that used to sit here is gone, and so is the "Not sure" chip
+                // that replaced it. A grey glyph at the leading edge and a grey glyph at
+                // the trailing edge, same size and same tone, where one was an
+                // unexplained status and the other destroyed the card — neither said what
+                // it was. The delete control is the only glyph in this row.
                 TextField("Task", text: titleBinding, axis: .vertical)
                     .font(presentation == .hero ? .sectionHeader : .taskTitle)
                     .foregroundStyle(Palette.primaryText)
@@ -241,13 +252,8 @@ struct ConfirmCreationCard: View, Equatable {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(Palette.border, lineWidth: 0.5)
         }
-        .opacity(isUncertain ? 0.75 : 1)
-        .animation(Motion.fade, value: isUncertain)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            isUncertain
-                ? "\(draft.title), uncertain — keep talking or edit to firm it up"
-                : draft.title)
+        .accessibilityLabel(accessibilityDescription)
     }
 
     // A REVISION of the creation-confirmation spec's "the glance only works if the user
@@ -272,30 +278,48 @@ struct ConfirmCreationCard: View, Equatable {
     /// reveal shows only what the AI actually understood; everything else is one tap
     /// away behind Details. A confirm glance that lists eight identical-looking
     /// affordances is not a glance.
-    /// The AI's own uncertainty, said in words instead of encoded in a glyph the user has
-    /// to decode. It sits with the other chips because that is where the things worth
-    /// knowing about this card live — and it is deliberately NOT tappable: there is
-    /// nothing to resolve, the fix is editing the title, which is already right there.
-    private var notSureChip: some View {
-        MetadataChip(density: .compact) {
-            Image(systemName: "questionmark.circle").font(.glyphCaption())
-            Text("Not sure").font(.metadata.weight(.medium))
+    /// A TARGETED ASK: one detail the user said that we could not land.
+    ///
+    /// This replaces the "Not sure" chip, and it is a different kind of statement. That
+    /// chip expressed a mood about the whole card ("I might have this wrong") and offered
+    /// nothing to do about it. This names the single missing fact and IS the control that
+    /// supplies it — same picker the empty affordance opens, promoted out of Details
+    /// because the user already told us this one matters.
+    ///
+    /// Rendered only when the capture actually contained the detail. An undated task is
+    /// not missing a date; a task where someone said "Thursday" and we could not read it
+    /// is.
+    private var whenAskChip: some View {
+        Button { showDatePicker.toggle() } label: {
+            MetadataChip {
+                Image(systemName: "calendar.badge.questionmark").font(.glyphCaption())
+                Text("When?").font(.metadata.weight(.medium))
+            }
         }
-        .foregroundStyle(Palette.mutedText)
-        .accessibilityLabel("I might have this one wrong — check the title")
+        .buttonStyle(.plain)
+        .foregroundStyle(Palette.decisionAccent)
+        .accessibilityLabel("You mentioned a time I couldn't read. Set a date")
+    }
+
+    /// What VoiceOver reads for the whole card: the title, plus the ask if there is one,
+    /// and nothing about the system's confidence in itself.
+    private var accessibilityDescription: String {
+        draft.unresolved.isEmpty ? draft.title : "\(draft.title). Needs a date."
     }
 
     /// Whether `essentialChips` (or an edge proposal) will render anything at all.
     /// Mirrors that view's conditions exactly — if one gains a chip, so must this.
     private var hasEssentialChips: Bool {
-        isUncertain || draft.dueDate != nil || draft.ownerName != nil || draft.isUrgent
+        !draft.unresolved.isEmpty || draft.dueDate != nil || draft.ownerName != nil
+            || draft.isUrgent
             || draft.blockedBy != nil || !draft.blocks.isEmpty
             || draft.edgeProposals.contains { $0.kind == .duplicateOf || $0.kind == .childOf }
     }
 
     private var essentialChips: some View {
         Group {
-            if isUncertain { notSureChip }
+            // The ask comes FIRST: it is the only chip that needs something back.
+            if draft.unresolved.contains(.date) { whenAskChip }
             if draft.dueDate != nil { dueChip }
             if draft.ownerName != nil { ownerChip }
             if draft.isUrgent { urgentChip }
@@ -785,7 +809,7 @@ struct ConfirmCreationCard: View, Equatable {
     }
 
     /// The quiet "assumed" marker — `accentFlat`, NOT the sanctioned gradient
-    /// AITag; that stays within its budget.
+    /// ProvenanceTag; that stays within its budget.
     private var assumedMark: some View {
         Image(systemName: "sparkle")
             .font(.glyphNano(.semibold))

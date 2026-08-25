@@ -119,6 +119,27 @@ enum Motion {
     /// state that reads as "done". A fire that has caught, not a progress bar.
     static let orbGatherSeconds: Double = 14
 
+    /// The shortest time the orb may hold the screen once it has taken it.
+    ///
+    /// **A problem the pipeline getting FASTER created.** The orb was designed against an
+    /// on-device parse measured in many seconds, where a minimum was unimaginable. A
+    /// healthy cloud read answers a median ramble in about a second — and `heroSettle` is
+    /// a 0.5s spring, so without a floor the field morphs into an orb that is still
+    /// arriving when it starts morphing into cards. The breath (3.2s) never completes a
+    /// single cycle, the gather never visibly begins, and the product's signature moment
+    /// renders as a stutter between two layouts. A flash of a screen-filling mesh gradient
+    /// reads as a bug, and a bug costs more than a beat does.
+    ///
+    /// Sized as "the entrance spring, plus enough held presence to read as an object
+    /// rather than a transition artifact" — NOT as a fraction of the breath. Making the
+    /// user wait a full breath for an answer that already exists would be theatre, which
+    /// is the thing one floor below a flicker.
+    ///
+    /// It can only ever fire when the model beat the animation, so it never lengthens a
+    /// wait anyone is actually feeling — the slow captures this product worries about are
+    /// far past it and unaffected.
+    static let orbMinimumDwellSeconds: Double = 1.1
+
     // MARK: - Reduce-motion helpers (imperative sites)
 
     // Declarative `.animation(_:value:)` sites keep the house `@Environment(

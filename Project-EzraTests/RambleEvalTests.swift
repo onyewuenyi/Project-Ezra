@@ -2,13 +2,18 @@
 //  RambleEvalTests.swift
 //  Project-EzraTests
 //
-//  The regression-floor half of the eval instrument. The fixtures and the scoring
-//  body live in the APP target (`AI/RambleEvalSet.swift`, DEBUG-only) so this test
-//  and the `-RambleEval` device seam score IDENTICALLY — the same 47-case set, the
-//  same field pairing, the same named misses. This file owns only what a test can:
-//  the engine choice (heuristic + resolver — the deterministic pipeline) and the
-//  floors, calibrated just under observed numbers. They catch a change that
-//  degrades the pipeline; they are not aspirations.
+//  The CI arm of the eval instrument. The fixtures, the scoring body AND THE FLOORS
+//  live in the APP target (`AI/RambleEvalSet.swift`, DEBUG-only) so this test and the
+//  `-RambleEval` device seam score IDENTICALLY — the same labeled set, the same field
+//  pairing, the same named misses, the same numbers to clear.
+//
+//  This file now owns exactly one thing: the ENGINE CHOICE. That is the honest
+//  division, and it is a correction. The floors used to be `#expect` literals here,
+//  which meant they could only ever be failed by CI — and CI runs the heuristic
+//  pipeline, because the Foundation Models path only exists on real hardware. The
+//  floors were therefore held by the fallback while the front door went unmeasured,
+//  and an unstructured spoken blob failed to segment on device with every number in
+//  this file still reading green.
 //
 
 import Foundation
@@ -19,29 +24,48 @@ import Testing
 @Suite("Ramble eval (heuristic pipeline)")
 struct RambleEvalTests {
 
-    @Test("Per-field accuracy holds the regression floors")
+    @Test("The heuristic arm holds the shared regression floors")
     func evalAccuracy() async throws {
         let report = try await RambleEval.score { utterance in
             let intents = try await HeuristicEngine().triage(rawText: utterance)
             return IntentResolver.resolve(intents)
         }
-        print(report.table)
+        print(report.table(against: .standard, arm: "heuristic"))
 
-        // Regression floors — calibrated just under observed numbers. Re-baselined
-        // upward with the connective-aware splitter (Segmentation.swift): observed
-        // segmentation/title/judgment/blocked/due all 100% and category 97% across 47
-        // cases including the dictated run-on set. Owner keeps its old floor — three
-        // samples is no basis for a tighter one.
-        #expect(report.segmentation.rate >= 0.95, "segmentation regressed: \(report.segmentation.display)")
-        #expect(report.title.rate >= 0.95, "title fidelity regressed: \(report.title.display)")
-        #expect(report.category.rate >= 0.90, "category accuracy regressed: \(report.category.display)")
-        #expect(report.judgment.rate >= 0.95, "judgment detection regressed: \(report.judgment.display)")
-        #expect(report.owner.rate >= 0.60, "owner extraction regressed: \(report.owner.display)")
-        #expect(report.blocked.rate >= 0.95, "blocker detection regressed: \(report.blocked.display)")
-        #expect(report.due.rate >= 0.95, "due detection regressed: \(report.due.display)")
-        // Kind is INTERNAL (no user correction exists since 2026-08-11), so this floor
-        // is the field's whole trust story — an AI-owned field earns trust through
-        // evaluation, not invisibility. Observed 11/11 on the labeled subset.
-        #expect(report.kind.rate >= 0.90, "kind classification regressed: \(report.kind.display)")
+        // ONE assertion over `failures`, deliberately — not eight `#expect`s. An
+        // enumerated list is a place for an arm to check a subset of the fields without
+        // anyone noticing, which is a smaller version of the same failure that let the
+        // on-device arm go unmeasured. `failures` iterates every field there is.
+        let broken = report.failures(against: .standard)
+        #expect(broken.isEmpty, "floors broken: \(broken.joined(separator: " · "))")
     }
+
+    @Test("Every scored field has a floor — no field may be measured and left unheld")
+    func everyFieldIsHeld() {
+        // The structural guard behind the test above. A new scored field added to
+        // `Report` without a matching entry in `fields(against:)` would be reported in
+        // the table and checked by nothing — measured, printed, and unenforced. Pinning
+        // the count makes that omission a failing test rather than a quiet gap.
+        #expect(RambleEval.Report().fields().count == 8)
+    }
+
+    @Test("Latency is held too — a timing row reported and unchecked is the same rot")
+    func settledLatencyIsHeld() {
+        // `fields()` covers accuracy; latency fails by being too BIG, so it cannot live
+        // in that list and is checked separately inside `failures`. This pins that it
+        // really is checked — the whole point of `everyFieldIsHeld` applied to the one
+        // number that doesn't fit its shape.
+        var report = RambleEval.Report()
+        report.settledMs = [Int(RambleEval.Floors.standard.settledRevealP90Ms) + 500]
+        #expect(report.failures().contains { $0.contains("settled p90") })
+
+        // And "not measured" must never read as "fast": no samples, no verdict.
+        #expect(RambleEval.Report().failures().isEmpty)
+    }
+
+    // The gate scorer's tests lived here until 2026-08-22, deleted with the gate. They
+    // were worth having: they caught three bugs in the instrument before it was ever
+    // pointed at a model, and then the instrument reported honestly that the thing it
+    // measured could not be made to work.
+
 }

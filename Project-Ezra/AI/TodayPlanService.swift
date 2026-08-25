@@ -2,17 +2,32 @@
 //  TodayPlanService.swift
 //  Project-Ezra
 //
-//  The generation side of the Today advisor briefing: tier routing, the two model
-//  generators (on-device + Private Cloud Compute), the advisor instructions, and the
+//  The generation side of the Brief's advisor briefing: tier routing, the two model
+//  generators (on-device + the cloud rung), the advisor instructions, and the
 //  `AppBrain.todayPlan` seam that walks the tier chain and can never fail (the
 //  deterministic tail always succeeds).
 //
 //  The model is now the advisor — it selects, orders, sizes, and reasons. Routing is
-//  a simple ordered chain (on-device → PCC → deterministic); the capacity/divergence
-//  inputs are gone with the capacity input. Instructions are a fresh per-call string
-//  (stateless sessions), so a shifting throughput average needs no session teardown.
+//  an ordered chain, and the Brief's order is the product's ONE deliberate inversion:
+//  **strongest tier first** (cloud → on-device → deterministic), because volume here is
+//  capped at ~1/day by construction and the voice IS the feature. The
+//  capacity/divergence inputs are gone with the capacity input.
 //
-//  ⚠️ Device-verify only: the streamed `@Generable` briefing, PCC fallthrough, and
+//  **What the inversion costs, stated plainly.** The on-device tier is a SESSION
+//  (`BriefSession`: per-day profile, bounded transcript, two read-only tools, mid-day
+//  re-entry as a delta turn); the cloud tier is a stateless per-call generator. So a
+//  cloud-led day gets no live transcript and no tool calls — and that is survivable
+//  rather than fine, because continuity was never allowed to depend on the session
+//  being alive: `TodayPlanPrompt.body` carries the "SINCE THIS MORNING: …" digest, which
+//  is the same mechanism a process restart has always used to reconstruct the day. The
+//  tools are the real loss, and the tripwire is explicit — if cloud-led briefings turn
+//  out to be measurably worse for want of `task_details`/`yesterday_outcome`, the answer
+//  is a tooled cloud session, not a return to on-device-first.
+//
+//  This file names no cloud PROVIDER. Rung 3 arrives through `CloudModelProvider`, so
+//  the day the slot holds Gemini instead of PCC nothing here changes.
+//
+//  ⚠️ Device-verify only: the streamed `@Generable` briefing, cloud fallthrough, and
 //  `Response.usage` wiring (tokens are −1 until verified). The simulator exercises the
 //  deterministic fallback alone.
 //
@@ -38,31 +53,38 @@ extension PartialBox where Value == GeneratedPlan {
     }
 }
 
-// MARK: - PCC entitlement gate
-
-/// Whether the PCC tier may be touched at all. `PrivateCloudComputeLanguageModel`
-/// **FATAL-ERRORS** (an uncatchable trap, not a `throw`) the instant it is constructed
-/// — even to read `.isAvailable` — without the Apple-managed
-/// `com.apple.developer.private-cloud-compute` entitlement, so `guard model.isAvailable`
-/// never gets to run. iOS exposes no public API to read one's own entitlements at
-/// runtime, so this is a compile-time gate: it stays `false` until the entitlement is
-/// provisioned in signing, then flips to `true` and the PCC tier activates with no
-/// other change (mirrors `PersistenceStack.cloudKitContainerID` being nil until
-/// provisioned).
-enum PCCEntitlement {
-    static var isGranted = false
-}
-
 // MARK: - Routing (pure, ordered)
 
 /// The per-call tier chain. `.deterministic` is always the tail, so the chain can
-/// never be empty and generation can never fail. On-device is preferred (fast,
-/// private, free); PCC is next when entitled; deterministic is the fallback.
+/// never be empty and generation can never fail.
+///
+/// **The Brief prefers the STRONGEST tier, not the cheapest — and it is the only
+/// workload in the product that does.** Everywhere else the ladder is climbed as
+/// rarely as possible, because volume is unbounded and the cheap rungs are genuinely
+/// good enough most of the time. The Brief is the exception on both counts: its volume
+/// is capped at roughly one generation a day by construction (plays-once, plus a delta
+/// re-entry that recomposes rather than regenerates), and its VOICE — the headline, the
+/// tradeoff, the risk it names — is not a nice-to-have on top of the feature, it *is*
+/// the feature. A deterministic Brief is a ranked list wearing a headline, and the
+/// surface says so out loud rather than pretending otherwise.
+///
+/// The on-device tier stays in the chain, one rung down, and it matters more than it
+/// looks: it is what a user with no connection, no entitlement, or a spent budget
+/// actually gets, and it is still a voiced briefing.
+///
+/// The parameter is `cloudAvailable`, not `pccAvailable`: which provider occupies the
+/// slot is `CloudModel`'s business and nothing this function should be able to name.
 enum PlanRouting {
-    static func decide(onDeviceAvailable: Bool, pccAvailable: Bool) -> [PlanTier] {
+    static func decide(
+        onDeviceAvailable: Bool, cloudAvailable: Bool, budgetAllows: Bool = true
+    ) -> [PlanTier] {
         var chain: [PlanTier] = []
+        // The daily cap applies here too. One Brief a day cannot plausibly exhaust it,
+        // which is exactly why this line is cheap insurance rather than a constraint:
+        // if the cap is ever hit, the day's most valuable single generation should not
+        // be the one that jumps the queue past a runaway elsewhere.
+        if cloudAvailable && budgetAllows { chain.append(.cloud) }
         if onDeviceAvailable { chain.append(.onDevice) }
-        if pccAvailable { chain.append(.pcc) }
         chain.append(.deterministic)
         return chain
     }
@@ -153,9 +175,28 @@ enum TodayPlanPrompt {
 enum TodayPlanSession {
     /// Bound the worst-case generation time: the briefing schema is small, so a runaway
     /// tradeoffs/risks paragraph is the only thing that could eat the whole deadline.
-    /// Capping output can't hurt this schema and keeps generation time predictable.
+    ///
+    /// **Read by the on-device profile only** (`BriefSession`). It is deliberately NOT
+    /// passed as per-call `GenerationOptions` any more — see `generate` below.
     static let responseTokenCap = 600
 
+    /// The cap is set by the SESSION'S PROFILE, never per call.
+    ///
+    /// **The bug this fixes, which only a device run could show.** Both rungs used to
+    /// receive `GenerationOptions(maximumResponseTokens: 600)` here, and a per-call
+    /// option overrides whatever the profile configured. On the cloud rung that ceiling
+    /// is shared with Gemini's thinking tokens, so every briefing stopped at ~586 output
+    /// tokens having spent ~572 of them thinking and 14 answering: `finishReason
+    /// MAX_TOKENS`, no briefing, silent fall-through to the deterministic tail. Measured
+    /// twice, months apart in prompt size, at the same ceiling — which is what gave it
+    /// away, since a config-driven limit would have moved.
+    ///
+    /// Fixing `CapabilityProfiles.briefPlan` alone did nothing, because this line won.
+    /// A second capability-blind cap beside a capability-aware one is not redundancy; it
+    /// is the capability-aware one being unreachable. Both rungs already state the cap in
+    /// their own profile — `BriefSession` uses `responseTokenCap` above, and the cloud
+    /// rung gets `briefPlan` plus thinking headroom — so the per-call option was pure
+    /// override.
     static func generate(
         session: LanguageModelSession,
         request: TodayPlanRequest,
@@ -163,15 +204,14 @@ enum TodayPlanSession {
         onPartial: (@MainActor (GeneratedPlan) -> Void)?
     ) async throws -> GeneratedPlan {
         let prompt = TodayPlanPrompt.body(for: request)
-        let options = GenerationOptions(maximumResponseTokens: responseTokenCap)
         guard let onPartial else {
             let final = try await session.respond(
-                to: prompt, generating: AdvisorBriefing.self, options: options
+                to: prompt, generating: AdvisorBriefing.self
             ).content
             return plan(from: final, tier: tier).validated(against: request)
         }
         let stream = session.streamResponse(
-            to: prompt, generating: AdvisorBriefing.self, options: options)
+            to: prompt, generating: AdvisorBriefing.self)
         for try await snapshot in stream {
             let partial = plan(fromPartial: snapshot.content, tier: tier).validated(against: request)
             await onPartial(partial)
@@ -213,12 +253,12 @@ enum TodayPlanSession {
 
 // MARK: - Model generators
 
-/// The on-device tier: the per-day `AdvisorSession` (profile-backed, tooled,
+/// The on-device tier: the per-day `BriefSession` (profile-backed, tooled,
 /// transcript-carrying), streamed. The session is the whole point — see
-/// `AdvisorSession.swift`'s header.
+/// `BriefSession.swift`'s header.
 struct OnDevicePlanGenerator: TodayPlanGenerator {
     let tier: PlanTier = .onDevice
-    let session: AdvisorSession
+    let session: BriefSession
 
     func generate(
         _ request: TodayPlanRequest, onPartial: (@MainActor (GeneratedPlan) -> Void)?
@@ -227,20 +267,22 @@ struct OnDevicePlanGenerator: TodayPlanGenerator {
     }
 }
 
-/// The Private Cloud Compute tier. Any error — including an ungranted entitlement —
-/// reads as unavailability, so the router falls through to on-device/deterministic.
-struct PCCPlanGenerator: TodayPlanGenerator {
-    let tier: PlanTier = .pcc
+/// The cloud tier (Rung 3), whoever is currently in the provider slot. Any error —
+/// including an ungranted entitlement or an unconfigured provider — reads as
+/// unavailability, so the router falls through to on-device/deterministic.
+///
+/// It names no provider. That is the point of `CloudModelProvider`: the day the slot
+/// holds Gemini instead of PCC, this struct does not change, and neither does
+/// `TodayPlanSession.generate` below it.
+struct CloudPlanGenerator: TodayPlanGenerator {
+    let tier: PlanTier = .cloud
 
     func generate(
         _ request: TodayPlanRequest, onPartial: (@MainActor (GeneratedPlan) -> Void)?
     ) async throws -> GeneratedPlan {
-        // Never construct the model without the entitlement — it traps, not throws.
-        guard PCCEntitlement.isGranted else { throw PlanGenerationError.unavailable }
-        let model = PrivateCloudComputeLanguageModel()
-        guard model.isAvailable else { throw PlanGenerationError.unavailable }
-        let session = LanguageModelSession(
-            model: model, instructions: TodayPlanInstructions.text(for: request))
+        let session = try CloudModel.provider.session(
+            instructions: TodayPlanInstructions.text(for: request),
+            config: CapabilityProfiles.briefPlan)
         return try await TodayPlanSession.generate(
             session: session, request: request, tier: tier, onPartial: onPartial)
     }
@@ -253,13 +295,45 @@ extension AppBrain {
     /// — the deterministic tail always succeeds. Mirrors `householdNarrative`'s
     /// degrade-on-failure contract. Availability is read fresh per call. Owns the
     /// instrumentation and the one `.ai` "planned" ChangeLog entry.
+    /// SERIALIZED, because the on-device tier's session is shared for the whole day.
+    ///
+    /// `briefSession(for:)` caches one `BriefSession` per `dayKey` — deliberately, so the
+    /// advisor keeps a transcript and a delta re-entry can be a turn rather than a fresh
+    /// call. The consequence is that two overlapping generations reach the SAME
+    /// `LanguageModelSession`, and Foundation Models rejects that outright: *"You
+    /// attempted to call a respond method a second time before the first call completed.
+    /// This is a programmer error."* The whole on-device tier then throws and the Brief
+    /// serves its deterministic tail — the familiar silent degrade, caused by us.
+    ///
+    /// Overlap is reachable without anyone doing anything strange: the self-heal
+    /// regenerates in the BACKGROUND while a cached briefing stays on screen, and a
+    /// mid-day delta recompose can land on top. Waiting rather than bailing is the right
+    /// resolution — the second caller usually has a genuinely different request (a delta
+    /// turn), so it wants its own answer, just not concurrently.
+    ///
+    /// **The chain must wrap the WORK, not the wait.** The first attempt at this stored a
+    /// gate task that only awaited its predecessor, so every gate completed the instant it
+    /// was created and both callers sailed into generation together — the fix built, shipped
+    /// to device, and changed nothing, which the diagnostics seam caught by still printing
+    /// the programmer error. The stored task now IS the generation.
     func todayPlan(
         for request: TodayPlanRequest,
         in context: NSManagedObjectContext,
         onPartial: (@MainActor (GeneratedPlan) -> Void)? = nil
     ) async -> GeneratedPlan {
+        await planGate.run { [self] in
+            await generatePlan(for: request, in: context, onPartial: onPartial)
+        }
+    }
+
+    private func generatePlan(
+        for request: TodayPlanRequest,
+        in context: NSManagedObjectContext,
+        onPartial: (@MainActor (GeneratedPlan) -> Void)? = nil
+    ) async -> GeneratedPlan {
         let chain = PlanRouting.decide(
-            onDeviceAvailable: Self.onDeviceAvailable(), pccAvailable: Self.pccAvailable())
+            onDeviceAvailable: Self.onDeviceAvailable(), cloudAvailable: Self.cloudAvailable(),
+            budgetAllows: CloudBudget.allows())
 
         let availability = Self.availabilityLabel()
         let start = Date()
@@ -267,10 +341,15 @@ extension AppBrain {
             do {
                 let generated = try await run(tier: tier, request: request, onPartial: onPartial)
                 let latencyMs = Int(Date().timeIntervalSince(start) * 1000)
+                // The rung is recorded on the tier that actually PRODUCED the plan, not
+                // on every tier attempted: a cloud call that was tried and threw cost
+                // nothing, and counting it would inflate the one number the daily cap
+                // reads. Failures are already named by `recordFailure` below.
+                IntelligenceLedger.shared.record(tier.rung, for: .brief)
                 planMetrics.recordGeneration(
                     tier: tier, latencyMs: latencyMs, promptTokens: -1, outputTokens: -1,
-                    toolCalls: tier == .onDevice ? advisorSession?.box.toolCalls ?? 0 : 0,
-                    turn: tier == .onDevice ? advisorSession?.turn ?? 0 : 0)
+                    toolCalls: tier == .onDevice ? briefSession?.box.toolCalls ?? 0 : 0,
+                    turn: tier == .onDevice ? briefSession?.turn ?? 0 : 0)
                 logPlanned(generated, in: context)
                 return generated
             } catch {
@@ -298,7 +377,10 @@ extension AppBrain {
     /// Prewarming (see `prewarmTodayModel`) shrinks the cold portion; the salvage path
     /// (below) means even hitting this deadline usually still yields a voiced briefing.
     private static let onDeviceTimeoutSeconds: Double = 30
-    private static let pccTimeoutSeconds: Double = 20
+    /// The cloud rung's deadline. Deliberately its own number rather than the
+    /// on-device one: a network round trip has a different failure shape than a cold
+    /// local model, and the two must be tunable against separate evidence.
+    private static let cloudTimeoutSeconds: Double = 20
 
     private func run(
         tier: PlanTier, request: TodayPlanRequest,
@@ -313,7 +395,7 @@ extension AppBrain {
             // last viable partial (a 90%-streamed briefing) instead of discarding it.
             let box = PartialBox<GeneratedPlan>()
             let forward = onPartial
-            let session = advisorSession(for: request)
+            let session = briefSession(for: request)
             return try await Self.race(timeout: Self.onDeviceTimeoutSeconds, salvage: box) {
                 try await OnDevicePlanGenerator(session: session).generate(
                     request,
@@ -322,9 +404,9 @@ extension AppBrain {
                         forward?(partial)
                     })
             }
-        case .pcc:
-            return try await Self.race(timeout: Self.pccTimeoutSeconds) {
-                try await PCCPlanGenerator().generate(request, onPartial: onPartial)
+        case .cloud:
+            return try await Self.race(timeout: Self.cloudTimeoutSeconds) {
+                try await CloudPlanGenerator().generate(request, onPartial: onPartial)
             }
         }
     }
@@ -333,19 +415,19 @@ extension AppBrain {
     /// reused for every later turn (the recompose transcript), replaced on day change.
     /// Instructions freeze at creation — per-day is exactly their cadence (the
     /// throughput line changes daily), and a stable prefix is what the KV cache wants.
-    private func advisorSession(for request: TodayPlanRequest) -> AdvisorSession {
+    private func briefSession(for request: TodayPlanRequest) -> BriefSession {
         let dayKey = TodayPlanStore.dayKey(for: request.now)
-        if let session = advisorSession, session.dayKey == dayKey { return session }
-        let session = AdvisorSession(
+        if let session = briefSession, session.dayKey == dayKey { return session }
+        let session = BriefSession(
             dayKey: dayKey, instructions: TodayPlanInstructions.text(for: request))
-        advisorSession = session
+        briefSession = session
         return session
     }
 
     /// The measured candidate budget, once the session has computed it (nil → the
     /// fixed cap). Read by the request builder so heavy days fill the real window.
     var advisorCandidateCap: Int {
-        advisorSession?.measuredCandidateCap ?? TodayPlanRequest.candidateCap
+        briefSession?.measuredCandidateCap ?? TodayPlanRequest.candidateCap
     }
 
     /// Race a generation against a deadline; cancel the loser. When a `salvage` box is
@@ -466,20 +548,19 @@ extension AppBrain {
         return false
     }
 
-    /// PCC availability, read defensively. The entitlement gate comes FIRST: without
-    /// it, even constructing `PrivateCloudComputeLanguageModel` to ask `.isAvailable`
-    /// traps the process, so this must short-circuit to false and never touch it.
-    private static func pccAvailable() -> Bool {
-        guard PCCEntitlement.isGranted else { return false }
-        return PrivateCloudComputeLanguageModel().isAvailable
-    }
+    /// Cloud-rung availability — the installed provider's, whoever that is. The
+    /// defensive ordering that used to live here (entitlement gate before touching the
+    /// model, because constructing PCC unentitled traps the process) is now a
+    /// documented requirement of `CloudModelProvider.isAvailable`, where it applies to
+    /// every future provider rather than only this one.
+    private static func cloudAvailable() -> Bool { CloudModel.isAvailable }
 
     // MARK: ChangeLog
 
     /// One `.ai` entry per generation, kept as a record and deliberately NOT reversible
     /// and NOT inbox-visible (`ChangeLogEntry.plannedAction`).
     ///
-    /// It used to claim both. That badged the Inbox tab on first open, on every Replan,
+    /// It used to claim both. That badged the Activity screen on first open, on every Replan,
     /// and on every self-heal upgrade — the app generating engagement signal from its
     /// own background work — and it rendered an Undo button with nothing behind it:
     /// there is no `"planned"` arm in `ChangeLogUndo`, and the entry carries no
@@ -490,7 +571,7 @@ extension AppBrain {
         let source: String
         switch plan.tier {
         case .onDevice: source = "on-device"
-        case .pcc: source = "private cloud"
+        case .cloud: source = "private cloud"
         case .deterministic: source = "rules"
         }
         let count = plan.actions.count

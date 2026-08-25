@@ -27,12 +27,16 @@ The reliable loop for building and visually verifying this app. Requires the **X
    ```bash
    SIM="iPhone 17 Pro"; BID="amanze-studios.Project-Ezra"
    xcrun simctl bootstatus "$SIM" -b 2>/dev/null || true
-   # NOTE the Index.noindex exclusion: the indexer builds its own copy of the .app
-   # WITHOUT a bundle ID, and `find` returns it often enough to matter. Installing it
-   # fails with "Missing bundle ID" — or worse, silently installs a stale binary and
-   # you debug a build that isn't yours. Always exclude it.
+   # TWO traps, both of which silently install a binary that isn't yours:
+   # 1. The indexer builds its own copy of the .app WITHOUT a bundle ID, so exclude
+   #    Index.noindex (installing it fails with "Missing bundle ID").
+   # 2. `find` returns TRAVERSAL order, not time order — and a second DerivedData root
+   #    (a git worktree build, an old checkout) will happily win. Sort by mtime and
+   #    take the newest. This has cost a full round of "verifying" the old UI.
    APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Project-Ezra.app" \
-     -path "*Build/Products/Debug-iphonesimulator*" -not -path "*Index.noindex*" | head -1)
+     -path "*Build/Products/Debug-iphonesimulator*" -not -path "*Index.noindex*" \
+     -exec ls -dt {} + | head -1)
+   echo "installing: $APP"   # read this line; it is the cheapest guard against trap 2
    xcrun simctl terminate "$SIM" "$BID" 2>/dev/null || true
    xcrun simctl uninstall "$SIM" "$BID" 2>/dev/null || true    # clean state; omit to keep data
    xcrun simctl install "$SIM" "$APP"
@@ -51,15 +55,15 @@ The reliable loop for building and visually verifying this app. Requires the **X
 Append to the `simctl launch` line:
 - `-SeedSampleData` — populate real tasks via the AI engine and skip onboarding (the sim uses the heuristic engine; Foundation Models isn't available there).
 - `-SeedFlowFixtures` — populate deterministic fixture data covering every core user flow except onboarding (Daily Brief, Needs Decision Resolution, Weekly Retro, Dependency Chain Resurfacing), bypassing the AI engine so results are exact and identical every run. See `docs/mock-data-user-flows.md` for what each fixture produces.
-- `-InitialTab N` — start on tab N: `0` Today, `1` Inbox, `2` My Tasks, `3` Household.
+- `-InitialTab N` — start on tab N: `0` Brief, `1` Tasks. (The Inbox and Household tabs were cut in the v2 collapse; the Activity screen is reachable with `-OpenActivity`.)
 - `-OpenCapture ["text"]` — present the capture composer at launch; with a text argument it parks + resumes that text, driving the live parse loop so the results are screenshot-observable.
 
-Example — land on the seeded My Tasks surface:
+Example — land on the seeded Tasks surface:
 ```bash
-xcrun simctl launch "$SIM" "$BID" -SeedFlowFixtures -InitialTab 2
+xcrun simctl launch "$SIM" "$BID" -SeedFlowFixtures -InitialTab 1
 ```
 
-Example — land on Today with the full flow-fixture set:
+Example — land on the Brief with the full flow-fixture set:
 ```bash
 xcrun simctl launch "$SIM" "$BID" -SeedFlowFixtures -InitialTab 0
 ```

@@ -20,3 +20,25 @@ build/
 # Local Claude Code overrides (personal, not shared)
 .claude/settings.local.json
 CLAUDE.local.md
+
+# Firebase — local project config
+# `GoogleService-Info.plist` carries this app's Firebase project id and API key. Google's
+# position is that it is not a secret (it ships inside every copy of the app and is
+# trivially extractable), and the real protections are App Check plus backend security
+# rules — not keeping this file hidden. It is ignored here anyway because this is a
+# single-machine research build with no CI and no second contributor: nothing needs it in
+# the repo, and an ignored credential-shaped file is the cheaper default. If a second
+# machine or a build server ever needs to compile the app, delete this line — the app will
+# not launch the cloud rung without the plist, since `GeminiProvider.isAvailable` is
+# exactly "did FirebaseApp.configure() find it".
+GoogleService-Info.plist
+
+# Secrets — never committed, regardless of how convenient it would be
+.env
+.env.*
+*.p8
+*.p12
+*.mobileprovision
+
+# Test + profiling artifacts
+*.xcresult

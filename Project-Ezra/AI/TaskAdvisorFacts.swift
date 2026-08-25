@@ -44,6 +44,14 @@ struct TaskAdvisorFacts: Sendable, Equatable {
     var quietDays: Int
     var blockerTitles: [String]
     var blockerIDs: [UUID]
+    /// The phrases on `.externalWait` blockers — "the vendor to call back".
+    ///
+    /// Separate from `blockerTitles` because these are the blockers with **no task to
+    /// open**: `activeBlockerTasks` resolves `taskID`, so an external wait was dropped
+    /// before it reached any rung. The task read as blocked to the gate and as unblocked
+    /// to every consumer of the facts — including the prompt, which never mentioned it.
+    /// The Advisor was blind to exactly the blocker the user cannot see as a row.
+    var externalWaits: [String] = []
     var dependentTitles: [String]
     var childIDs: [UUID]
     var openStepTitles: [String]
@@ -68,6 +76,11 @@ struct TaskAdvisorFacts: Sendable, Equatable {
         -> TaskAdvisorFacts
     {
         let blockers = task.activeBlockerTasks(among: tasks)
+        // The external waits, kept apart: `.blocks` edges with no `targetID`, carrying a
+        // free-text note instead of a task.
+        let waits = task.activeBlockers(among: tasks)
+            .filter { $0.taskID == nil }
+            .compactMap(\.note)
         let children = task.children(among: tasks)
         let overdue = task.dueDate.flatMap { due -> Int? in
             guard let days = TaskItem.daysUntil(due, now: now), days < 0 else { return nil }
@@ -92,6 +105,7 @@ struct TaskAdvisorFacts: Sendable, Equatable {
             quietDays: max(0, Int(now.timeIntervalSince(task.humanTouchedAt) / 86_400)),
             blockerTitles: blockers.map(\.title),
             blockerIDs: blockers.compactMap(\.uuid).sorted { $0.uuidString < $1.uuidString },
+            externalWaits: waits,
             dependentTitles: task.dependents(among: tasks).map(\.title),
             childIDs: children.compactMap(\.uuid).sorted { $0.uuidString < $1.uuidString },
             openStepTitles: task.openSteps(among: tasks).map(\.title),
@@ -121,6 +135,9 @@ struct TaskAdvisorFacts: Sendable, Equatable {
         hasher.combine(isJudgmentCall)
         hasher.combine(deferralCount)
         hasher.combine(blockerIDs)
+        // External waits have no id, so `blockerIDs` cannot see them — without this,
+        // adding or resolving one would never invalidate the cached reading.
+        hasher.combine(externalWaits)
         hasher.combine(childIDs)
         hasher.combine(openStepTitles.count)
         hasher.combine(diagnosis)
@@ -160,8 +177,8 @@ struct TaskAdvisorFacts: Sendable, Equatable {
         if let reason = breakdownReason {
             lines.append("SENSOR: looks decomposable — \(reason.rationale.lowercased())")
         }
-        if !blockerTitles.isEmpty {
-            lines.append("WAITING ON: " + blockerTitles.joined(separator: "; "))
+        if !blockerTitles.isEmpty || !externalWaits.isEmpty {
+            lines.append("WAITING ON: " + (blockerTitles + externalWaits).joined(separator: "; "))
         }
         if !dependentTitles.isEmpty {
             lines.append("BLOCKS: " + dependentTitles.joined(separator: "; "))
@@ -180,6 +197,36 @@ struct TaskAdvisorFacts: Sendable, Equatable {
         }
         if workIntent == .planning { lines.append("INTERNAL: planning work") }
         return lines.joined(separator: "\n")
+    }
+
+    /// The evidence behind a reading, in the user's terms — what "Why this?" reveals.
+    ///
+    /// **Evidence, never reasoning.** Every line is a fact the user can already see
+    /// elsewhere in the app, phrased plainly; the model contributes NOTHING here, which
+    /// is exactly what keeps this a receipt rather than a narrative about the user.
+    /// Deliberately excludes `workIntent` and every INTERNAL prompt line — axis 2 is
+    /// system-owned, and internal reasoning signals must not become accidental UI.
+    var userVisibleEvidence: [String] {
+        var lines: [String] = []
+        if deferralCount > 0 {
+            lines.append(
+                "You've set this aside \(deferralCount) time\(deferralCount == 1 ? "" : "s") in a row")
+        }
+        for blocker in blockerTitles { lines.append("It's waiting on “\(blocker)”") }
+        for wait in externalWaits { lines.append("It's waiting on \(wait)") }
+        if let overdueDays {
+            lines.append("It's \(overdueDays) day\(overdueDays == 1 ? "" : "s") overdue")
+        }
+        if let stepLabel { lines.append(stepLabel) }
+        if diagnosis != nil, deferralCount == 0, quietDays > 0 {
+            lines.append("No progress on it in \(quietDays) days")
+        }
+        if needsDecision { lines.append("It's flagged as needing a decision") }
+        if isUrgent { lines.append("You marked it urgent") }
+        if !dependentTitles.isEmpty {
+            lines.append("Other work waits on it: " + dependentTitles.joined(separator: ", "))
+        }
+        return lines
     }
 
     /// The fixed statement of each diagnosis — the same vocabulary the retired

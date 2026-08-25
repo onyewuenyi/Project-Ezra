@@ -17,6 +17,7 @@
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "4B1A21513008A247005DDBBF"
                BuildableName = "Project-Ezra.app"
+               BlueprintName = "Project-Ezra"
                ReferencedContainer = "container:Project-Ezra.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -58,6 +59,7 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "4B1A21513008A247005DDBBF"
             BuildableName = "Project-Ezra.app"
+            BlueprintName = "Project-Ezra"
             ReferencedContainer = "container:Project-Ezra.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -74,6 +76,7 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "4B1A21513008A247005DDBBF"
             BuildableName = "Project-Ezra.app"
+            BlueprintName = "Project-Ezra"
             ReferencedContainer = "container:Project-Ezra.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

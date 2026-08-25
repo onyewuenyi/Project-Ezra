@@ -46,18 +46,15 @@ enum DraftMerge {
     /// One-to-one merge of a fresh parse into the current cards, preserving fresh's
     /// order (it reflects the capture text). Matched cards keep their identity and
     /// user edits; unmatched fresh candidates enter as new cards; unmatched current
-    /// cards drop (the model no longer reads that line) — unless `keepingUnmatched`.
+    /// cards drop — the model no longer reads that line.
     ///
-    /// `keepingUnmatched` is the STREAMING arm: a partial snapshot grows from the top
-    /// of the text, so "this line isn't in the snapshot yet" is a statement about how
-    /// far generation has gotten, not about the line. Dropping on that read collapsed
-    /// an established card list to one card at the start of every chained re-parse and
-    /// regrew it — cards blinking away mid-ramble. Unmatched current cards ride at the
-    /// tail (they ARE the tail: snapshots claim cards top-down); only a COMPLETED
-    /// parse, which really has re-read every line, may drop one.
+    /// There was a `keepingUnmatched` arm here for STREAMING: a partial snapshot grows
+    /// from the top of the text, so "this line isn't in the snapshot yet" was a
+    /// statement about generation progress rather than about the line. It went with the
+    /// rolling parse — the composer passes `onPartial: nil` and reveals once — and
+    /// production never passed it `true`.
     static func merge(
-        fresh: [TaskDraft], into current: [TaskDraft], removed: RemovedDraftSet,
-        keepingUnmatched: Bool = false
+        fresh: [TaskDraft], into current: [TaskDraft], removed: RemovedDraftSet
     ) -> [TaskDraft] {
         let candidates = removed.filter(fresh)
         var claimed = [Bool](repeating: false, count: current.count)
@@ -112,13 +109,9 @@ enum DraftMerge {
             }
         }
 
-        var merged = candidates.enumerated().map { f, candidate in
+        return candidates.enumerated().map { f, candidate in
             matches[f].map { adopt(fresh: candidate, keeping: current[$0]) } ?? candidate
         }
-        if keepingUnmatched {
-            merged += current.indices.filter { !claimed[$0] }.map { current[$0] }
-        }
-        return merged
     }
 
     /// Fresh's values + kept's identity + kept's user-touched fields re-applied.
@@ -164,58 +157,6 @@ enum DraftMerge {
             merged.edgeProposals[index].decision = keptProposal.decision
         }
         return merged
-    }
-
-    /// A provisional pass landing on cards a model parse may already own. **Additive
-    /// only**: a matched card is returned BYTE-IDENTICAL, never re-read down to
-    /// heuristic values. That is the whole rule — a card that already exists is by
-    /// definition at least as good as what the segmenter would now say about it, and
-    /// re-adopting would clobber the three things only the model has (the tightened
-    /// title, the edge proposals, and `aiOriginal`, whose rewrite would break both the
-    /// Correction diff and the suppression key). No epoch is needed to make that safe;
-    /// it is safe by construction.
-    static func mergeProvisional(
-        fresh: [TaskDraft], into current: [TaskDraft], removed: RemovedDraftSet
-    ) -> [TaskDraft] {
-        let candidates = removed.filter(fresh)
-        var claimed = [Bool](repeating: false, count: current.count)
-        var result: [TaskDraft] = []
-        for candidate in candidates {
-            if let c = provisionalMatch(for: candidate, in: current, claimed: claimed) {
-                claimed[c] = true
-                result.append(current[c])  // untouched — never downgraded
-            } else {
-                result.append(candidate)
-            }
-        }
-        // A card the segmenter no longer sees (the model split a line differently)
-        // must not vanish because the user typed one more character.
-        result += current.indices.filter { !claimed[$0] }.map { current[$0] }
-        return result
-    }
-
-    /// Pass A / B / C′ for the additive merge. C′ is Pass C with the roles swapped —
-    /// a MODEL card claiming this provisional candidate's clause — so a retitle is
-    /// recognised from both directions and the provisional pass can't add a duplicate
-    /// card for a line the model already holds under a rewritten title.
-    private static func provisionalMatch(
-        for candidate: TaskDraft, in current: [TaskDraft], claimed: [Bool]
-    ) -> Int? {
-        let k = key(candidate)
-        if !k.isEmpty,
-            let c = current.indices.first(where: { !claimed[$0] && key(current[$0]) == k })
-        {
-            return c
-        }
-        if let c = current.indices.first(where: { !claimed[$0] && related(candidate, current[$0]) }) {
-            return c
-        }
-        guard let source = candidate.provisionalSource else { return nil }
-        return current.indices.first(where: {
-            !claimed[$0] && !current[$0].isProvisional
-                && claims(
-                    modelTitle: current[$0].aiOriginal?.title ?? current[$0].title, source: source)
-        })
     }
 
     /// Does a model title read as a COMPRESSION of the clause a provisional card was

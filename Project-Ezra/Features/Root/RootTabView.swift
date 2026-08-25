@@ -2,11 +2,20 @@
 //  RootTabView.swift
 //  Project-Ezra
 //
-//  The app shell, deliberately minimal: four tabs — Today (the cinematic daily
-//  briefing), Inbox (the household activity feed), My Tasks (the system of record),
-//  and Household — plus a floating circular Capture button that overlays every tab.
-//  Review is not a destination; the Today sequence is where the day is framed. First
-//  launch presents the onboarding transformation.
+//  The app shell, now two tabs and a button — Brief (the cinematic daily briefing) and
+//  Tasks (the system of record), plus the floating circular Capture button. The loop IS
+//  the navigation: you ramble in, you glance at the Brief, you work the Tasks. Review is
+//  not a destination; first launch presents the onboarding transformation.
+//
+//  The Inbox and Household TABS were cut (product shape v2, 2026-08-18) — surfaces cut,
+//  systems relocated. The trust surface survives as `ActivityView`, a sheet this shell
+//  owns; multiplayer survives as substrate (the roster, born-owned tasks, the publish
+//  boundary at Confirm) with roster editing one tap deep in the Tasks "…" menu.
+//
+//  Activity is mounted HERE, once, on purpose. It is reachable from two places (the
+//  Tasks header and the Brief's held-depth tile) and belongs to neither; the last time a
+//  surface's only mount point lived inside another surface's conditional container, a
+//  change to that container silently deleted it for three weeks (`MyTasksHeader`).
 //
 
 import CoreData
@@ -20,9 +29,11 @@ extension EnvironmentValues {
     /// Reopen a specific parked capture (the Today "captures waiting" line). Distinct
     /// from `openCapture`, which always begins a fresh one.
     @Entry var resumeCapture: (Capture) -> Void = { _ in }
-    /// Jump to the Inbox tab — used by the Today surface's held-depth tile (which
-    /// used to open the AI-trail sheet; the trail is now the Inbox tab).
-    @Entry var openInbox: () -> Void = {}
+    /// Open the Activity screen — the change log with action-aware Undo. Used by the
+    /// Tasks header and the Brief's held-depth tile. It is an environment action rather
+    /// than a local sheet for the same reason `openCapture` is: the surface has one
+    /// mount point, in the shell, and no screen owns it.
+    @Entry var openActivity: () -> Void = {}
 }
 
 /// One presentation of the capture composer. Fresh id per open — every open is a new
@@ -42,11 +53,14 @@ struct RootTabView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
     private var familyMembers: [FamilyMember] { Array(familyMembersResults) }
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \ChangeLogEntry.timestamp, ascending: false)])
-    private var changesResults: FetchedResults<ChangeLogEntry>
-    @AppStorage("lastInboxSeenAt") private var lastInboxSeenAt: Double = 0
     @State private var showOnboarding: Bool
+    /// The Activity screen's one mount point. Deliberately not a tab and deliberately
+    /// not badged: the trust surface is something you go to when you want to check or
+    /// undo, never something that asks to be visited (guardrail 1, calm over
+    /// engagement — the unread TAB BADGE died with the tab, and good riddance; the
+    /// per-row unread dots survive inside, where they answer "what's new since I looked"
+    /// for someone who already chose to look).
+    @State private var showActivity = false
     /// The presented composer session, item-based ON PURPOSE: with the paired
     /// `isPresented` + `resumingCapture` shape, SwiftUI evaluated the sheet's content
     /// closure once with the STALE nil resume target and re-evaluated with the real
@@ -75,34 +89,18 @@ struct RootTabView: View {
                 args.indices.contains($0 + 1) ? Int(args[$0 + 1]) : nil
             } ?? 0
         // TabView crashes if selection is set to an unavailable tab, so clamp the
-        // verification seam to the four valid tab values
-        // (0 Today, 1 Inbox, 2 My Tasks, 3 Household).
-        _selection = State(initialValue: min(max(initialTab, 0), 3))
-    }
-
-    /// Unread Inbox entries — anything logged since the user last opened the tab. Excludes
-    /// manual field edits ("edited") the same way the feed does (`isInboxVisible`), so a
-    /// timeline-only edit never inflates the badge for something the Inbox won't show.
-    private var unreadInboxCount: Int {
-        changesResults.filter {
-            $0.isInboxVisible && $0.timestamp.timeIntervalSinceReferenceDate > lastInboxSeenAt
-        }.count
+        // verification seam to the two valid tab values (0 Brief, 1 Tasks). The old
+        // range was 0…3; a stale `-InitialTab 3` now lands on Tasks rather than crashing.
+        _selection = State(initialValue: min(max(initialTab, 0), 1))
     }
 
     var body: some View {
         TabView(selection: $selection) {
-            Tab("Today", systemImage: "sparkles", value: 0) {
-                TodayHomeView()
+            Tab("Brief", systemImage: "sparkles", value: 0) {
+                BriefHomeView()
             }
-            Tab("Inbox", systemImage: "tray", value: 1) {
-                InboxView()
-            }
-            .badge(unreadInboxCount)
-            Tab("My Tasks", systemImage: "checklist", value: 2) {
+            Tab("Tasks", systemImage: "checklist", value: 1) {
                 TasksHomeView()
-            }
-            Tab("Household", systemImage: "person.3", value: 3) {
-                HouseholdView()
             }
         }
         .tint(Palette.accentFlat)
@@ -114,8 +112,8 @@ struct RootTabView: View {
         .undoNotice($commitNotice, bottomInset: Spacing.xxl)
         .environment(\.openCapture, { presentComposer(resuming: nil) })
         .environment(\.resumeCapture, { capture in presentComposer(resuming: capture) })
-        .environment(\.openInbox, { selection = 1 })
-        // Tapping the daily nudge lands on Today, wherever the app was left.
+        .environment(\.openActivity, { showActivity = true })
+        // Tapping the daily nudge lands on the Brief, wherever the app was left.
         .onChange(of: briefing.pendingOpenBriefing) { _, pending in
             guard pending else { return }
             selection = 0
@@ -126,6 +124,7 @@ struct RootTabView: View {
         .sheet(item: $composerSession, onDismiss: { presentCommitNotice() }) { session in
             ComposerView(resuming: session.resuming)
         }
+        .sheet(isPresented: $showActivity) { ActivityView() }
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView {
                 hasOnboarded = true
@@ -152,40 +151,170 @@ struct RootTabView: View {
                 UserProfile.bootstrapIdentity(in: context)
                 await seedIfRequested()
             }
+            await runBriefDiagnosticsIfRequested()
+            await runCaptureCompareIfRequested()
             await runCaptureDiagnosticsIfRequested()
             await runRambleEvalIfRequested()
             #if DEBUG
             await AdvisorDiagnostics.runIfRequested()
+            // Gold-standard-first routing discovery: which cases measurably need depth.
+            await AdvisorBenchmark.runIfRequested()
             // Coverage reads the LIVE store (the fixtures next door answer a different
             // question), so it runs here where the real context is in scope.
             AdvisorCoverageDiagnostics.runIfRequested(in: context)
             #endif
+            openActivityIfRequested()
             await openCaptureIfRequested()
         }
     }
 
-    /// Verification seam: `-RambleEval` runs the 47-case labeled eval set through the
-    /// ACTIVE engine and prints the per-field table + named misses to stdout — the
-    /// instrument that answers "how much better is on-device than the heuristic, per
-    /// field?" with data. On a heuristic host it reproduces the test suite's numbers
-    /// (the engine label makes that honest). Non-destructive: nothing commits, same
-    /// rule as `-CaptureDiagnostics`. DEBUG-only, like the fixture set it reads.
+    /// Deterministic verification seam. Launch with `-OpenActivity` to present the
+    /// Activity screen, which stopped being a tab in the v2 collapse and is now two taps
+    /// deep behind the Tasks "…" menu — a Menu, and opening one needs a tap Accessibility
+    /// blocks here. The screen that has to prove "every AI action is undoable" should
+    /// stay reviewable without one. Never fires in normal runs.
+    private func openActivityIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("-OpenActivity") else { return }
+        showActivity = true
+    }
+
+    /// Verification seam: `-RambleEval` runs the labeled eval set through **every arm
+    /// available on this host**, scoring each against the SAME shared floors
+    /// (`RambleEval.Floors`) and printing a per-field PASS/FAIL table plus named misses
+    /// to stdout.
+    ///
+    /// It used to run "the ACTIVE engine" — one arm, whichever the host happened to
+    /// select — and print percentages with no floors attached, so reading it meant
+    /// eyeballing numbers against literals in a test file. That is how the front door
+    /// went unmeasured: CI held the heuristic arm to the floors, the device printed the
+    /// on-device arm's numbers next to nothing, and an unstructured spoken blob failed
+    /// to segment while every number in the suite stayed green.
+    ///
+    /// Both arms run whenever both exist, deliberately. The interesting output is not
+    /// either table but the DIFFERENCE, and a baseline the cloud arm must beat has to be
+    /// measured on the same hardware in the same run — not inherited from CI.
+    ///
+    /// Non-destructive: nothing commits, same rule as `-CaptureDiagnostics`. DEBUG-only,
+    /// like the fixture set it reads.
     private func runRambleEvalIfRequested() async {
         #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("-RambleEval") else { return }
         print("=== RAMBLE EVAL ===")
-        print("engine: \(brain.status.description)")
-        do {
-            let report = try await RambleEval.score { utterance in
-                await brain.triage(utterance).drafts
-            }
-            print(report.table)
-        } catch {
-            print("eval failed: \(AppBrain.errorLabel(error))")
+        print("host engine: \(brain.status.description)")
+
+        // The deterministic arm always exists — it is the offline arm of everything, so
+        // it is never "not applicable", only sometimes not the one that ships.
+        await runEvalArm("heuristic") { utterance in
+            let intents = try await HeuristicEngine().triage(rawText: utterance)
+            return IntentResolver.resolve(intents)
         }
+
+        // The on-device arm, only where there is one. `brain.triage` is the REAL front
+        // door — the same path a capture takes — which is the whole point: scoring a
+        // hand-assembled approximation of it would reproduce the original mistake in a
+        // new place.
+        // The on-device arm is DEGRADED OFFLINE CAPTURE, not a rung the router can
+        // choose — it is reached only when the cloud is unreachable. Scored so the
+        // offline experience has a number, never so it can be compared as a peer.
+        if brain.status.isOnDevice {
+            await runEvalArm("degraded-offline", expectsModel: true) { utterance in
+                await brain.triage(utterance, route: .cloud, allowHedge: false).drafts
+            }
+        } else {
+            print("\n(degraded-offline arm skipped — no on-device model on this host)")
+        }
+
+        // The cloud arm — the one the routing change is FOR, and the reason both arms
+        // above run in the same command: the numbers only mean something next to each
+        // other, on the same hardware, in the same run.
+        if CloudModel.isAvailable {
+            // `allowHedge: false` — this arm must measure the CLOUD arm, not the blend the
+            // composer ships. With hedging on, a slow cloud call is answered by the local
+            // model and scored under a "cloud" heading, and the served-call delta still
+            // looks correct because the cloud calls really were issued. The blend is the
+            // right product behaviour and the wrong measurement.
+            await runEvalArm("cloud(\(CloudModel.provider.identifier))", expectsModel: true) {
+                utterance in
+                await brain.triage(utterance, route: .cloud, allowHedge: false).drafts
+            }
+        } else {
+            print("\n(cloud arm skipped — no provider installed; CloudModel.provider is inert)")
+        }
+
         print("=== END RAMBLE EVAL ===")
         #endif
     }
+
+    #if DEBUG
+    /// Score one arm and print its table, WITH proof of which engine actually answered.
+    ///
+    /// `expectsModel` is the load-bearing parameter, and it exists because the first
+    /// version of this seam reproduced the exact failure it was built to catch. On a
+    /// host where `SystemLanguageModel.default.availability == .available` but the model
+    /// catalog is empty (a real simulator state: *"There are no underlying assets … for
+    /// asset set com.apple.modelcatalog"*), every generation throws and
+    /// `AppBrain.triage` degrades to the heuristic — **by design**, because capture must
+    /// never fail. The arm then produces the fallback's drafts, scores the fallback's
+    /// numbers, and prints "on-device: ALL FLOORS HELD".
+    ///
+    /// Availability is a claim about a model EXISTING; it is not evidence that one
+    /// ANSWERED. So the arm proves it: the `ModelMetrics` delta across the run says how
+    /// many calls were served, and an arm that expected a model and served none is
+    /// reported as **DEGRADED** rather than as a pass. A green table nobody can trust is
+    /// worse than no table.
+    ///
+    /// A thrown error is reported as a failed ARM rather than a failed run, so one
+    /// broken arm never hides another's numbers.
+    private func runEvalArm(
+        _ name: String, expectsModel: Bool = false,
+        resolve: @escaping (String) async throws -> [TaskDraft]
+    ) async {
+        let before = ModelMetrics.shared.stats[.captureTriage] ?? ModelMetrics.Stats()
+        let started = Date()
+        do {
+            let report = try await RambleEval.score(resolve: resolve)
+            let seconds = Date().timeIntervalSince(started)
+            let after = ModelMetrics.shared.stats[.captureTriage] ?? ModelMetrics.Stats()
+            let served = after.served - before.served
+            let failed = (after.failures - before.failures) + (after.timeouts - before.timeouts)
+
+            print(report.table(against: .standard, arm: name))
+            print(
+                String(
+                    format: "arm %@ took %.1fs · model calls served %d · failed %d",
+                    name, seconds, served, failed))
+            // DEGRADED is a RATIO, not a zero test.
+            //
+            // It used to fire only on `served == 0`, and that let the worst possible
+            // report through: a cloud arm that served 2 of 52 calls printed "ALL FLOORS
+            // HELD" with numbers identical to the heuristic's, because 96% of the corpus
+            // had quietly scored the deterministic fallback. One survivor was enough to
+            // suppress the warning. A partially degraded arm is not a weaker version of
+            // a degraded arm — it is the same lie with better camouflage, because the
+            // table looks plausible instead of empty.
+            //
+            // `lastError` is printed with it: an arm can now say WHY it degraded, which
+            // is the difference between "re-run somewhere else" and a diagnosis. Without
+            // it the only signal was a count, and a count cannot distinguish a missing
+            // model from a rejected request.
+            let attempted = served + failed
+            let servedShare = attempted > 0 ? Double(served) / Double(attempted) : 0
+            if expectsModel && (attempted == 0 || servedShare < 0.9) {
+                let reason = ModelMetrics.shared.stats[.captureTriage]?.lastError
+                print(
+                    """
+                    ⚠️  ARM DEGRADED — "\(name)" served \(served)/\(attempted) call\
+                    \(attempted == 1 ? "" : "s"); the rest scored the DETERMINISTIC \
+                    fallback, so this table describes the fallback, not \(name). \
+                    \(reason.map { "Last error: \($0)." } ?? "No error label recorded.") \
+                    Fix the arm before treating any number above as a baseline.
+                    """)
+            }
+        } catch {
+            print("arm \(name) FAILED: \(AppBrain.errorLabel(error))")
+        }
+    }
+    #endif
 
     /// Deterministic verification seam. Launch with `-OpenCapture ["text"]` to present
     /// the composer at launch — the one capture surface no other arg could reach
@@ -232,7 +361,7 @@ struct RootTabView: View {
     /// Deliberately no Undo button: undoing a batch means deleting the created tasks AND
     /// reversing each merge AND unwinding the blocker edges commit wrote onto OTHER
     /// tasks — a half-honest version of that is worse than none, so per-item Undo stays
-    /// in the Inbox where it already works, and this notice claims nothing about it.
+    /// in Activity where it already works, and this notice claims nothing about it.
     private func presentCommitNotice() {
         guard let summary = brain.lastCommitSummary, !summary.isEmpty else { return }
         brain.lastCommitSummary = nil  // consumed — a dismiss reports its own commit only
@@ -242,12 +371,16 @@ struct RootTabView: View {
 
     /// The persistent Capture action: a circular accent-gradient button in the
     /// bottom-trailing corner. Linear's agent button sits INLINE beside its (icon-only,
-    /// narrow) tab bar; ours can't — four LABELED tabs make the system capsule too wide
-    /// to leave beside-room on this device, so a beside-placement overlaps Household.
-    /// Per the plan's documented fallback, we pin it just ABOVE the bar's trailing edge
+    /// narrow) tab bar; with four labeled tabs ours couldn't — the system capsule was too
+    /// wide to leave beside-room, so it was pinned just ABOVE the bar's trailing edge
     /// ("near the bar"), which also keeps it from floating orphaned when the bar
     /// minimizes on scroll. `bottomInset` is a TUNED CONSTANT (the bar geometry isn't
     /// public), not a pixel-lock.
+    ///
+    /// The two-tab collapse frees the width the original beside-placement wanted, and it
+    /// is deliberately NOT taken here: this is a layout change with a real chance of
+    /// colliding with the bar's own minimize behaviour, and it belongs to a beat that can
+    /// be looked at in the simulator rather than riding along with a structural cut.
     private var captureButton: some View {
         Button {
             // Opening the composer from here always starts a NEW capture — a stale
@@ -328,6 +461,183 @@ struct RootTabView: View {
     ///
     /// Deliberately does NOT commit: this measures the parse, and leaving a pile of
     /// tasks behind would make the seam destructive to re-run.
+    /// `-BriefDiagnostics` — prove the CLOUD BRIEF end to end, headlessly.
+    ///
+    /// **Why this exists as a seam rather than a footer reading.** The MAX_TOKENS bug was
+    /// unit-proven and operationally broken for weeks: the profile was right, a per-call
+    /// `GenerationOptions` overrode it, and every cloud briefing returned
+    /// `finishReason: MAX_TOKENS` while the UI simply showed the deterministic tail. The
+    /// only visible symptom was a briefing that read a bit flat. Nothing failed, nothing
+    /// was logged where anyone looked, and the fix for it was itself unverifiable without
+    /// standing in the app watching a DEBUG footer.
+    ///
+    /// So this prints the whole chain as facts: which tier ANSWERED, whether the reply is
+    /// actually voiced or merely a ranked list wearing a headline, the token accounting,
+    /// and the typed error when it fails. A cloud tier that silently degrades now says so
+    /// in one line.
+    ///
+    /// Non-destructive: generates a plan and prints it, commits nothing.
+    private func runBriefDiagnosticsIfRequested() async {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("-BriefDiagnostics") else { return }
+        print("=== BRIEF DIAGNOSTICS ===")
+        print("engine: \(brain.status.description)")
+        print("cloud provider reachable: \(CloudModel.isAvailable) (\(CloudModel.label))")
+
+        let all = TaskItem.fetchAll(in: context)
+        let live = all.filter { $0.status.isLive }
+        guard !live.isEmpty else {
+            print("no live tasks — run with -SeedTodayFixtures to give the advisor something to plan")
+            print("=== END BRIEF DIAGNOSTICS ===")
+            return
+        }
+        let request = TodayPlanRequest.make(
+            candidateItems: TaskRanking.sorted(live, among: all, now: Date()),
+            allTasks: all, recapCount: 0, typicalCompleted: nil, now: Date())
+        print("candidates: \(request.candidates.count)")
+
+        let started = Date()
+        let plan = await brain.todayPlan(for: request, in: context)
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+
+        // The claim under test. A deterministic plan is a ranked list with fact lines and
+        // no tradeoffs or risks — structurally distinguishable from an advisor's voice,
+        // which is exactly why "the Brief looked fine" was never evidence.
+        let voiced = plan.tier != PlanTier.deterministic && plan.tradeoffs != nil && plan.risks != nil
+        print("tier that ANSWERED: \(plan.tier)  ·  \(ms)ms")
+        print("headline: \(plan.headline ?? "—")")
+        print(
+            "actions: \(plan.actions.count) · tradeoffs: \(plan.tradeoffs != nil) · risks: \(plan.risks != nil)"
+        )
+        print(
+            voiced
+                ? "✅ VOICED — the advisor answered"
+                : "⚠️  NOT VOICED — this is the deterministic tail wearing a headline")
+        if plan.tier == PlanTier.deterministic {
+            print(
+                "   why: err \(brain.planMetrics.lastError ?? "none") · availability \(brain.planMetrics.lastAvailability ?? "?")"
+            )
+        }
+        let m = brain.planMetrics
+        print(
+            "metrics: last tier \(m.lastTier ?? "—") · \(m.lastLatencyMs)ms · "
+                + "prompt \(m.lastPromptTokens) · output \(m.lastOutputTokens) · "
+                + "err \(m.lastError ?? "none") · availability \(m.lastAvailability ?? "?")")
+        print(
+            "metrics: tiers — on-device \(m.onDeviceCount) · cloud \(m.cloudCount) · rules \(m.deterministicCount)"
+        )
+        print("=== END BRIEF DIAGNOSTICS ===")
+        #endif
+    }
+
+    /// `-CaptureCompare "<your ramble>"` — the same words, read by every arm, printed
+    /// side by side. Add `-WithCloud` to include the paid rung.
+    ///
+    /// **The manual-judgment instrument.** `RambleEval` answers "does this match the
+    /// labels?" over a frozen corpus; that is the right question for regressions and the
+    /// wrong one for "is this good?". Quality on YOUR OWN messy sentences is a thing a
+    /// person has to read and decide, and until now the only way to see a reading was to
+    /// capture it in the app and inspect cards — one arm, no comparison, no way to tell
+    /// which reader you were looking at.
+    ///
+    /// It matters more on the Spark plan than it would otherwise. Unstructured capture
+    /// routes to the cloud, the cloud is rationed, and what actually serves the ramble is
+    /// the DEGRADED OFFLINE arm — the one device evidence says is weakest at exactly this
+    /// job. Whether that is tolerable to live with is a judgment call, and this is the
+    /// tool for making it on real input instead of on the corpus.
+    ///
+    /// The cloud arm is OPT-IN (`-WithCloud`) because one eval sweep exhausts a day's
+    /// free quota, which then breaks real capture — measuring the product must not cost
+    /// you the product.
+    private func runCaptureCompareIfRequested() async {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        guard let flag = args.firstIndex(of: "-CaptureCompare") else { return }
+        let text =
+            args.indices.contains(flag + 1) && !args[flag + 1].hasPrefix("-")
+            ? args[flag + 1]
+            : "renew my passport before the trip and book flights after it comes through"
+
+        print("=== CAPTURE COMPARE ===")
+        print("input (\(text.count) chars): \(text)")
+        // What PRODUCTION would do with this input, before any arm runs — so the
+        // comparison is read against the route the user would actually get.
+        let structure = Segmentation.structure(of: text)
+        print("structure: \(structure.label) → route \(CaptureRoute.route(for: text).metricName)")
+
+        await compareArm("deterministic (always available)") {
+            IntentResolver.resolve(try await HeuristicEngine().triage(rawText: text))
+        }
+
+        if brain.status.isOnDevice {
+            await compareArm("degraded-offline (on-device)") {
+                let engine = FoundationModelsEngine(sessionSource: .onDevice)
+                let intents = try await engine.triage(
+                    rawText: text, context: TriageContext(), onPartial: nil)
+                return IntentResolver.resolve(intents)
+            }
+        } else {
+            print("\n— degraded-offline: no on-device model on this host")
+        }
+
+        if args.contains("-WithCloud") {
+            guard CloudModel.isAvailable else {
+                print("\n— cloud: no provider configured")
+                print("=== END CAPTURE COMPARE ===")
+                return
+            }
+            await compareArm("cloud (the semantic authority)") {
+                let engine = FoundationModelsEngine(sessionSource: .cloud)
+                let intents = try await engine.triage(
+                    rawText: text, context: TriageContext(), onPartial: nil)
+                return IntentResolver.resolve(intents)
+            }
+        } else {
+            print("\n— cloud: skipped (pass -WithCloud to spend a call)")
+        }
+        print("=== END CAPTURE COMPARE ===")
+        #endif
+    }
+
+    #if DEBUG
+    /// One arm's reading, printed as the DRAFTS THEMSELVES rather than as counts.
+    ///
+    /// Counts are what the old diagnostics gave ("11 drafts · 3 dated"), and they cannot
+    /// answer the only question that matters here: did it understand the sentence? A
+    /// wrong split and a right one both count as two.
+    private func compareArm(
+        _ name: String, resolve: @escaping () async throws -> [TaskDraft]
+    ) async {
+        let started = Date()
+        do {
+            let drafts = try await resolve()
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            print("\n── \(name) — \(drafts.count) task\(drafts.count == 1 ? "" : "s") · \(ms)ms ──")
+            if drafts.isEmpty { print("   (nothing)") }
+            for (i, d) in drafts.enumerated() {
+                var line = "  \(i + 1). \(d.title)  [\(d.category)]"
+                if let due = d.dueDate {
+                    line += " · due \(Self.dayFormatter.string(from: due))"
+                    if d.dueReason != nil { line += " (inferred)" }
+                }
+                if let owner = d.ownerName { line += " · @\(owner)" }
+                if let blocker = d.blockedBy { line += " · waits on \(blocker)" }
+                if d.isJudgmentCall { line += " · JUDGMENT" }
+                if d.unresolved.contains(.date) { line += " · asks WHEN?" }
+                print(line)
+            }
+        } catch {
+            print("\n── \(name) — FAILED: \(AppBrain.errorLabel(error))")
+        }
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        return f
+    }()
+    #endif
+
     private func runCaptureDiagnosticsIfRequested() async {
         guard ProcessInfo.processInfo.arguments.contains("-CaptureDiagnostics") else { return }
         // Long, messy, and full of the shapes that make the model work: dates, a
@@ -423,8 +733,9 @@ struct RootTabView: View {
 
     /// Deterministic verification seam. Launch with `-SeedFlowFixtures` to populate
     /// hand-built data covering every core user flow except onboarding, bypassing
-    /// the AI engine so status/confidence/autonomy are exact — see
-    /// prev-docs/mock-data-user-flows.md. Never fires in normal runs.
+    /// the AI engine so status/confidence/autonomy are exact. The fixtures below are
+    /// the walkthrough now — the doc that described them was written against the
+    /// retired suggested/ready/inProgress vocabulary. Never fires in normal runs.
     private func seedFlowFixturesIfRequested() {
         guard ProcessInfo.processInfo.arguments.contains("-SeedFlowFixtures") else { return }
         let existing = (try? context.count(for: NSFetchRequest<TaskItem>(entityName: "TaskItem"))) ?? 0

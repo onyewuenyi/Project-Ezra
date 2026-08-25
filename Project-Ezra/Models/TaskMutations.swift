@@ -503,7 +503,7 @@ extension TaskItem {
         // undo like every other mutation here.
         case .unblock: unblockAndLog(in: context)
         // Through the shared seam: records the StateVisit, logs a coalescing human
-        // edit that self-deletes on a round-trip, stays out of the Inbox feed, and
+        // edit that self-deletes on a round-trip, stays out of the Activity feed, and
         // bumps the human clock so picking a task up resets its staleness.
         case .start, .resume: setStatus(.doing, in: context)
         case .resolve: return completeAndResurface(in: context)
@@ -518,7 +518,7 @@ extension TaskItem {
 extension TaskItem {
     /// Resolution seam used by every list and the detail sheet: complete + resurface
     /// any dependents this frees. Records a reversible HUMAN "completed" entry (only
-    /// the user can attest a real-world completion) so it surfaces in the Inbox feed
+    /// the user can attest a real-world completion) so it surfaces in the Activity feed
     /// with the actor's avatar; its undo reopens (never sends to inbox). Returns what
     /// resurfaced so the flow can say so in place. Callers still own `save()`.
     @discardableResult
@@ -531,7 +531,7 @@ extension TaskItem {
 
     /// Kill also resolves the dependency — the blocker is settled either way, so
     /// dependents resurface rather than waiting forever on a dead task. Records a
-    /// reversible HUMAN "killed" entry for the Inbox feed (undo reopens).
+    /// reversible HUMAN "killed" entry for the Activity feed (undo reopens).
     @discardableResult
     func killAndResurface(in context: NSManagedObjectContext, now: Date = Date()) -> [TaskItem] {
         kill(now: now)
@@ -540,7 +540,7 @@ extension TaskItem {
         return Self.resurfaceDependents(of: self, in: context, now: now)
     }
 
-    /// The one place a human resolution (complete/cancel) is logged for the Inbox
+    /// The one place a human resolution (complete/cancel) is logged for Activity
     /// feed. Stamps the current user as `actorID` so the feed can render their avatar.
     private func logHumanResolution(
         action: String, verb: String, now: Date, in context: NSManagedObjectContext
@@ -563,7 +563,7 @@ extension TaskItem {
     /// description, stage, blockers) for the task's own Activity timeline. Sits alongside
     /// `logHumanResolution`/`claimAndLog` and shares their convention (`.human`, current
     /// user as `actorID`), but its `editedAction` verb keeps it OUT of the global Inbox
-    /// (see `ChangeLogEntry.isInboxVisible`). Snapshot the old value at the call site.
+    /// (see `ChangeLogEntry.isActivityVisible`). Snapshot the old value at the call site.
     ///
     /// Two behaviors every call site gets for free:
     /// - **No-op guard**: identical old/new logs nothing (re-picking the current value).
@@ -642,7 +642,7 @@ extension TaskItem {
     /// a resolved task moved back to live work reopens first.
     ///
     /// A `todo ↔ doing` move is a manual field edit, logged with `logHumanEdit` so it
-    /// coalesces, self-deletes on a round-trip, and stays OUT of the Inbox feed —
+    /// coalesces, self-deletes on a round-trip, and stays OUT of the Activity feed —
     /// nudging a task in and out of flight while you work is not household news.
     func setStatus(_ target: TaskStatus, in context: NSManagedObjectContext) {
         let previous = status
@@ -670,7 +670,7 @@ extension TaskItem {
         if status.isResolved { reopenAndReblock(in: context) }
     }
 
-    /// Claim ownership AND record a reversible HUMAN "assigned" entry for the Inbox
+    /// Claim ownership AND record a reversible HUMAN "assigned" entry for Activity
     /// feed. Used by the detail owner picker and the recommended-action claim;
     /// capture-time ownership (`AppBrain.resolveOwners`) stays unlogged — it is
     /// covered by the "filed" entry.
@@ -744,7 +744,7 @@ extension TaskItem {
         return (id, origin ?? .inferred)
     }
 
-    /// The human explicitly making a judgment call, logged for the Inbox feed — the
+    /// The human explicitly making a judgment call, logged for the Activity feed — the
     /// UI counterpart to `resolveDecision()`. Undo re-escalates.
     ///
     /// `choice` is WHAT was decided — the option the user tapped on the Thinking

@@ -135,6 +135,28 @@ enum AdvisorDiagnostics {
         print(
             "advisor profile asks for: reasoningLevel="
                 + String(describing: CapabilityProfiles.taskAdvisor.reasoningLevel))
+        // BOTH arms, over the SAME fixtures, in the same run — Challenge 8's A/B, made
+        // readable. "Spend aggressively on the Advisor" is only a defensible position if
+        // the spend can be shown to buy move-quality, and the only way to show that is
+        // identical task states judged on-device and on cloud side by side. If cloud
+        // wins the hard band, spend freely there and the per-generation cost is noise
+        // against the value. If it doesn't, the ~$0 ladder IS the product — and that is
+        // a fine answer, arrived at with data rather than instinct.
+        await runArm(.onDevice)
+        if CloudModel.isAvailable {
+            await runArm(.cloud)
+        } else {
+            print("\n(cloud arm skipped — no provider installed; CloudModel.provider is inert)")
+        }
+        print("=== END ADVISOR DIAGNOSTICS ===")
+    }
+
+    /// Score every fixture on one rung. Extracted so the two arms cannot drift: the
+    /// fixtures, the repeat count, the majority rule and the agreement definition are
+    /// shared by construction, and the ONLY difference between the arms is where
+    /// generation happened.
+    private static func runArm(_ rung: IntelligenceRung) async {
+        print("\n── arm: \(rung == .cloud ? CloudModel.label : "on-device") ──")
         let context = PersistenceStack.scratch
         let service = TaskAdvisorService()
         var agreements = 0
@@ -175,7 +197,7 @@ enum AdvisorDiagnostics {
 
             for _ in 0..<repeats {
                 let started = Date()
-                let outcome = await service.read(facts)
+                let outcome = await service.read(facts, rung: rung)
                 times.append(Int(Date().timeIntervalSince(started) * 1000))
 
                 switch outcome {
@@ -222,10 +244,11 @@ enum AdvisorDiagnostics {
         print("agreement: \(agreements)/\(judged) fixtures (majority of \(repeats) runs each)")
         if unstable > 0 {
             // The number that says whether the eval can be trusted to guide a tuning
-            // decision at all. A fixture that flips between runs is not evidence.
+            // decision at all. A fixture that flips between runs is not evidence — and it
+            // is the first thing to check before reading a difference BETWEEN arms as
+            // real, since two unstable arms can differ by luck alone.
             print("unstable: \(unstable) fixture(s) gave different answers across runs")
         }
-        print("=== END ADVISOR DIAGNOSTICS ===")
     }
 }
 #endif

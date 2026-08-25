@@ -25,12 +25,15 @@ enum Metrics {
     /// Only AI-initiated entries count — folding human edits in would inflate the
     /// trust number.
     static func acceptanceRate(entries: [ChangeLogEntry]) -> Double? {
-        // "planned" entries (the daily Today plan) are excluded: a plan is not an
-        // AI *action on a task* the user accepts or rejects, so folding it in would
-        // distort the trust number. It is not reversible and not inbox-visible for
-        // the same reason — see `ChangeLogEntry.plannedAction`.
+        // Excluded verbs (`ChangeLogEntry.nonAcceptanceActions`): a daily plan is not an
+        // AI *action on a task* the user accepts or rejects, and neither is a capture
+        // receipt. Both are AI-initiated and permanently irreversible, so both could only
+        // ever score as KEPT — folding them in would let the trust number rise on volume
+        // alone. The list lives on `ChangeLogEntry` so a future verb can't be excluded
+        // from the feed and silently left inside the metric.
         let aiEntries = entries.filter {
-            $0.initiatedBy == .ai && $0.action != ChangeLogEntry.plannedAction
+            $0.initiatedBy == .ai
+                && !ChangeLogEntry.nonAcceptanceActions.contains($0.action ?? "")
         }
         guard !aiEntries.isEmpty else { return nil }
         let kept = aiEntries.filter { !$0.undone }.count
@@ -129,7 +132,7 @@ final class PlanMetrics {
     private let defaults: UserDefaults
 
     private(set) var onDeviceCount: Int
-    private(set) var pccCount: Int
+    private(set) var cloudCount: Int
     private(set) var deterministicCount: Int
     private(set) var lastLatencyMs: Int
     private(set) var lastPromptTokens: Int
@@ -139,7 +142,7 @@ final class PlanMetrics {
     private(set) var lastTurn = 0
     private(set) var skips: Int
     private(set) var interruptions: Int
-    /// The tier that produced the last returned plan ("on-device"/"pcc"/"rules").
+    /// The tier that produced the last returned plan ("on-device"/"cloud(<provider>)"/"rules").
     private(set) var lastTier: String?
     /// The typed label of the last *swallowed* model-tier failure (timedOut,
     /// guardrailViolation, exceededContextWindowSize, modelNotReady, …) — the one signal
@@ -151,7 +154,7 @@ final class PlanMetrics {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.onDeviceCount = defaults.integer(forKey: Key.onDeviceCount)
-        self.pccCount = defaults.integer(forKey: Key.pccCount)
+        self.cloudCount = defaults.integer(forKey: Key.cloudCount)
         self.deterministicCount = defaults.integer(forKey: Key.deterministicCount)
         self.lastLatencyMs = defaults.object(forKey: Key.lastLatencyMs) as? Int ?? -1
         self.lastPromptTokens = defaults.object(forKey: Key.lastPromptTokens) as? Int ?? -1
@@ -183,9 +186,9 @@ final class PlanMetrics {
             // failure so a stale error doesn't linger in the diagnostics.
             lastError = nil
             defaults.removeObject(forKey: Key.lastError)
-        case .pcc:
-            pccCount += 1
-            defaults.set(pccCount, forKey: Key.pccCount)
+        case .cloud:
+            cloudCount += 1
+            defaults.set(cloudCount, forKey: Key.cloudCount)
         case .deterministic:
             deterministicCount += 1
             defaults.set(deterministicCount, forKey: Key.deterministicCount)
@@ -209,10 +212,15 @@ final class PlanMetrics {
         defaults.set(availability, forKey: Key.lastAvailability)
     }
 
+    /// The tier's DEBUG label. The cloud rung names its PROVIDER (`cloud(pcc)`) rather
+    /// than just the rung: when a briefing came back voiced from off-device, "which
+    /// provider answered" is the first thing you need in order to read the latency and
+    /// the failure next to it — and it is the only level at which that question is
+    /// legitimate (see `CloudModelProvider`).
     private func tierLabel(_ tier: PlanTier) -> String {
         switch tier {
         case .onDevice: return "on-device"
-        case .pcc: return "pcc"
+        case .cloud: return CloudModel.label
         case .deterministic: return "rules"
         }
     }
@@ -235,7 +243,7 @@ final class PlanMetrics {
     /// alone would leave yesterday's numbers on the footer until the next launch.
     func reset() {
         onDeviceCount = 0
-        pccCount = 0
+        cloudCount = 0
         deterministicCount = 0
         lastLatencyMs = -1
         lastPromptTokens = -1
@@ -248,7 +256,7 @@ final class PlanMetrics {
         lastError = nil
         lastAvailability = nil
         for key in [
-            Key.onDeviceCount, Key.pccCount, Key.deterministicCount, Key.lastLatencyMs,
+            Key.onDeviceCount, Key.cloudCount, Key.deterministicCount, Key.lastLatencyMs,
             Key.lastPromptTokens, Key.lastOutputTokens, Key.skips, Key.interruptions,
             Key.lastTier, Key.lastError, Key.lastAvailability,
         ] {
@@ -258,7 +266,7 @@ final class PlanMetrics {
 
     private enum Key {
         static let onDeviceCount = "today.gen.count.onDevice"
-        static let pccCount = "today.gen.count.pcc"
+        static let cloudCount = "today.gen.count.cloud"
         static let deterministicCount = "today.gen.count.deterministic"
         static let lastLatencyMs = "today.gen.lastLatencyMs"
         static let lastPromptTokens = "today.gen.lastPromptTokens"
@@ -322,8 +330,6 @@ final class ModelMetrics {
         /// "model" = the orb held the screen until generation answered).
         var lastConfirmMs = -1
         var lastFirstCardSource: String?
-        /// Submit → the model's enrichment landing on the already-revealed set.
-        var lastEnrichmentMs = -1
         /// AI results refused because they arrived after the reveal (`Interpretation`).
         /// NOT an error — it is the guard working. It is evidence about the ROUTING policy:
         /// a high rate on the fast path means the model had something to say and we chose
@@ -340,6 +346,19 @@ final class ModelMetrics {
         var provisionalPasses = 0
         /// The confirm tap: drafts → tasks in the store, synchronously.
         var lastCommitMs = -1
+        /// Hedging (`CaptureTriageRace.hedged`): how often the free arm had to be started
+        /// because the paid one was late, and how often it went on to WIN the reveal.
+        ///
+        /// These two numbers are what make `ModelDeadline.captureHedgeSeconds` tunable
+        /// instead of a guess, and they say opposite things when they disagree. A high
+        /// start rate with a low win rate means the delay is too short — the device is
+        /// doing redundant work on ordinary captures and the cloud arm is answering
+        /// anyway. A high win rate means the cloud arm is genuinely unreliable here, and
+        /// the question stops being about the delay and becomes about the rung.
+        /// Both near zero is the healthy state: the paid arm answers, and the hedge is
+        /// insurance that never gets claimed.
+        var hedgesStarted = 0
+        var hedgesWon = 0
 
         var calls: Int { successes + salvaged + timeouts + failures }
         /// Calls that put usable output in front of the user, however they got there.
@@ -429,10 +448,16 @@ final class ModelMetrics {
         stats[.captureTriage] = entry
     }
 
-    /// Submit → enrichment landing on an already-revealed set.
-    func recordEnrichment(latencyMs: Int) {
+    /// One hedged capture's shape: did the free arm start, and did it win?
+    ///
+    /// Recorded only when a hedge arm actually existed, so the rates are over hedgeABLE
+    /// captures rather than over all of them — an on-device-route capture that could
+    /// never have hedged would otherwise dilute both numbers toward zero and make the
+    /// delay look better tuned than it is.
+    func recordHedge(started: Bool, won: Bool) {
         var entry = stats[.captureTriage] ?? Stats()
-        entry.lastEnrichmentMs = latencyMs
+        if started { entry.hedgesStarted += 1 }
+        if won { entry.hedgesWon += 1 }
         stats[.captureTriage] = entry
     }
 
@@ -459,7 +484,15 @@ final class ModelMetrics {
         stats[.captureTriage] = entry
     }
 
-    /// One provisional pass's own cost — the evidence behind the coalesce window.
+    /// The LOCAL route's own cost — segmentation, resolve and owner proposal, with no
+    /// model anywhere in it.
+    ///
+    /// This was dead for a while: it measured a per-keystroke provisional pass that the
+    /// submit-once arc deleted, and nothing called it. It is live again because that same
+    /// code is now the local ROUTE — the whole answer whenever the user typed the
+    /// boundaries themselves — so its latency stopped being a curiosity and became the
+    /// number the routing split is justified by. Measured p50: 3ms, against a cloud arm
+    /// at roughly a second.
     func recordProvisionalPass(latencyMs: Int) {
         var entry = stats[.captureTriage] ?? Stats()
         entry.lastProvisionalMs = latencyMs
@@ -491,7 +524,11 @@ final class ModelMetrics {
                 line += " · confirm \(entry.lastConfirmMs)ms"
                 if let source = entry.lastFirstCardSource { line += "(\(source))" }
             }
-            if entry.lastEnrichmentMs >= 0 { line += " · enrich \(entry.lastEnrichmentMs)ms" }
+            // Only when the hedge has fired at all — an unclaimed insurance policy is the
+            // healthy state and doesn't need a line in the footer to say so.
+            if entry.hedgesStarted > 0 {
+                line += " · hedge \(entry.hedgesWon)/\(entry.hedgesStarted)"
+            }
             if entry.refusedProposals > 0 { line += " · \(entry.refusedProposals) refused" }
             if entry.ungroundedDrops > 0 { line += " · \(entry.ungroundedDrops) ungrounded" }
             if entry.lastCommitMs >= 0 { line += " · commit \(entry.lastCommitMs)ms" }
@@ -568,6 +605,25 @@ final class AdvisorMetrics {
         var statusAtAction: String
     }
 
+    /// One judged SILENCE, with the lifecycle position it was judged at.
+    ///
+    /// This is the control cohort, and without it the north star is not falsifiable.
+    /// "62% of advised tasks later moved" sounds like evidence and is not: tasks the
+    /// Advisor speaks on are selected — they are the stuck, decision-shaped,
+    /// repeat-deferred ones — so their movement rate has no meaning until it is compared
+    /// against something. The honest comparison is tasks the Advisor **looked at and
+    /// judged not worth speaking on**: same gate, same facts pipeline, same kind of work,
+    /// differing only in the intervention.
+    ///
+    /// Gate skips are deliberately NOT the control. A task the gate declined is trivial
+    /// by construction — comparing "renew the passport" against "water the plants" would
+    /// measure task difficulty and call it Advisor quality.
+    struct SilentEvent: Codable, Equatable {
+        var taskID: UUID
+        var date: Date
+        var statusAtJudgment: String
+    }
+
     /// The acted-event list is evidence, not history — enough for the derivations,
     /// never a transcript.
     static let maxActedEvents = 200
@@ -575,9 +631,18 @@ final class AdvisorMetrics {
     private let defaults: UserDefaults
     private(set) var stats: [AdvisorMove: Stats] = [:]
     private(set) var actedEvents: [ActedEvent] = []
+    /// The control cohort — tasks the Advisor judged and chose silence on.
+    private(set) var silentEvents: [SilentEvent] = []
+    /// Judgments the deterministic gate answered for free — deliberately NOT folded
+    /// into `nothing`. "We skipped this" and "the model looked and declined" answer
+    /// different questions (*are we skipping too much?* vs *does the Advisor know when
+    /// to shut up?*), and gate skips accumulate on every fingerprint change of every
+    /// trivial task, so merging them would swamp the honesty denominator.
+    private(set) var gated = 0
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        gated = defaults.integer(forKey: Key.gated)
         for move in AdvisorMove.allCases {
             stats[move] = Stats(
                 offered: defaults.integer(forKey: Key.offered(move)),
@@ -588,6 +653,26 @@ final class AdvisorMetrics {
             let events = try? JSONDecoder().decode([ActedEvent].self, from: data)
         {
             actedEvents = events
+        }
+        if let data = defaults.data(forKey: Key.silentEvents),
+            let events = try? JSONDecoder().decode([SilentEvent].self, from: data)
+        {
+            silentEvents = events
+        }
+    }
+
+    /// The Advisor looked at a worthy task and judged silence — one control-cohort
+    /// sample. Recorded only for MODEL-judged silence; the deterministic gate's skips are
+    /// a different population (see `SilentEvent`).
+    func recordJudgedSilence(taskID: UUID?, status: TaskStatus, now: Date = Date()) {
+        guard let taskID else { return }
+        silentEvents.append(
+            SilentEvent(taskID: taskID, date: now, statusAtJudgment: status.rawValue))
+        if silentEvents.count > Self.maxActedEvents {
+            silentEvents.removeFirst(silentEvents.count - Self.maxActedEvents)
+        }
+        if let data = try? JSONEncoder().encode(silentEvents) {
+            defaults.set(data, forKey: Key.silentEvents)
         }
     }
 
@@ -615,11 +700,19 @@ final class AdvisorMetrics {
         defaults.set(stats[move]?.dismissed ?? 0, forKey: Key.dismissed(move))
     }
 
-    /// One DEBUG-footer line: `advisor: adv 1/4 · dec 2/3 · zip 6` (acted/offered;
-    /// `nothing` shows its offered count alone — silence has no action to take).
+    /// The deterministic gate answered — no model call was spent.
+    func recordGated() {
+        gated += 1
+        defaults.set(gated, forKey: Key.gated)
+    }
+
+    /// One DEBUG-footer line: `advisor: gated 12 · zip 6 · dec 2/3` (acted/offered;
+    /// `gated` and `nothing` show a bare count — silence has no action to take).
     /// Nil when nothing has ever been judged — no line beats a row of zeros.
     var footerLine: String? {
-        let parts = AdvisorMove.allCases.compactMap { move -> String? in
+        var parts: [String] = []
+        if gated > 0 { parts.append("gated \(gated)") }
+        parts += AdvisorMove.allCases.compactMap { move -> String? in
             guard let entry = stats[move], entry.offered > 0 else { return nil }
             if move == .nothing { return "\(Self.label(move)) \(entry.offered)" }
             return "\(Self.label(move)) \(entry.acted)/\(entry.offered)"
@@ -628,25 +721,92 @@ final class AdvisorMetrics {
         return "advisor: " + parts.joined(separator: " · ")
     }
 
-    /// The north-star derivation, lazy and read-only over the live set: `moved 62% ·
-    /// re-int 1.3`. A task counts as progressed when it resolved, or its lifecycle
-    /// moved past where the intervention found it. Tasks no longer in the set (deleted)
-    /// leave the denominator. Nil until there is at least one judged task.
-    func progressionLine(among tasks: [TaskItem]) -> String? {
-        guard !actedEvents.isEmpty else { return nil }
-        let byTask = Dictionary(grouping: actedEvents, by: \.taskID)
-        var judged = 0
-        var progressed = 0
-        for (taskID, events) in byTask {
+    /// One cohort's progression rate, and how many tasks it was measured over.
+    struct Cohort: Equatable {
+        var moved = 0
+        var total = 0
+        var rate: Double? { total == 0 ? nil : Double(moved) / Double(total) }
+    }
+
+    /// **Progression lift** — the north star, and the only form of it that can be wrong.
+    ///
+    /// The earlier number was "% of advised tasks that later moved", which reads like
+    /// evidence and isn't: the Advisor speaks on *selected* tasks — the stuck,
+    /// decision-shaped, repeat-deferred ones — so 62% has no meaning on its own. It could
+    /// mean the interventions work, or it could mean hard tasks move anyway, and the
+    /// number cannot tell those apart. A metric that cannot fail cannot support the claim
+    /// the whole product rests on.
+    ///
+    /// Lift compares against tasks the Advisor **looked at and judged not worth speaking
+    /// on**: same gate, same facts pipeline, same kind of work, differing only in whether
+    /// an intervention happened. Positive lift is the falsifiable form of "does Ezra make
+    /// stalled work move?"
+    ///
+    /// Both cohorts are measured over the LIVE set, so deleted tasks leave both
+    /// denominators, and a task that appears in both (advised once, silent later) counts
+    /// as advised — the intervention is the thing whose effect is being measured.
+    func progression(among tasks: [TaskItem]) -> (advised: Cohort, silent: Cohort, lift: Double?) {
+        let advisedByTask = Dictionary(grouping: actedEvents, by: \.taskID)
+        var advised = Cohort()
+        for (taskID, events) in advisedByTask {
             guard let task = tasks.first(where: { $0.uuid == taskID }) else { continue }
-            judged += 1
+            advised.total += 1
             let first = events.min(by: { $0.date < $1.date })!
-            if Self.hasProgressed(task, since: first.statusAtAction) { progressed += 1 }
+            if Self.hasProgressed(task, since: first.statusAtAction) { advised.moved += 1 }
         }
-        guard judged > 0 else { return nil }
-        let percent = Int((Double(progressed) / Double(judged) * 100).rounded())
-        let reIntervention = Double(actedEvents.count) / Double(byTask.count)
-        return "moved \(percent)% · re-int \(String(format: "%.1f", reIntervention))"
+
+        var silent = Cohort()
+        for (taskID, events) in Dictionary(grouping: silentEvents, by: \.taskID) {
+            // Contaminated control: a task that was also advised belongs to the treatment
+            // group. Leaving it in both would dilute the difference towards zero and make
+            // a working Advisor look ineffective.
+            guard advisedByTask[taskID] == nil else { continue }
+            guard let task = tasks.first(where: { $0.uuid == taskID }) else { continue }
+            silent.total += 1
+            let first = events.min(by: { $0.date < $1.date })!
+            if Self.hasProgressed(task, since: first.statusAtJudgment) { silent.moved += 1 }
+        }
+
+        // Nil rather than zero when either cohort is empty: "no difference measured" and
+        // "no measurement possible" are different claims, and reporting the second as the
+        // first is how a product talks itself into believing an unproven thing.
+        let lift: Double? = {
+            guard let a = advised.rate, let s = silent.rate else { return nil }
+            return a - s
+        }()
+        return (advised, silent, lift)
+    }
+
+    /// The DEBUG footer line: `moved 62% (13) · silent 31% (9) · lift +31pt · re-int 1.3`.
+    /// Nil until something has been judged.
+    func progressionLine(among tasks: [TaskItem]) -> String? {
+        guard !actedEvents.isEmpty || !silentEvents.isEmpty else { return nil }
+        let (advised, silent, lift) = progression(among: tasks)
+        var parts: [String] = []
+        if let rate = advised.rate {
+            parts.append("moved \(Int((rate * 100).rounded()))% (\(advised.total))")
+        }
+        if let rate = silent.rate {
+            parts.append("silent \(Int((rate * 100).rounded()))% (\(silent.total))")
+        }
+        if let lift {
+            // Signed, always. A negative lift is the most important number this footer can
+            // ever show — it says the interventions are not helping — and an unsigned
+            // percentage would let it hide in plain sight.
+            let points = Int((lift * 100).rounded())
+            parts.append("lift \(points >= 0 ? "+" : "")\(points)pt")
+        } else {
+            // Named rather than omitted: a missing control is a gap in the evidence, and
+            // a footer that simply drops the row looks like a product with no opinion.
+            parts.append("lift n/a")
+        }
+        if !actedEvents.isEmpty {
+            let byTask = Dictionary(grouping: actedEvents, by: \.taskID)
+            let reIntervention = Double(actedEvents.count) / Double(byTask.count)
+            parts.append("re-int \(String(format: "%.1f", reIntervention))")
+        }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " · ")
     }
 
     /// Did the task move past where the intervention found it? Resolution always
@@ -677,7 +837,11 @@ final class AdvisorMetrics {
             defaults.removeObject(forKey: Key.dismissed(move))
         }
         actedEvents = []
+        silentEvents = []
+        gated = 0
         defaults.removeObject(forKey: Key.actedEvents)
+        defaults.removeObject(forKey: Key.silentEvents)
+        defaults.removeObject(forKey: Key.gated)
     }
 
     private enum Key {
@@ -685,5 +849,7 @@ final class AdvisorMetrics {
         static func acted(_ m: AdvisorMove) -> String { "advisor.\(m.rawValue).acted" }
         static func dismissed(_ m: AdvisorMove) -> String { "advisor.\(m.rawValue).dismissed" }
         static let actedEvents = "advisor.actedEvents"
+        static let silentEvents = "advisor.silentEvents"
+        static let gated = "advisor.gated"
     }
 }

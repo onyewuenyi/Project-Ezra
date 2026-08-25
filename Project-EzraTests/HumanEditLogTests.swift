@@ -5,7 +5,7 @@
 //  The manual-field-edit trail behind the task detail's Activity timeline: `logHumanEdit`
 //  records a HUMAN "edited" entry per field change (with the no-op guard + burst
 //  coalescing), `ChangeLogUndo` restores the prior value, and these entries are kept OUT
-//  of the global Inbox (feed + unread badge) via the shared `isInboxVisible` seam while
+//  of the global Inbox (feed + unread badge) via the shared `isActivityVisible` seam while
 //  still reachable by `taskUUID` for the per-task timeline.
 //
 
@@ -281,7 +281,7 @@ struct HumanEditLogTests {
 
     // MARK: - Inbox exclusion (feed + badge share one seam)
 
-    @Test("'edited' entries are excluded from the Inbox but reachable by taskUUID")
+    @Test("'edited' entries are excluded from Activity but reachable by taskUUID")
     func editedExcludedFromInbox() throws {
         let context = context()
         let task = TaskItem(title: "x", status: .todo, confidence: 0.9)
@@ -296,30 +296,30 @@ struct HumanEditLogTests {
 
         // Feed / badge seam: the predicate keeps "filed", drops "edited".
         let visibleRequest = NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry")
-        visibleRequest.predicate = ChangeLogEntry.inboxVisiblePredicate
+        visibleRequest.predicate = ChangeLogEntry.activityVisiblePredicate
         let visible = try context.fetch(visibleRequest)
         #expect(visible.contains { $0.action == "filed" })
         #expect(!visible.contains { $0.action == ChangeLogEntry.editedAction })
 
         // The in-memory mirror the unread badge uses agrees.
-        #expect(filed.isInboxVisible)
+        #expect(filed.isActivityVisible)
         let edit = try #require(try editedEntries(for: task, in: context).first)
-        #expect(!edit.isInboxVisible)
+        #expect(!edit.isActivityVisible)
 
         // Still present on the task's own timeline (fetched by taskUUID, no predicate).
         #expect(try editedEntries(for: task, in: context).count == 1)
     }
 
     /// The Today plan's generation entry is the app's OWN background work, not an action
-    /// anyone took — so it must not badge the Inbox tab. It used to, on first open, on
+    /// anyone took — so it must not badge the Activity screen. It used to, on first open, on
     /// every Replan, and on every self-heal upgrade, which turned a re-entrant background
     /// job into an engagement signal the guardrails refuse.
     ///
     /// Both forms are asserted because they are the drift risk: the fetch predicate and
-    /// the in-memory mirror are read by different call sites (`InboxView` vs
-    /// `RootTabView.unreadInboxCount`), and a verb excluded from one but not the other
+    /// the in-memory mirror are read by different call sites (`ActivityView` vs
+    /// the in-memory mirror), and a verb excluded from one but not the other
     /// shows a feed and a badge that disagree.
-    @Test("'planned' entries are excluded from the Inbox by both forms of the seam")
+    @Test("'planned' entries are excluded from Activity by both forms of the seam")
     func plannedExcludedFromInbox() throws {
         let context = context()
         let planned = ChangeLogEntry(
@@ -333,13 +333,13 @@ struct HumanEditLogTests {
         try context.save()
 
         let visibleRequest = NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry")
-        visibleRequest.predicate = ChangeLogEntry.inboxVisiblePredicate
+        visibleRequest.predicate = ChangeLogEntry.activityVisiblePredicate
         let visible = try context.fetch(visibleRequest)
         #expect(!visible.contains { $0.action == ChangeLogEntry.plannedAction })
         #expect(visible.contains { $0.action == "filed" })
 
-        #expect(!planned.isInboxVisible)
-        #expect(filed.isInboxVisible)
+        #expect(!planned.isActivityVisible)
+        #expect(filed.isActivityVisible)
     }
 
     /// Not reversible, and deliberately so: there is no `"planned"` arm in

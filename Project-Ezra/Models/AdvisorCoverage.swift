@@ -81,6 +81,42 @@ enum AdvisorCoverage {
         }
     }
 
+    /// How many of the worthy tasks rung 0 can actually speak to, with no model.
+    ///
+    /// **This is the number the deterministic floor exists for, and it is deliberately
+    /// separate from `measure`.** The gate answers "is this worth a judgment?"; this
+    /// answers "and if no model ever arrives, does the surface still say something?"
+    /// They were silently different for a long time: the fallback rendered
+    /// `StallDiagnosis.headline`, which only exists for the `.stalled` rung, while the
+    /// gate opens for nine reasons. On a fixture set with `stalled: 0` that meant every
+    /// worthy task drew the ADVISOR kicker over an empty box.
+    ///
+    /// Kept out of `Report` because `measure` also backs the Settings footer, and the
+    /// footer should not pay for a `TaskAdvisorFacts.make` per task.
+    ///
+    /// A shortfall is not automatically a bug — a `.doing` task with no steps has
+    /// nothing factual to add, and silence is the honest answer there. It is a number to
+    /// look at when it moves.
+    static func floorCoverage(
+        _ tasks: [TaskItem], now: Date = Date()
+    ) -> (
+        covered: Int, worthy: Int
+    ) {
+        var covered = 0
+        var worthy = 0
+        for task in tasks
+        where TaskCapabilities.advisorGateReason(for: task, among: tasks, now: now).isWorthy {
+            worthy += 1
+            let facts = TaskAdvisorFacts.make(task: task, among: tasks, now: now)
+            // A diagnosed stall is covered by the view's richer template, which owns its
+            // action links — so it counts as covered even though `make` returns nil.
+            if facts.diagnosis != nil || DeterministicReading.make(from: facts) != nil {
+                covered += 1
+            }
+        }
+        return (covered, worthy)
+    }
+
     /// Sweep a task set. Pass the whole set — `advisorGateReason` needs it to resolve
     /// blocker and child edges, so a filtered array would silently change the verdicts.
     static func measure(_ tasks: [TaskItem], now: Date = Date()) -> Report {

@@ -56,8 +56,8 @@ struct EmptyStateView: View {
 #Preview {
     EmptyStateView(
         symbol: "tray",
-        title: "Inbox is clear",
-        message: "Nothing to triage. Capture something and the AI will sort it.",
+        title: "Nothing here yet",
+        message: "Nothing to triage. Capture something and Ezra will sort it.",
         actionTitle: "Capture a task",
         action: {}
     )

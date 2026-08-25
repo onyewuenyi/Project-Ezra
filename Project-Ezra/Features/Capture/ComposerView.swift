@@ -14,13 +14,13 @@
 //  it. Submit is a deliberate handoff ("got it, I'll take it from here"); the input
 //  collapses into one orb; and the reveal presents ONE interpretation.
 //
-//  The engineering rule that makes that possible: **progressively enrich, never
-//  progressively reinterpret.** Structure — how many tasks, in what order — is decided
-//  once, at submit, and never changes under the user. The deterministic read is trusted
-//  only when it is certain (the user typed the structure, or there is exactly one item);
-//  otherwise the model decides while the orb holds the screen. Afterwards the model may
-//  improve every card's title and metadata, but it may not re-count or reorder — see
-//  `enrich`.
+//  Structure — how many tasks, in what order — is decided ONCE, at submit, and never
+//  changes under the user. Who decides it is a single observation: if the user drew the
+//  boundaries (lines, bullets, a comma list) the deterministic path reads them and the
+//  reveal is immediate; otherwise the orb holds the screen while the semantic authority
+//  reads the whole capture. There is no third case, and no enrichment pass afterwards —
+//  `Interpretation` refuses a late proposal, so a card set that is on screen is final
+//  until the user changes it.
 //
 //  This replaced a live-parsing composer whose cards appeared, split, merged and
 //  vanished while the user typed. That reads as "slow and confused" even when the final
@@ -95,12 +95,20 @@ struct ComposerView: View {
     @State private var phase: RamblePhase = .capture
     /// When submit happened — the clock for the performance contract.
     @State private var submittedAt: Date?
-    /// Which producer decided the structure on screen ("typed"/"single"/"model").
-    @State private var structureSource = "typed"
+    /// Which route produced the cards on screen ("local"/"cloud").
+    @State private var structureSource = CaptureRoute.local.metricName
+    /// How the parse behind the current cards actually ran — the receipt `commit` turns
+    /// into this capture's `CaptureProvenance`. Nil until a route has been taken; the
+    /// `.local` arm synthesizes its own, because "no model ran" is a run fact worth
+    /// recording rather than an absence.
+    @State private var lastRun: CaptureRunTelemetry?
     /// When the current card set arrived. The stagger clock: each card's entrance is
     /// offset from this, so the composition arrives as one thing with a rhythm rather
     /// than appearing all at once or animating per-card forever after.
     @State private var revealedAt: Date?
+    /// When the orb took the screen. Backs `Motion.orbMinimumDwellSeconds` — the floor
+    /// that stops a fast parse from flashing the hero morph. Nil off the model routes.
+    @State private var understandingSince: Date?
 
     @State private var text = ""
     /// The card set and the reveal boundary that protects it. All AI-originated writes go
@@ -144,11 +152,8 @@ struct ComposerView: View {
     @State private var showDiscardConfirm = false
     /// The text the last COMPLETED parse ran against. Only when this matches what's in the
     /// field do we know an empty `drafts` means "the engine found nothing here" rather than
-    /// "it hasn't looked yet" — the difference between an honest message and a lie.
-    @State private var lastParsedText: String?
     /// Whether the last completed parse returned any candidates at all, before the
     /// session's removals filtered them. The honest input to `foundNothing`.
-    @State private var lastParseYieldedCandidates = false
     /// When the silence auto-stop will fire — rescheduled on every transcript delta,
     /// nil outside dictation. The hero bar renders its last stretch as a draining ring.
     @State private var silenceDeadline: Date?
@@ -373,10 +378,12 @@ struct ComposerView: View {
         speech.stop()
         submittedAt = Date()
 
+        let localStarted = Date()
         let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
+        let localMs = Int(Date().timeIntervalSince(localStarted) * 1000)
         // An empty local read can't be revealed, whatever the router said — fall through to
         // the model rather than showing "nothing actionable" on a capture we never parsed.
-        let route: CaptureRoute = local.isEmpty ? .reasoning : CaptureRoute.route(for: captured)
+        let route: CaptureRoute = local.isEmpty ? .cloud : CaptureRoute.route(for: captured)
         structureSource = route.metricName
 
         // Verification seam: hold the Understanding beat so the orb can actually be looked
@@ -390,15 +397,41 @@ struct ComposerView: View {
         }
         #endif
 
+        // The ledger is split between here and `AppBrain.triage` on purpose, and the
+        // split is "who knows what ACTUALLY ran". `.local` never reaches the brain, so it
+        // is counted here; the cloud arm is counted there, after the availability
+        // degrade — a `.cloud` route on a device that turns out to have no reachable
+        // provider runs on-device, and a counter that recorded the intent would report
+        // paid calls that never happened. Counting it in both places was the first
+        // version of this and double-counted every model parse.
         switch route {
-        case .fast:
+        case .local:
+            IntelligenceLedger.shared.record(route.rung, for: .ramble)
+            // The deterministic arm is measured too. It is the baseline the authority has
+            // to beat, and a baseline with no number can't be one. Measured p50: 3ms.
+            var run = CaptureRunTelemetry.local(
+                segmentation: Segmentation.structure(of: captured).label,
+                cloudAvailable: CloudModel.isAvailable)
+            run.parseMs = localMs
+            // The local route's cost, recorded where it is actually paid. It is the
+            // baseline the cloud arm is judged against, and a baseline nobody measures
+            // is an assumption.
+            ModelMetrics.shared.recordProvisionalPass(latencyMs: localMs)
+            lastRun = run
             interpretation.propose(local)
             reveal()
             parkIfUnfinished(force: true)
-        case .reasoning:
+        case .cloud:
+            // The orb holds the screen and the result is the reveal. Nothing here may
+            // tell the user which rung is thinking — a "thinking in the cloud" state
+            // would be an intermediate semantic disclosure in everything but name, and
+            // the reveal contract's whole point is that the user receives one answer,
+            // not a progress report on how it was produced. That applies equally to the
+            // offline degrade beneath this arm.
+            understandingSince = .now
             Motion.withMotion(Motion.heroSettle) { phase = .understanding }
             parkIfUnfinished(force: true)
-            runParse(captured)
+            runParse(captured, route: route)
         }
     }
 
@@ -410,13 +443,19 @@ struct ComposerView: View {
         revealedAt = .now
         Motion.withMotion(Motion.heroSettle) { phase = .confirm }
         recordConfirmReached()
+        announceReveal()
     }
 
-    /// The ONE model parse a capture gets, and it runs only on the reasoning path — its
+    /// The ONE model parse a capture gets, and it runs only on a model route — its
     /// result IS the reveal. There is deliberately no "enrich the already-revealed set"
     /// arm any more: `Interpretation` refuses a late proposal, so an arm that tried would
     /// be dead code that looked alive.
-    private func runParse(_ captured: String) {
+    ///
+    /// `route` is passed through rather than re-derived: which rung thinks was decided
+    /// once, at submit, and a second call to `CaptureRoute.route` here could disagree
+    /// with the first if connectivity changed in between — the user would then be
+    /// waiting behind an orb for an arm the router no longer believes in.
+    private func runParse(_ captured: String, route: CaptureRoute) {
         parse.parseTask?.cancel()
         parse.parseTask = Task {
             let roster = rosterSnapshot
@@ -431,18 +470,23 @@ struct ComposerView: View {
             // the reveal.
             let result = await brain.triage(
                 captured, roster: roster, learned: learned, openTasks: openTasks,
-                suppressions: suppressions, ownership: ownership)
+                suppressions: suppressions, ownership: ownership, route: route)
             guard !Task.isCancelled else { return }
             parse.parseTask = nil
             EmbeddingStore.persistFresh(openTasks: openTasks, in: context)
-            lastParsedText = captured
-            lastParseYieldedCandidates = !result.drafts.isEmpty
+            lastRun = result.telemetry
 
             // The model decides the structure; if it found nothing, the deterministic
             // read is the honest fallback rather than an empty screen.
             let final =
                 result.drafts.isEmpty
                 ? AppBrain.provisionalDrafts(captured, learned: learned) : result.drafts
+            // The answer exists; the orb may not have finished arriving. Hold it to its
+            // floor BEFORE proposing, so the reveal and the morph-out happen on the same
+            // frame — waiting after the propose would leave the cards built and hidden,
+            // and any cancellation in between would strand a revealed set behind an orb.
+            await holdOrbToMinimumDwell()
+            guard !Task.isCancelled else { return }
             // Refused if the user somehow got to a reveal first (a race we don't expect,
             // but the guard is the point — it can't be argued with).
             if interpretation.propose(merge(fresh: final, into: interpretation.drafts)) {
@@ -455,6 +499,19 @@ struct ComposerView: View {
             interpretation.assertNotMutated("after the model parse landed")
             parkIfUnfinished(force: true)
         }
+    }
+
+    /// Wait out whatever is left of the orb's minimum presence, if anything.
+    ///
+    /// Almost always a no-op: it returns immediately for every capture slower than
+    /// roughly a second, which is the population this product was built around. It exists
+    /// for the fast tail the cloud rung introduced — see `Motion.orbMinimumDwellSeconds`.
+    private func holdOrbToMinimumDwell() async {
+        guard let understandingSince else { return }
+        let remaining =
+            Motion.orbMinimumDwellSeconds - Date().timeIntervalSince(understandingSince)
+        guard remaining > 0 else { return }
+        try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
     }
 
     private func recordConfirmReached() {
@@ -471,6 +528,7 @@ struct ComposerView: View {
         parse.parseTask?.cancel()
         parse.parseTask = nil
         interpretation.reopen()
+        understandingSince = nil
         Motion.withMotion(Motion.settle) { phase = .capture }
         focused = true
     }
@@ -562,12 +620,8 @@ struct ComposerView: View {
     /// Keep cards stable across re-parses and streaming partials: `DraftMerge`
     /// matches by the AI's reading of the line, transplants identity, re-applies
     /// the user's edits over the fresh values, and honors the session's removals.
-    private func merge(
-        fresh: [TaskDraft], into current: [TaskDraft], keepingUnmatched: Bool = false
-    ) -> [TaskDraft] {
-        DraftMerge.merge(
-            fresh: fresh, into: current, removed: removedDrafts,
-            keepingUnmatched: keepingUnmatched)
+    private func merge(fresh: [TaskDraft], into current: [TaskDraft]) -> [TaskDraft] {
+        DraftMerge.merge(fresh: fresh, into: current, removed: removedDrafts)
     }
 
     // MARK: - The four surfaces
@@ -800,22 +854,46 @@ struct ComposerView: View {
         }
     }
 
-    /// Speak the outcome of a completed parse. The composer's whole promise is that
-    /// candidates appear as you talk — visible motion a screen-reader user got no
-    /// version of, so the live surface was silent to them. Announced on COMPLETED
-    /// parses only (never per streamed partial), so it informs instead of chattering.
+    /// Speak the settled interpretation, once, at the reveal.
+    ///
+    /// **The arrival is the whole emotional beat of the arc**, and it was silent to a
+    /// screen-reader user: sighted users get the orb dissolving into cards, a stagger and
+    /// a haptic; VoiceOver got a layout change and no statement that anything had
+    /// happened. This function existed for that and had lost its call site — it described
+    /// a live parse ("candidates appear as you talk") that no longer exists, and nothing
+    /// invoked it.
+    ///
+    /// It announces the SETTLED result and nothing before it, which the architecture now
+    /// makes trivially true: there is exactly one interpretation and one reveal, so there
+    /// is no intermediate state that could be spoken by mistake. It NAMES the tasks up to
+    /// a small cap rather than only counting them — "three tasks" tells a sighted user
+    /// nothing they can't see and tells a blind user nothing at all, whereas the titles
+    /// are the answer to "did it understand me?", which is the question the reveal exists
+    /// to answer.
+    ///
     /// A no-op when VoiceOver is off.
-    private func announceParseResult() {
-        let message: String
-        if interpretation.drafts.isEmpty {
-            guard lastParseYieldedCandidates == false else { return }
-            message = "Nothing actionable found yet."
-        } else {
-            message =
-                "\(interpretation.drafts.count) task\(interpretation.drafts.count == 1 ? "" : "s") ready to review."
+    private func announceReveal() {
+        let drafts = interpretation.drafts
+        guard !drafts.isEmpty else {
+            AccessibilityNotification.Announcement("Nothing actionable in that.").post()
+            return
         }
-        AccessibilityNotification.Announcement(message).post()
+        let titles = drafts.prefix(Self.spokenTitleCap).map(\.title)
+        let remainder = drafts.count - titles.count
+        var message = "\(drafts.count) task\(drafts.count == 1 ? "" : "s"): "
+        message += titles.joined(separator: ", ")
+        if remainder > 0 { message += ", and \(remainder) more" }
+        // The one ask the reveal can carry (see `TaskDraft.unresolved`) — spoken because
+        // it is the only thing on the surface that wants something back.
+        let asks = drafts.filter { $0.unresolved.contains(.date) }.count
+        if asks > 0 { message += ". \(asks == 1 ? "One task needs" : "\(asks) tasks need") a date" }
+        AccessibilityNotification.Announcement(message + ".").post()
     }
+
+    /// How many titles the reveal announcement names before summarising the rest. Four
+    /// is about where a spoken list stops being a sentence and starts being a recitation
+    /// the listener has to hold in their head.
+    private static let spokenTitleCap = 4
 
     /// Persist the in-flight capture. Called on dismiss (`force`, always writes) and
     /// after each completed parse — throttled there, because rolling parses complete
@@ -880,6 +958,7 @@ struct ComposerView: View {
         parked = nil
         interpretation = Interpretation()
         removedDrafts = RemovedDraftSet()
+        lastRun = nil
         text = ""
         dismiss()
     }
@@ -896,13 +975,14 @@ struct ComposerView: View {
         brain.commit(
             interpretation.drafts, rawCapture: text, source: captureSource,
             imageRef: capturedImageRef,
-            parked: parked, into: context)
+            parked: parked, telemetry: lastRun, into: context)
         // Clearing is REQUIRED, not tidiness: `.onDisappear` runs `parkIfUnfinished`,
         // and it keys off `drafts`/`text` — leaving them populated would park a phantom
         // duplicate of the capture just committed.
         parked = nil
         interpretation = Interpretation()
         removedDrafts = RemovedDraftSet()
+        lastRun = nil  // spent: this receipt belongs to the capture just committed
         text = ""
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         parse.cachedRules = nil  // likewise new corrections
@@ -1223,22 +1303,6 @@ struct ComposerView: View {
         UIApplication.shared.open(url)
     }
 
-    /// One quiet line on the fallback path, honesty-first: on-device and rules-engine
-    /// captures produce visibly different cards (proposals, streaming, the "?" state
-    /// exist only on-device), and without this the user's only signal was a DEBUG
-    /// footer — degradation read as inconsistency. Suppressed under XCTest so view
-    /// tests don't all sprout an extra line.
-    ///
-    /// It annotates RESULTS, never the empty field. Greeting every capture with it
-    /// put a caveat ahead of the instruction that actually helps someone start typing,
-    /// and repeated a standing device condition as if it were news — the nagging the
-    /// guardrails refuse. Beside the cards it explains something the user can see.
-    @ViewBuilder private var engineDisclosure: some View {
-        if case .fallback(let reason) = brain.status, reason != "test" {
-            Text("On-device intelligence unavailable — using quick rules.")
-                .metadataStyle()
-        }
-    }
 }
 
 /// The composer's per-keystroke bookkeeping: the debounce generation and the two

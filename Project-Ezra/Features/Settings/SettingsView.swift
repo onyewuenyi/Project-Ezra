@@ -24,6 +24,9 @@ struct SettingsView: View {
         sortDescriptors: [NSSortDescriptor(keyPath: \ChangeLogEntry.timestamp, ascending: false)])
     private var changesResults: FetchedResults<ChangeLogEntry>
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
+    /// Backs the capture dimension of the Required Attention scorecard — corrections per
+    /// confirmed task. Write-only as a learning signal; read here only to count.
+    @FetchRequest(sortDescriptors: []) private var correctionsResults: FetchedResults<Correction>
 
     @Environment(BriefingReminder.self) private var briefing
 
@@ -49,7 +52,7 @@ struct SettingsView: View {
                     if let reset = pendingReset { resetCard(reset) }
                     profileCard
                     briefingCard
-                    engineCard
+                    dataBoundaryCard
                     dataCard
                     diagnosticsCard
                 }
@@ -140,18 +143,33 @@ struct SettingsView: View {
         context.saveChanges()
     }
 
-    // MARK: - AI engine status
+    // MARK: - What leaves this device
 
-    private var engineCard: some View {
-        settingsCard(title: "AI Engine") {
-            HStack(spacing: Spacing.sm) {
-                Image(systemName: brain.status.isOnDevice ? "sparkles" : "gearshape.2")
-                    .font(.glyphBody())
-                    .foregroundStyle(brain.status.isOnDevice ? Palette.accentFlat : Palette.secondaryText)
-                Text(brain.status.description)
-                    .font(.supporting)
-                    .foregroundStyle(Palette.primaryText)
-                Spacer(minLength: 0)
+    /// The data boundary — and the only thing this screen says about how Ezra thinks.
+    ///
+    /// **The customer never hears "AI", and never hears a provider name.** This card used
+    /// to be titled "AI Engine" and printed `brain.status.description` — "Apple
+    /// Intelligence · on-device" / "Rules engine · Apple Intelligence off" — which broke
+    /// that rule twice in one line, and did it with an internal enum description. Worse,
+    /// it answered a question no user asked: which vendor is doing the thinking is not
+    /// their business or their decision, and showing it invites them to manage something
+    /// the product exists to manage for them (principle 10).
+    ///
+    /// What a person actually wants from this screen is the one thing they cannot check
+    /// for themselves: **what leaves.** So that is what it says, in three sentences. The
+    /// engine readout still exists — in the DEBUG diagnostics card, where an internal
+    /// number belongs.
+    private var dataBoundaryCard: some View {
+        settingsCard(title: "What leaves this device") {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                ForEach(DataBoundary.current(cloudReachable: CloudModel.isAvailable).sentences, id: \.self) {
+                    sentence in
+                    Text(sentence)
+                        .font(.supporting)
+                        .foregroundStyle(Palette.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }
@@ -164,7 +182,31 @@ struct SettingsView: View {
                 Text(diagnosticsLine)
                     .metadataStyle()
                 #if DEBUG
+                // Which engine is actually backing this install. It used to sit in a
+                // customer-facing card; an internal enum description naming a vendor is a
+                // developer's line, and this is where developer lines live.
+                Text(brain.status.description)
+                    .metadataStyle()
                 Text(planDiagnosticsLine)
+                    .metadataStyle()
+                // Where intelligent moments actually resolved, per workload, plus the
+                // one number the cloud rung's economics turn on: paid calls today.
+                // Read this before arguing about model spend.
+                ForEach(IntelligenceLedger.shared.footerLines(), id: \.self) { line in
+                    Text(line)
+                        .metadataStyle()
+                }
+                // The cap's headroom. If this is never approached, the cap is correctly
+                // inert and the smart governor stays unbuilt — which is the answer we
+                // are hoping for.
+                Text(CloudBudget.statusLine())
+                    .metadataStyle()
+                // THE MASTER METRIC: four dimensions that must fall and one that must
+                // rise. Read this before believing any single-stage improvement — the unit
+                // of optimization is effort reduction across the whole loop, and a feature
+                // that improves one stage while raising net attention is spend, not
+                // progress.
+                Text(requiredAttention.footerLine)
                     .metadataStyle()
                 // Per-capability model outcomes — the evidence behind the deadlines.
                 // Local only; nothing here is ever transmitted.
@@ -194,6 +236,17 @@ struct SettingsView: View {
         }
     }
 
+    /// The Required Attention scorecard, derived fresh on open. `plannedTaskIDs` comes
+    /// from today's cached briefing — the set the Brief actually surfaced — so the
+    /// orientation dimension measures what the user had to find for themselves.
+    private var requiredAttention: RequiredAttention {
+        let planned = Set(TodayPlanStore().cache(for: Date())?.actions.map(\.taskID) ?? [])
+        return RequiredAttention.measure(
+            tasks: tasks, entries: Array(changesResults),
+            corrections: Array(correctionsResults), plannedTaskIDs: planned,
+            advisor: AdvisorMetrics.shared)
+    }
+
     private var diagnosticsLine: String {
         var parts: [String] = []
         parts.append("Kept \(percent(Metrics.acceptanceRate(entries: aiEntries)))")
@@ -209,7 +262,7 @@ struct SettingsView: View {
     private var planDiagnosticsLine: String {
         let m = brain.planMetrics
         var parts = [
-            "plan: on-device \(m.onDeviceCount) · pcc \(m.pccCount) · rules \(m.deterministicCount)"
+            "plan: on-device \(m.onDeviceCount) · cloud \(m.cloudCount) · rules \(m.deterministicCount)"
         ]
         if m.lastLatencyMs >= 0 { parts.append("last \(m.lastLatencyMs)ms") }
         if m.lastPromptTokens >= 0 || m.lastOutputTokens >= 0 {
@@ -473,7 +526,8 @@ struct SettingsView: View {
     /// would read. One reporting path, two readers.
     private func performClear(_ scope: DataReset.Scope) {
         let record = DataReset.clear(
-            scope, in: context, metrics: brain.metrics, planMetrics: brain.planMetrics)
+            scope, in: context, metrics: brain.metrics, planMetrics: brain.planMetrics,
+            provenance: .shared)
         pendingScope = nil
         pendingReset = record
         backupArchiveURL = record.backupName.flatMap { PersistenceStack.zippedBackup(named: $0) }

@@ -143,6 +143,33 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     /// construction — there is no flag to forget to reset.
     var isProvisional: Bool { provisionalSource != nil }
 
+    /// A detail the user SPOKE that the resolver could not turn into a value.
+    ///
+    /// **This is not uncertainty, and the distinction is the whole point.** A confidence
+    /// score is the system's opinion of its own reading — internal, and no longer shown
+    /// (see `ConfirmCreationCard`). This is a FACT about the capture: they said a day and
+    /// it resolved to nothing, or named a person nobody in the roster matches. The system
+    /// is not unsure; it is missing one specific thing, and it can name which.
+    ///
+    /// Before this the miss was silent — `IntentResolver.resolveDate` returning nil for a
+    /// spoken phrase simply dropped it, and an unmatched name vanished — so the user's
+    /// only clue was noticing an empty chip where they had said something.
+    var unresolved: [UnresolvedField] = []
+
+    /// Details a capture can name without the resolver being able to land them.
+    ///
+    /// **Date only, deliberately.** An unresolved OWNER already has a better affordance
+    /// than anything this enum could produce: `ConfirmCreationCard.ownerChip` detects a
+    /// spoken name that matches no roster member, shows that name with a questioning
+    /// glyph, and offers "Add <name> to household…" as the first menu item. Adding an
+    /// `.owner` case here would have rendered a second, vaguer chip beside it.
+    ///
+    /// Every case added here must correspond to something the user actually SAID and has
+    /// no existing home, or this becomes an uncertainty display wearing a new name.
+    enum UnresolvedField: String, Codable, Hashable, Sendable {
+        case date
+    }
+
     mutating func markEdited(_ field: DraftField) {
         // `workIntent` is system-owned (2026-08-11): no user-editing path exists, so a
         // caller marking it edited is a programmer error — enforced, not documented.

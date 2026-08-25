@@ -141,6 +141,53 @@ struct MyTasksSlicesTests {
         #expect(sections[0].entries.count == 1)
     }
 
+    // MARK: - Header contract (the two dimensions, and which one the roster may touch)
+
+    @Test("The filter is reachable at EVERY roster size — it is not a multiplayer feature")
+    func filterIsAlwaysReachable() {
+        // The regression this pins: the filter menu used to be nested inside the
+        // selected tab's pill, so when the tab bar became roster-conditional a solo
+        // household silently lost filtering entirely. A solo user needs it MORE — it
+        // is the only list they have.
+        for roster in 0...5 {
+            #expect(MyTasksHeader.showsFilter(othersRoster: roster))
+        }
+    }
+
+    @Test("Ownership tabs are the roster-dependent half — and the ONLY one")
+    func tabsFollowTheRoster() {
+        // Stated next to the test above on purpose: the asymmetry is the contract.
+        #expect(!MyTasksHeader.showsTabs(othersRoster: 0))
+        #expect(MyTasksHeader.showsTabs(othersRoster: 1))
+        #expect(MyTasksHeader.showsTabs(othersRoster: 4))
+    }
+
+    @Test("The title's possessive follows the roster in lockstep with the ownership tabs")
+    func titleFollowsTheSameRosterRuleAsTabs() {
+        // "My" and the Assigned/Created pair answer the same question ("whose tasks?"),
+        // so they must appear together. A title that says "My Tasks" over a header
+        // making no ownership distinction promises a filter that isn't there — the
+        // v2 lean collapse dropped the possessive for exactly that reason.
+        for roster in 0...5 {
+            let showsTabs = MyTasksHeader.showsTabs(othersRoster: roster)
+            let title = MyTasksHeader.title(othersRoster: roster)
+            #expect(title == (showsTabs ? "My Tasks" : "Tasks"))
+        }
+        #expect(MyTasksHeader.title(othersRoster: 0) == "Tasks")
+        #expect(MyTasksHeader.title(othersRoster: 1) == "My Tasks")
+    }
+
+    @Test("The filter control names its own state, and stays bounded when both axes are set")
+    func filterSummaryNamesItsState() {
+        #expect(MyTasksHeader.filterSummary(status: nil, category: nil) == nil)
+        #expect(MyTasksHeader.filterSummary(status: .done, category: nil) == "Done")
+        #expect(MyTasksHeader.filterSummary(status: .doing, category: nil) == "In Progress")
+        #expect(MyTasksHeader.filterSummary(status: nil, category: "Work") == "Work")
+        // Both axes collapse to a count rather than concatenating — "Done · Work" would
+        // grow the control without bound and fight the tabs for width.
+        #expect(MyTasksHeader.filterSummary(status: .done, category: "Work") == "2 filters")
+    }
+
     // MARK: - Detail-pager peers (what a swipe in the full-screen detail lands on)
 
     @Test("flatten walks sections top-to-bottom, entries in place")

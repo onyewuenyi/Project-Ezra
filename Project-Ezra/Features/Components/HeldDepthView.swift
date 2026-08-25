@@ -43,7 +43,11 @@ struct HeldDepthView: View {
                 Image(systemName: "sparkles")
                     .foregroundStyle(Palette.accentFlat)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("AI handled \(tidiedCount) item\(tidiedCount == 1 ? "" : "s")")
+                    // Names the CONSEQUENCE, not the actor. "AI handled N items" told the
+                    // user which technology did it; what they actually want to know is that
+                    // N things were dealt with and they can go look. The per-row actor is
+                    // shown in Activity, one tap away, where attribution belongs.
+                    Text("Tidied \(tidiedCount) item\(tidiedCount == 1 ? "" : "s")")
                         .font(.supporting.weight(.medium))
                         .foregroundStyle(Palette.primaryText)
                     if heldCount > 0 {
@@ -61,7 +65,7 @@ struct HeldDepthView: View {
         .frame(height: 64)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "AI handled \(tidiedCount) items, \(heldCount) held for later. Opens AI updates.")
+            "Tidied \(tidiedCount) items, \(heldCount) held for later. Opens activity.")
     }
 }
 

@@ -65,7 +65,7 @@ enum AutonomyTier: String, Codable {
     var confirmationLabel: String {
         switch self {
         case .silent: return "Automatically updated"
-        case .suggest: return "AI suggestion — Accept"
+        case .suggest: return "Suggested — Accept"
         case .ask: return "Needs your input"
         }
     }

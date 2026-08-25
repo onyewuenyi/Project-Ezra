@@ -1,5 +1,21 @@
 # Managing Chaos — Design System (Revised)
 
+> **How to read this file (status, 2026-08-24).** The **design language is in force**: the
+> calm-intelligence principle, the type scale, the spacing grid, the motion guidance, the
+> Liquid Glass rules, and the depth-behind-glass concept all still govern the app, and
+> `Design/` points here.
+>
+> The **screen inventory and navigation are historical.** They describe a four-tab app
+> (Today · Tasks · Inbox · Review) that no longer exists. The product ships **two tabs —
+> Brief and Tasks — plus a floating Capture button**; Inbox and Household were cut, the
+> trust surface survives as the Activity sheet, and Today was renamed Brief. Read the
+> product spec (see `docs/README.md`) for what the surfaces are; read this file for how
+> anything is allowed to look.
+>
+> Where a screen description below conflicts with the shipped app, the app is right and the
+> description is a record of an earlier draft.
+
+
 Core principle, unchanged from the original draft, this part was right:
 
 > **Calm intelligence: the interface disappears so the user can focus on progress.**
@@ -33,11 +49,13 @@ The original assigned green as a persistent "completed" status color while also 
 
 ## Navigation
 
-> **Superseded — shipped nav differs.** `docs/PRD.md` overrides this section. The app ships four
-> tabs — **Today · Inbox · My Tasks · Household** — plus a floating **Capture** button (not a tab).
-> The **Review/retro tab is gone** (replaced by the Today advisor sequence); the composer opens from
-> the Capture button, and the AI activity/undo log is the **Inbox** feed, not a toolbar sheet. The
-> lanes/Runs model below is historical.
+> **Superseded twice — this section is history.** The app shipped four tabs
+> (Today · Inbox · My Tasks · Household), then cut to **two: Brief and Tasks**, plus a floating
+> **Capture** button. Today was renamed **Brief** (the tab is the place, the Brief is the
+> artifact); **Inbox and Household are gone as tabs** — the trust surface survives as the
+> **Activity** sheet reached from the Tasks header, and multiplayer survives as substrate in
+> the data model. The **Review/retro tab** was removed earlier still. The lanes/Runs model
+> below never shipped in this form.
 
 **Tab bar (original draft — four tabs):**
 

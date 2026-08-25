@@ -59,7 +59,7 @@ struct UnblockUndoTests {
         // failure mode the "planned" entry demonstrated is an entry that offers an Undo
         // its own missing link fields can never honour.
         #expect(entry.taskUUID == task.uuid)
-        #expect(entry.isInboxVisible)
+        #expect(entry.isActivityVisible)
         #expect(task.blockers.isEmpty)
     }
 

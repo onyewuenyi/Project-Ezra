@@ -63,6 +63,67 @@ enum ModelDeadline {
     /// — not a bigger number here.
     static let captureSeconds: Double = 30
 
+    /// How long the paid capture arm gets to itself before the free one starts alongside
+    /// it (`CaptureTriageRace.hedged`).
+    ///
+    /// **This is a tail-latency number, not a patience number** — `captureSeconds` is the
+    /// patience one. It answers: at what point does "the cloud is still thinking" stop
+    /// being normal and start being worth spending free local compute against? A healthy
+    /// Flash-class call on a working network answers a median ramble well inside this, so
+    /// the ordinary capture never starts a second arm at all and the cloud read stays the
+    /// normal outcome. Past it, the most likely explanations are a degraded network or a
+    /// stalled call, and both are answered better by a local model that is already warm
+    /// than by continuing to wait.
+    ///
+    /// Deliberately NOT scaled to the input. A long ramble legitimately takes the cloud
+    /// arm longer, so scaling would suppress the hedge exactly where a stall hurts most —
+    /// and the hedge is harmless when it loses: the primary still wins the reveal, and
+    /// the only cost was battery.
+    ///
+    /// Tune it on `-CaptureDiagnostics` like every other capture constant. Too low and
+    /// the device does redundant work on every capture (cost: battery, visible as a hedge
+    /// rate near 100%); too high and a dead network is felt as a stall again.
+    static let captureHedgeSeconds: Double = 2.5
+
+    // MARK: - The Advisor: latency is a product budget, PER RUNG
+
+    /// How long an Advisor judgment may take, given where it runs and whether anyone is
+    /// watching.
+    ///
+    /// A single number here was a real bug, and a quiet one. The Advisor shipped with
+    /// `cardSeconds` (20s) for every rung, which is right for a local read and wrong for a
+    /// deep one: deep reasoning on a genuinely hard question runs in TENS of seconds, so a
+    /// cloud judgment would have hit the deadline routinely and the whole paid rung would
+    /// have been dead on arrival — while the code, the tests and the docs all said it was
+    /// working. Exactly the "shipped documented and untrue" shape this codebase keeps
+    /// finding in itself.
+    ///
+    /// Three budgets, because there are three genuinely different situations:
+    ///
+    /// - **On-device, any presence** — `cardSeconds`. Unchanged; the local model is fast
+    ///   and the first call of a session is dominated by model load, not reasoning.
+    /// - **Deep, precomputed** — generous. Nobody is waiting, so the only thing being
+    ///   protected is a hung call leaking a task forever. Correctness beats speed here,
+    ///   and this is the path most deep judgments take.
+    /// - **Deep, presence-time** — the bounded exception. The user is standing in the task
+    ///   detail watching a thinking mark, so this is the one place latency is felt. It is
+    ///   deliberately SHORTER than the precompute budget: a wait the user is watching
+    ///   should end in a cheaper answer rather than a longer wait, and the salvage path
+    ///   re-reads on-device rather than surfacing a failure.
+    static func advisorSeconds(rung: IntelligenceRung, presenceTime: Bool) -> Double {
+        guard rung == .cloud else { return cardSeconds }
+        return presenceTime ? advisorDeepPresenceSeconds : advisorDeepPrecomputeSeconds
+    }
+
+    /// Deep reasoning with nobody waiting. Long enough that a hard judgment finishes;
+    /// bounded so a hung call cannot pin a task's entry indefinitely.
+    static let advisorDeepPrecomputeSeconds: Double = 60
+
+    /// Deep reasoning the user is present for. Tighter than the precompute budget on
+    /// purpose — see `advisorSeconds`. A hit here is not a failure: it salvages down to an
+    /// on-device read, which is a real judgment, just a cheaper one.
+    static let advisorDeepPresenceSeconds: Double = 25
+
     /// The deadline fired. Distinct from the operation's own errors so a caller can tell
     /// "the model refused" from "the model never answered" — different fixes.
     struct Exceeded: Error {}

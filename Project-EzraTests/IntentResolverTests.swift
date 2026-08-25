@@ -313,6 +313,94 @@ struct IntentResolverTests {
         #expect(IntentResolver.resolve([create, update, delete]).count == 1)
     }
 
+    // MARK: - Instance expansion (one intent → one draft per named occasion)
+
+    private func walkTheDog(_ expression: String?) -> [TaskDraft] {
+        IntentResolver.resolve(
+            [
+                TaskIntent(
+                    title: "Walk the dog", category: "Home", dateExpression: expression,
+                    confidence: 0.9, isJudgmentCall: false, reasoning: "")
+            ], now: wednesday)
+    }
+
+    @Test("Two named days become two drafts, earliest first, everything else identical")
+    func expandsNamedOccasions() {
+        let drafts = walkTheDog("monday and tuesday")
+        #expect(drafts.count == 2)
+        #expect(drafts.map(\.dueDate) == [day(20), day(21)])
+        // The fan-out multiplies occasions, never identity or content.
+        #expect(drafts.allSatisfy { $0.title == "Walk the dog" })
+        #expect(Set(drafts.map(\.id)).count == 2)
+        // Each draft's own due date is what the confirm-card diff will compare against —
+        // a shared snapshot would record one of them as a user correction on sight.
+        #expect(drafts.map(\.aiOriginal?.dueDate) == [day(20), day(21)])
+    }
+
+    @Test("Commas and mixed separators enumerate too")
+    func expandsCommaList() {
+        // Friday is the nearest of the three from a Wednesday, so it leads.
+        #expect(
+            walkTheDog("monday, wednesday and friday").map(\.dueDate)
+                == [day(17), day(20), day(22)])
+        #expect(walkTheDog("tomorrow and friday").map(\.dueDate) == [day(16), day(17)])
+    }
+
+    @Test("A repeated day is one occasion said twice")
+    func dedupesIdenticalDates() {
+        #expect(walkTheDog("monday and monday").count == 1)
+    }
+
+    @Test("Expansion is all-or-nothing: one unresolvable fragment declines the whole split")
+    func declinesWhenAFragmentIsNotADate() {
+        // The guard that stops a connective inside a date phrase from manufacturing a
+        // task. Both of these still resolve normally as a SINGLE occasion.
+        #expect(walkTheDog("before the trip and after the meeting").count == 1)
+        let conditional = walkTheDog("tomorrow and if i have time")
+        #expect(conditional.count == 1)
+        #expect(conditional[0].dueDate == day(16))
+    }
+
+    @Test("A quantity is not an enumeration — the outcome stays one task")
+    func quantityNeverExpands() {
+        // The product rule read the other way: "cook lunch for three days next week" is
+        // one cooking session, and no number in the phrase may multiply it.
+        let drafts = IntentResolver.resolve(
+            [
+                TaskIntent(
+                    title: "Cook lunch for three days", category: "Home",
+                    dateExpression: "next week", confidence: 0.9, isJudgmentCall: false,
+                    reasoning: "")
+            ], now: wednesday)
+        #expect(drafts.count == 1)
+    }
+
+    @Test("Past the week cap the expansion is declined, never truncated")
+    func capDeclinesRatherThanTruncates() {
+        let everyDay =
+            "sunday, monday, tuesday, wednesday, thursday, friday, saturday and monday"
+        // Eight fragments — one task the user can correct beats eight they must delete.
+        #expect(walkTheDog(everyDay).count == 1)
+        // Seven still expands; the cap is a ceiling, not an off switch.
+        #expect(
+            walkTheDog("sunday, monday, tuesday, wednesday, thursday, friday and saturday")
+                .count == 7)
+    }
+
+    @Test("The heuristic hands over the whole enumeration, not its first day")
+    func heuristicKeepsTheWholePhrase() {
+        // Both engines must agree: expansion can only fan out the phrase it is given, so
+        // a truncating extractor would silently drop occasions on the offline arm.
+        #expect(
+            HeuristicEngine.dateExpression(from: "walk the dog monday and tuesday") == "monday and tuesday")
+        #expect(
+            HeuristicEngine.dateExpression(from: "gym monday, wednesday and friday")
+                == "monday, wednesday and friday")
+        // A single weekday is unchanged, and a non-enumeration is untouched.
+        #expect(HeuristicEngine.dateExpression(from: "call mom friday") == "friday")
+        #expect(HeuristicEngine.dateExpression(from: "call mom and dad tomorrow") == "tomorrow")
+    }
+
     // MARK: - Metadata backfill (nothing reaches the confirm card empty)
 
     @Test("Effort backfills by verb band; an explicit estimate always wins")
@@ -483,5 +571,54 @@ struct IntentResolverTests {
         child.childOf = EdgeReference(targetID: candID, confidence: 0.9)
         let childDraft = IntentResolver.resolve(child, candidates: candidates, suppressions: [suppression])
         #expect(childDraft.edgeProposals.count == 1)
+    }
+
+    // MARK: - Unresolved details (the targeted ask)
+
+    @Test("A spoken time phrase we can't read is reported, not silently dropped")
+    func unreadableSpokenDateIsReported() {
+        // The silent failure this exists for: `resolveDate` returning nil for a phrase
+        // the user actually said used to drop it on the floor, so their only clue was
+        // noticing an empty chip where they remembered saying something.
+        let intent = TaskIntent(
+            title: "Sort the thing", category: "Admin",
+            dateExpression: "before the trip", confidence: 0.9, isJudgmentCall: false,
+            reasoning: "")
+        let draft = IntentResolver.resolve(intent)
+        #expect(draft.dueDate == nil)
+        #expect(draft.unresolved == [.date], "a spoken date that resolved to nothing must be named")
+    }
+
+    @Test("An UNDATED task is not an unresolved one")
+    func silenceIsNotAnUnresolvedDate() {
+        // The distinction the whole feature rests on. Most tasks have no date because
+        // nobody mentioned one; asking "When?" on those would be a nag on every card.
+        let intent = TaskIntent(
+            title: "Water the plants", category: "Home", confidence: 0.9,
+            isJudgmentCall: false, reasoning: "")
+        #expect(IntentResolver.resolve(intent).unresolved.isEmpty)
+    }
+
+    @Test("A phrase we CAN read leaves nothing unresolved")
+    func readableDateIsNotReported() {
+        let intent = TaskIntent(
+            title: "Call the vet", category: "Home", dateExpression: "tomorrow",
+            confidence: 0.9, isJudgmentCall: false, reasoning: "")
+        let draft = IntentResolver.resolve(intent)
+        #expect(draft.dueDate != nil)
+        #expect(draft.unresolved.isEmpty)
+    }
+
+    @Test("An INFERRED due date is not an answer to a question the user asked")
+    func inferredDatesDoNotSuppressTheAsk() {
+        // `inferredDueDate` only fires when no date was spoken, so the two can never
+        // collide — but pinning it stops a future refactor from letting a guessed date
+        // quietly satisfy an ask about words the user actually said.
+        let intent = TaskIntent(
+            title: "Pay the electricity bill", category: "Admin", confidence: 0.9,
+            isJudgmentCall: false, reasoning: "")
+        let draft = IntentResolver.resolve(intent)
+        #expect(draft.dueDate != nil, "the bill arm should propose a date")
+        #expect(draft.unresolved.isEmpty, "nothing was spoken, so nothing is unresolved")
     }
 }

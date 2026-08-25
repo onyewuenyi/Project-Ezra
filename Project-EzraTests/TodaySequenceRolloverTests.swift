@@ -33,7 +33,7 @@ struct TodaySequenceRolloverTests {
 
     /// Wait for the background generation kicked off by `start` to land. The test host has
     /// no on-device model, so this resolves on the deterministic tail — fast and certain.
-    private func settle(_ sequence: TodaySequenceModel) async {
+    private func settle(_ sequence: BriefSequenceModel) async {
         for _ in 0..<300 {
             if !sequence.isGenerating, sequence.plan != nil { return }
             try? await Task.sleep(for: .milliseconds(10))
@@ -47,7 +47,7 @@ struct TodaySequenceRolloverTests {
         let brain = AppBrain()
 
         let task = TaskItem(title: "Renew car insurance", status: .todo, dueDate: day1)
-        let sequence = TodaySequenceModel(brain: brain, store: store, now: day1)
+        let sequence = BriefSequenceModel(brain: brain, store: store, now: day1)
 
         sequence.start(tasks: [task], logs: [], context: context)
         await settle(sequence)
@@ -84,7 +84,7 @@ struct TodaySequenceRolloverTests {
         let task = TaskItem(
             title: "Submit the expense report", status: .todo, dueDate: day1,
             createdAt: day1.addingTimeInterval(-3600))
-        let sequence = TodaySequenceModel(brain: brain, store: store, now: day1)
+        let sequence = BriefSequenceModel(brain: brain, store: store, now: day1)
         sequence.start(tasks: [task], logs: [], context: context)
         await settle(sequence)
 
@@ -101,7 +101,7 @@ struct TodaySequenceRolloverTests {
     @Test("A sequence that never started is never restarted out from under its own launch")
     func neverStarted() {
         let store = TodayPlanStore(defaults: freshDefaults())
-        let sequence = TodaySequenceModel(brain: AppBrain(), store: store, now: day1)
+        let sequence = BriefSequenceModel(brain: AppBrain(), store: store, now: day1)
         let context = TestStore.makeContext()
         #expect(
             !sequence.restartIfDayRolledOver(

@@ -42,9 +42,9 @@ struct AutonomyPolicyTests {
         #expect(AutonomyPolicy.tier(confidence: 0.95, isJudgmentCall: true) == .ask)
     }
 
-    // MARK: - Entry status (always-confirm: every creation lands in the Inbox)
+    // MARK: - Entry status (always-confirm: every creation lands in Activity)
 
-    @Test("The resolver stamps every creation into the Inbox, at any confidence")
+    @Test("The resolver stamps every creation into Activity, at any confidence")
     func alwaysTodo() {
         // A draft no longer carries a proposed lifecycle position at all — the AI never
         // proposes one, because a draft is not a task. Creation is what stamps `.todo`,

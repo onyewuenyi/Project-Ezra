@@ -2,12 +2,17 @@
 //  TasksHomeView.swift
 //  Project-Ezra
 //
-//  "My Tasks" — the system of record, redrawn to Linear's "My issues": a large
-//  title, a top-right [search][…] pill, and an Assigned / Created tab pair whose
-//  selected pill carries a filter menu. Assigned groups your work into the six Linear
-//  status sections (In Progress → In Review → Todo → Backlog, plus the Done/Canceled
-//  ledger via the filter); Created is a flat authorship record, newest first. The AI
-//  is invisible here: it helps you retrieve, it never decides what to show.
+//  "My Tasks" — the system of record, redrawn to Linear's "My issues": a large title,
+//  a top-right [search][…] pill, and one header row carrying two INDEPENDENT
+//  dimensions — an Assigned / Created ownership pair (whose tasks am I looking at?)
+//  and the filter (what subset of them do I want?). Assigned groups your work into the
+//  status sections in focus order (In Progress → Todo → Done → Canceled); Created is a
+//  flat authorship record, newest first. The AI is invisible here: it helps you
+//  retrieve, it never decides what to show.
+//
+//  The header's composition rules — and why the filter may never be a passenger of the
+//  tabs again — live in `MyTasksHeader` (Models/MyTasksSlices.swift), where they are
+//  testable. Read that contract before changing what this header renders.
 //
 
 import CoreData
@@ -17,6 +22,9 @@ struct TasksHomeView: View {
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
     @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    /// Activity is the shell's screen, not this one's — it is reachable from the Brief
+    /// too, so it has exactly one mount point and neither surface owns it.
+    @Environment(\.openActivity) private var openActivity
 
     @State private var tab: MyTasksTab = .assigned
     @State private var statusFilter: TaskStatus?
@@ -40,11 +48,12 @@ struct TasksHomeView: View {
 
     private var filtersActive: Bool { statusFilter != nil || categoryFilter != nil }
 
-    /// Assigned and Created answer the same question until somebody else is in the
-    /// household: with a roster of one, every task you created is a task assigned to
-    /// you, so the pill is a two-tab control over two identical lists on the most-used
-    /// screen. It appears the moment a second member exists.
-    private var showsTabs: Bool { !othersRoster.isEmpty }
+    /// Both header decisions come from the contract, never from view nesting.
+    private var showsTabs: Bool { MyTasksHeader.showsTabs(othersRoster: othersRoster.count) }
+
+    /// Both header decisions come from the contract, never from view nesting — and so
+    /// does what the screen calls itself.
+    private var title: String { MyTasksHeader.title(othersRoster: othersRoster.count) }
 
     /// The visible tab's rows, sliced once.
     ///
@@ -91,11 +100,9 @@ struct TasksHomeView: View {
         let slice = visibleSlice
         return NavigationStack {
             VStack(spacing: Spacing.sm) {
-                if showsTabs {
-                    tabBar
-                        .padding(.horizontal, Spacing.lg)
-                        .padding(.top, Spacing.xs)
-                }
+                headerRow
+                    .padding(.horizontal, Spacing.lg)
+                    .padding(.top, Spacing.xs)
 
                 Group {
                     switch slice {
@@ -116,7 +123,7 @@ struct TasksHomeView: View {
             }
             .animation(Motion.fade, value: tab)
             .background(Palette.background)
-            .navigationTitle("My Tasks")
+            .navigationTitle(title)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
@@ -127,6 +134,16 @@ struct TasksHomeView: View {
                     .accessibilityLabel("Search tasks")
 
                     Menu {
+                        // The trust surface, demoted from a tab but not from the
+                        // product: every AI action has to be understandable and
+                        // undoable, and merged-pair entries have no other home. It
+                        // leads the menu because it is the only item here that is
+                        // about what the SYSTEM did.
+                        Button {
+                            openActivity()
+                        } label: {
+                            Label("Activity", systemImage: "clock.arrow.circlepath")
+                        }
                         Button {
                             showRoster = true
                         } label: {
@@ -149,6 +166,7 @@ struct TasksHomeView: View {
             .taskDetailSheet($selectedTask, peers: slice.peers)
             .undoNotice($notice)
             .task {
+                applyFilterArgsIfRequested()
                 openDetailIfRequested()
                 openSettingsIfRequested()
             }
@@ -168,6 +186,23 @@ struct TasksHomeView: View {
         selectedTask = peers[index]
     }
 
+    /// Deterministic verification seam. `-FilterStatus <raw>` / `-FilterCategory <name>`
+    /// preset the filter, so the ACTIVE control (`☰ Done`, `☰ 2 filters`) and a narrowed
+    /// list are screenshot-reachable — the filter is a Menu, and opening one needs a tap
+    /// that Accessibility blocks here. An unknown value is ignored rather than crashing,
+    /// so a typo in a verification command reads as "no filter", not a failed launch.
+    /// Never fires in normal runs.
+    private func applyFilterArgsIfRequested() {
+        let args = ProcessInfo.processInfo.arguments
+        if let flag = args.firstIndex(of: "-FilterStatus"), args.indices.contains(flag + 1) {
+            statusFilter = TaskStatus(rawValue: args[flag + 1])
+        }
+        if let flag = args.firstIndex(of: "-FilterCategory"), args.indices.contains(flag + 1) {
+            let value = args[flag + 1]
+            categoryFilter = TaskCategory.all.contains(value) ? value : nil
+        }
+    }
+
     /// Deterministic verification seam. Launch with `-OpenSettings` to present the
     /// Settings sheet, which is otherwise two taps deep behind the "…" menu. It now holds
     /// the destructive clears, and a screen that can delete everything should be reviewable
@@ -177,47 +212,56 @@ struct TasksHomeView: View {
         showSettings = true
     }
 
-    // MARK: - Tab bar (Assigned / Created + the filter pill)
+    // MARK: - Header row (ownership navigation · filter — two independent dimensions)
 
-    private var tabBar: some View {
-        // The selected pill is a SOLID raised surface, not Liquid Glass: glass carries a
-        // vibrancy that dims the label riding on it (verified — the selected text read
-        // dimmer than the unselected one, and no scrim behind the text could fix it, since
-        // the material desaturates the foreground itself). A text-bearing selection chip
-        // therefore uses a solid surface; the morph is a plain `matchedGeometryEffect`.
-        tabRow
-    }
-
-    private var tabRow: some View {
+    /// One row, two dimensions that do not own each other: the ownership tabs lead and
+    /// come and go with the roster, the filter is ALWAYS there.
+    ///
+    /// The row itself is unconditional — that is the fix. The filter has exactly ONE
+    /// mount point, and it is not inside anything the roster can switch off; the bug
+    /// this replaced came from its only mount being a conditional one. The row's
+    /// presence in both states also keeps the header's height fixed, so gaining or
+    /// losing a household member never jumps the list below (`MyTasksHeader` rule 5).
+    ///
+    /// Alone, the filter takes the leading edge — anchored to the title and the list's
+    /// content column, rather than floating in an otherwise empty corner. With tabs it
+    /// yields the lead to them and trails, because ownership is the coarser question.
+    private var headerRow: some View {
         HStack(spacing: Spacing.sm) {
-            ForEach(MyTasksTab.allCases) { candidate in
-                tabButton(candidate)
+            if showsTabs {
+                ForEach(MyTasksTab.allCases) { candidate in
+                    tabButton(candidate)
+                }
+                Spacer(minLength: Spacing.sm)
             }
-            Spacer(minLength: 0)
+            if MyTasksHeader.showsFilter(othersRoster: othersRoster.count) {
+                filterControl
+            }
+            if !showsTabs { Spacer(minLength: 0) }
         }
+        // Pinned so gaining or losing a household member changes WHAT the header holds,
+        // never how tall it is — the list underneath doesn't reflow (rule 5). Without
+        // this the row is only as tall as its tallest resident, so the tabs appearing
+        // would nudge every task down by the difference.
+        //
+        // `minHeight`, not `height`: the tab label is `sectionHeader`, which scales with
+        // Dynamic Type, and a fixed box would clip it at accessibility sizes. Stability
+        // is worth having at the default sizes where a jump is the visible problem —
+        // never at the cost of truncating the control's own text.
+        .frame(minHeight: LayoutMetrics.tasksHeaderRow)
     }
 
     private func tabButton(_ candidate: MyTasksTab) -> some View {
         let isSelected = tab == candidate
-        return HStack(spacing: Spacing.xs) {
-            Button {
-                Motion.withMotion(Motion.snap) { tab = candidate }
-            } label: {
-                Text(candidate.label)
-                    .font(.sectionHeader)
-                    .fontWeight(isSelected ? .semibold : .regular)
-                    .foregroundStyle(isSelected ? Palette.primaryText : Palette.secondaryText)
-            }
-            .buttonStyle(.pressable)
-
-            // The filter menu rides the SELECTED tab's pill, behind a vertical hairline.
-            if isSelected {
-                Rectangle()
-                    .fill(Palette.border)
-                    .frame(width: 0.5, height: 16)
-                filterMenu
-            }
+        return Button {
+            Motion.withMotion(Motion.snap) { tab = candidate }
+        } label: {
+            Text(candidate.label)
+                .font(.sectionHeader)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .foregroundStyle(isSelected ? Palette.primaryText : Palette.secondaryText)
         }
+        .buttonStyle(.pressable)
         .padding(.horizontal, isSelected ? Spacing.sm : 0)
         .padding(.vertical, Spacing.xxs)
         .background { pillBackground(isSelected: isSelected) }
@@ -237,8 +281,28 @@ struct TasksHomeView: View {
         }
     }
 
-    private var filterMenu: some View {
+    /// The filter — a query dimension, not a passenger of the tabs.
+    ///
+    /// It NAMES ITS OWN STATE, because a bare glyph has a specific failure mode on a
+    /// task list: a filtered list is indistinguishable from a list with tasks missing,
+    /// which is a trust problem rather than a discoverability one. One active axis
+    /// shows its value ("Done"); both show a count ("2 filters") — deliberately not
+    /// "Done · Work", which turns the control into a miniature query builder and
+    /// fights for width with the tabs.
+    private var filterControl: some View {
         Menu {
+            // The menu is a state EDITOR, so it can undo itself in one tap rather than
+            // making the user walk both axes back to All.
+            if filtersActive {
+                Button {
+                    Motion.withMotion(Motion.snap) {
+                        statusFilter = nil
+                        categoryFilter = nil
+                    }
+                } label: {
+                    Label("Clear filters", systemImage: "xmark.circle")
+                }
+            }
             Section("Status") {
                 Button {
                     statusFilter = nil
@@ -278,16 +342,34 @@ struct TasksHomeView: View {
                 }
             }
         } label: {
-            Image(
-                systemName: filtersActive
-                    ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"
-            )
-            .font(.glyphSmall(.semibold))
+            HStack(spacing: Spacing.xxs) {
+                Image(
+                    systemName: filtersActive
+                        ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"
+                )
+                .font(.glyphSmall(.semibold))
+                if let summary = filterSummary {
+                    Text(summary)
+                        .font(.chipLabel)
+                        .lineLimit(1)
+                }
+            }
             .foregroundStyle(filtersActive ? Palette.accentFlat : Palette.secondaryText)
-            .frame(width: 32, height: 32)
-            .contentShape(Rectangle())
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
+            .background(Palette.secondarySurface, in: Capsule())
+            // Visual size ≠ interaction size: the capsule stays compact so the header
+            // doesn't gain weight, while the touchable region reaches the 44pt minimum
+            // by growing into the surrounding padding and giving the layout size back.
+            .minimumHitTarget()
         }
         .accessibilityLabel(filtersActive ? "Filters, active" : "Filters")
+        .accessibilityValue(filterSummary ?? "All")
+    }
+
+    /// What the control calls itself — the rule lives in the contract, where it's tested.
+    private var filterSummary: String? {
+        MyTasksHeader.filterSummary(status: statusFilter, category: categoryFilter)
     }
 
     private func filterLabel(_ text: String, checked: Bool) -> some View {

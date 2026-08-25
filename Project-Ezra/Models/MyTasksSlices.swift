@@ -26,6 +26,74 @@ enum MyTasksTab: String, CaseIterable, Identifiable {
     }
 }
 
+/// What the My Tasks header renders — the composition rules, in one pure place.
+///
+/// **The contract:**
+/// 1. **Ownership navigation** appears only when more than one ownership scope exists.
+///    It answers *whose* tasks am I looking at.
+/// 2. **Filter** is ALWAYS available. It answers *what subset* of those tasks I want,
+///    and it never depends on the ownership navigation being visible.
+/// 3. **Search** is independent, and never silently inherits the filter — a hidden
+///    filter suppressing the thing you just searched for is a trap.
+/// 4. **Sort** is independent. (Not built; named so the dimension has a home.)
+/// 5. **Header geometry is stable regardless of roster** — members coming and going may
+///    change which controls appear, but must never make the list below jump.
+///
+/// This type exists because rule 2 was broken for three weeks. The filter menu was
+/// nested inside the selected tab's pill, and when the tab bar became conditional on
+/// the roster (`00df087`, reasoning only about tabs) the chain
+/// `filter ⊂ selected tab ⊂ tab row ⊂ tab bar ⊂ roster` silently removed a whole
+/// capability on every solo household — no warning, no failing test, because
+/// "is the filter reachable?" was emergent from view nesting rather than a decision
+/// anything could assert. Now the two decisions sit side by side and the asymmetry is
+/// the point: **tabs are roster-dependent; the filter never is.**
+enum MyTasksHeader {
+    /// Assigned and Created answer the same question until somebody else is in the
+    /// household: with a roster of one, every task you created is a task assigned to
+    /// you, so the pill would be a two-tab control over two identical lists on the
+    /// most-used screen. It appears the moment a second member exists.
+    static func showsTabs(othersRoster: Int) -> Bool { othersRoster > 0 }
+
+    /// True for every roster size, forever. Filtering is a query dimension, not a
+    /// feature of multiplayer — and a solo user needs it MORE, since their list is the
+    /// only one they have. If this ever gains a condition, rule 2 is being broken again.
+    static func showsFilter(othersRoster: Int) -> Bool { true }
+
+    /// What the screen calls itself: "Tasks" alone, "My Tasks" once somebody else
+    /// exists.
+    ///
+    /// It reads `showsTabs` rather than the roster count directly, and that is the
+    /// point: the possessive and the Assigned/Created pair answer the SAME question
+    /// ("whose tasks?"), so they must appear and disappear together or the title
+    /// promises a distinction the header isn't making. With a roster of one there is
+    /// nobody to be distinguished from and "My" is noise — the v2 lean collapse dropped
+    /// it, and it comes back with the person who gives it meaning.
+    ///
+    /// This lives here, next to the other two, for the reason rule 2 exists: header
+    /// composition decided inside the view is how the filter got silently deleted for
+    /// three weeks. A rule that isn't in this file isn't tested.
+    static func title(othersRoster: Int) -> String {
+        showsTabs(othersRoster: othersRoster) ? "My Tasks" : "Tasks"
+    }
+
+    /// What the filter control calls itself. nil when nothing is filtered.
+    ///
+    /// The control names its own state because a bare glyph has one specific failure
+    /// mode on a task list: **a filtered list is indistinguishable from a list with
+    /// tasks missing.** That is a trust problem, not a discoverability one. One active
+    /// axis shows its value; both show a bounded count rather than "Done · Work",
+    /// which would turn the control into a miniature query builder and fight the tabs
+    /// for width.
+    static func filterSummary(status: TaskStatus?, category: String?) -> String? {
+        switch (status, category) {
+        case (nil, nil): return nil
+        case (let status?, nil): return status.label
+        case (nil, let category?): return category
+        case (_?, _?): return "2 filters"
+        }
+    }
+}
+
 /// One section on the Assigned tab: a header and the chain-grouped entries under it,
 /// already stack-ordered.
 struct MyTasksSection: Identifiable {
@@ -41,9 +109,10 @@ enum MyTasksSlices {
     static let sectionOrder: [TaskStatus] = [.doing, .todo, .done, .canceled]
 
     /// The filter-menu predicate: an optional status filter and an optional category
-    /// filter. `nil` means "All" for either axis. This is also how the Done/Canceled
-    /// ledger stays reachable now that the Completed slice is gone — pick the Done
-    /// (or Canceled) filter.
+    /// filter. `nil` means "All" for either axis. It is also how the Done/Canceled
+    /// ledger gets ISOLATED — `sectionOrder` always renders those sections, so
+    /// resolved work is reachable by scrolling; picking the Done (or Canceled) filter
+    /// is what makes it the only thing on screen.
     static func applyFilters(_ task: TaskItem, status: TaskStatus?, category: String?) -> Bool {
         if let status, task.status != status { return false }
         if let category, task.category != category { return false }

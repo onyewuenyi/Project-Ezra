@@ -17,17 +17,94 @@ import Foundation
 enum IntentResolver {
 
     /// Resolve a batch. Only `.create` intents become drafts today.
+    ///
+    /// **One intent can become more than one draft.** Someone who says "walk the dog
+    /// Monday and Tuesday" named one kind of work and two occasions of it, and owes
+    /// themselves two tasks — so the batch flat-maps through `expand` first. That is the
+    /// only fan-out in the pipeline, and it is deliberately HERE: parse the intent in the
+    /// model, expand the schedule in app code, exactly as every other piece of date math
+    /// already works.
     static func resolve(
         _ intents: [TaskIntent], rules: [LearnedRule] = [],
         openTasks: [OpenTaskSnapshot] = [], candidates: [RetrievalCandidate] = [],
         suppressions: [RelationshipSuppression] = [], now: Date = Date()
     ) -> [TaskDraft] {
         intents.filter { $0.action == .create }
+            .flatMap { expand($0, now: now) }
             .map {
                 resolve(
                     $0, rules: rules, openTasks: openTasks, candidates: candidates,
                     suppressions: suppressions, now: now)
             }
+    }
+
+    // MARK: - Instance expansion (one intent → one draft per named occasion)
+
+    /// The ceiling on a fan-out. Seven is a whole week, and past it the user is
+    /// describing a RECURRENCE rather than enumerating occasions — a thing this product
+    /// has no model for. Over the cap the expansion is declined entirely rather than
+    /// truncated: one task the user can see and correct beats eight they have to delete.
+    static let maxInstances = 7
+
+    /// Split an intent into one intent per occasion its date phrase names, each carrying
+    /// the fragment of the phrase that is its own. Returns `[intent]` unchanged for the
+    /// overwhelmingly common single-occasion case.
+    ///
+    /// Rewriting `dateExpression` down to the fragment — rather than plumbing a resolved
+    /// date through — is what keeps this cheap: each copy then runs the ordinary
+    /// `resolve` path, so it gets its own `aiOriginal` snapshot with its own due date and
+    /// nothing downstream learns a new shape. The fragment is still the user's own words,
+    /// and `sourceQuote` (which grounding checks) is untouched.
+    static func expand(_ intent: TaskIntent, now: Date = Date()) -> [TaskIntent] {
+        let fragments = instanceExpressions(in: intent.dateExpression, now: now)
+        guard fragments.count > 1 else { return [intent] }
+        return fragments.map { fragment in
+            var copy = intent
+            copy.dateExpression = fragment
+            return copy
+        }
+    }
+
+    /// The fragments of a time phrase that name SEPARATE occasions, ordered earliest
+    /// first. Empty means "one occasion, or none" — the cheap path, and the answer for
+    /// almost every phrase.
+    ///
+    /// The guard that makes this safe is that **every** fragment must resolve to a real
+    /// date or the whole expansion is declined. A phrase like "before the trip and after
+    /// the meeting" splits into two fragments that resolve to nothing, so it falls
+    /// through to the normal single-date path untouched; so does "tomorrow if I have
+    /// time". Requiring all-or-nothing is what stops a connective in a date phrase from
+    /// manufacturing a task.
+    ///
+    /// Note what this deliberately does NOT do: a quantity or a cadence inside one
+    /// occasion ("cook lunch for three days next week") carries no enumeration of dates,
+    /// so it never reaches the split at all and stays one task. That is the product rule
+    /// — distinct intended outcomes, not distinct verbs — falling out of the mechanism
+    /// rather than needing to be restated in it.
+    static func instanceExpressions(in expression: String?, now: Date = Date()) -> [String] {
+        guard let raw = expression?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            !raw.isEmpty,
+            raw.contains(" and ") || raw.contains(",") || raw.contains("&")
+        else { return [] }
+
+        let fragments =
+            raw
+            .replacingOccurrences(of: "&", with: ",")
+            .replacingOccurrences(of: " and ", with: ",")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard fragments.count > 1, fragments.count <= maxInstances else { return [] }
+
+        var seen: Set<Date> = []
+        var dated: [(date: Date, fragment: String)] = []
+        for fragment in fragments {
+            guard let date = resolveDate(expression: fragment, now: now) else { return [] }
+            // "monday and monday" is one occasion said twice.
+            if seen.insert(date).inserted { dated.append((date, fragment)) }
+        }
+        guard dated.count > 1 else { return [] }
+        return dated.sorted { $0.date < $1.date }.map(\.fragment)
     }
 
     static func resolve(
@@ -91,6 +168,22 @@ enum IntentResolver {
         )
         draft.workIntent = workIntent
         draft.dueReason = proposedDue?.reason
+        // A detail the user SPOKE that we could not land. Both arms below require the
+        // capture to have actually said something — an absent date is not unresolved,
+        // it is simply undated, and conflating the two would turn a precise "you said a
+        // day and I couldn't read it" into a nag on every task without a deadline.
+        //
+        // These used to vanish in silence: a time phrase that `resolveDate` returned nil
+        // for was dropped on the floor, so the user's only clue was noticing an empty
+        // chip where they remembered saying "Thursday".
+        // An unresolved OWNER is deliberately absent: `ConfirmCreationCard.ownerChip`
+        // already names an unrecognised person and offers to add them to the household,
+        // which is a better affordance than a generic "Who?" beside it.
+        if spokenDate == nil, let phrase = intent.dateExpression,
+            !phrase.trimmingCharacters(in: .whitespaces).isEmpty
+        {
+            draft.unresolved = [.date]
+        }
         draft.blocks = detectDependents(for: intent, among: openTasks)
         draft.edgeProposals = edgeProposals(
             for: intent, candidates: candidates, suppressions: suppressions)

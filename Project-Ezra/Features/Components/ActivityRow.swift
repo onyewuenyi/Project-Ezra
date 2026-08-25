@@ -3,9 +3,9 @@
 //  Project-Ezra
 //
 //  The one change-log row — a leading actor avatar with an action-glyph badge, a
-//  summary line, and a byline. Shared by the Inbox feed (global, with an unread dot /
+//  summary line, and a byline. Shared by the Activity feed (global, with an unread dot /
 //  Undo accessory) and the task detail's per-task Activity section (no accessory).
-//  Lifted out of InboxView so the two can't drift.
+//  Lifted out of ActivityView so the two can't drift.
 //
 
 import SwiftUI
@@ -26,6 +26,7 @@ enum ActivityVocab {
         case "killed": return "xmark"
         case "edited": return "pencil"
         case "suppressed": return "hand.raised.slash"
+        case "captured": return "tray.and.arrow.down"
         default: return "sparkle"
         }
     }
@@ -35,7 +36,7 @@ enum ActivityVocab {
         case "completed": return Palette.success
         // A rejection is a quiet "no", not an event — it reads with the receding verbs.
         case "killed", "archived", "suppressed": return Palette.mutedText
-        case "assigned", "linked", "decided", "unblocked": return Palette.accentFlat
+        case "assigned", "linked", "decided", "unblocked", "captured": return Palette.accentFlat
         default: return Palette.secondaryText
         }
     }
@@ -53,13 +54,14 @@ enum ActivityVocab {
         case "killed": return "Canceled"
         case "edited": return "Updated"
         case "suppressed": return "Kept apart"
+        case "captured": return "Captured"
         default: return "Updated"
         }
     }
 }
 
 /// The leading actor tile — an AI gradient-sparkle square, the current user's avatar, a
-/// family member's avatar, or a generic person. Lifted out of `ActivityRow` so the Inbox
+/// family member's avatar, or a generic person. Lifted out of `ActivityRow` so Activity
 /// feed and the detail's Activity timeline resolve the actor identically (no drift), and
 /// so the timeline can render a synthesized creation row (no `ChangeLogEntry`) from a bare
 /// `actorID`.
@@ -83,7 +85,7 @@ struct ActorAvatar: View {
         self.size = size
     }
 
-    /// Resolve directly from a change-log entry (the Inbox / timeline entry rows).
+    /// Resolve directly from a change-log entry (Activity / timeline entry rows).
     init(
         entry: ChangeLogEntry, members: [FamilyMember] = [], currentUserID: UUID? = nil,
         profile: UserProfile? = nil, size: CGFloat = 32

@@ -1,6 +1,6 @@
 # The task model
 
-**Status:** shipped (schema generation 10). This is the reference; `CLAUDE.md`, `docs/PRD.md`, and `docs/task-primitive-v2-spec.md` point here rather than restating it.
+**Status:** shipped (schema generation 10). This is the architecture reference for the task primitive — `CLAUDE.md` and the code comments point here rather than restating it. Product behaviour lives in the product spec (see `docs/README.md`); this file describes the model underneath it.
 
 The governing principle: **lifecycle position, work type, attention condition, and human signal are four different questions.** Each axis is stored and read independently; behavior is computed from their combination, never from a fused field. Conflating them is what makes task models rot.
 
@@ -11,13 +11,13 @@ The governing principle: **lifecycle position, work type, attention condition, a
 | Axis | Answers | Cardinality | Owner | Storage |
 |---|---|---|---|---|
 | **1 · Lifecycle** — `TaskStatus` | Where in the pipeline? | single | **human** | stored |
-| **2 · Type** — `WorkIntent` | What kind of work is this? | single | **AI**, human-correctable | stored, refreshable |
+| **2 · Type** — `WorkIntent` | What kind of work is this? | single | **system**, never user-editable | stored, refreshable |
 | **3 · Attention flags** | Why does this need my eyes? | **multi** | system | `needsDecision` stored; `blocked`/`overdue` derived |
 | **4 · Signals** | What did the human declare? | single | **human** | `isUrgent` stored |
 
 Axis 4 exists because Urgent kept being filed informally under "flags." It is a human input feeding the attention score, not a derived condition — naming it separately stops the flag axis becoming a junk drawer.
 
-**Type drives what the detail renders. Lifecycle gates which verbs exist. Flags and signals drive attention ranking.**
+**Lifecycle gates which verbs exist. Flags and signals drive attention ranking.** Type drives neither: it is internal, and no surface reads it (see Axis 2).
 
 ---
 
@@ -84,9 +84,9 @@ The nil arm is the design, not an omission: someone else's task is not yours to 
 | Split into subtasks | **✗** | **✗** | — | — |
 
 ¹ only when blocked · ² attribution only; no assignment side effect fires on a resolved task
-**✗ = specified, not built** (B1 in `docs/product-design-plan.md`)
+**✗ = specified, not built**
 
-`setStatus(_:in:)` is the single write seam — the row glyph menu and the detail picker both call it. A `todo ↔ doing` move logs a coalescing `"edited"` entry that stays OUT of the Inbox feed; Done/Canceled route through the resolution seams.
+`setStatus(_:in:)` is the single write seam — the row glyph menu and the detail picker both call it. A `todo ↔ doing` move logs a coalescing `"edited"` entry that stays OUT of the Activity feed; Done/Canceled route through the resolution seams.
 
 **Reopen's floor is `.todo`.** It restores the live status it left via the timeline, but the timeline stores raw strings and can outlive an enum change, so no value can route a task below the state every task is born into.
 
@@ -102,9 +102,9 @@ enum WorkIntent: String { case action, planning }
 
 **The whole axis went INTERNAL on 2026-08-11** — a change of ownership, not a hiding: users
 maintain facts; the system maintains interpretations. No kind chip exists anywhere (confirm,
-detail, Today); the write chain is exactly engine-classification / lexical backfill →
+detail, Brief); the write chain is exactly engine-classification / lexical backfill →
 `reclassify`, with the no-user-write invariant DEBUG-asserted in `markEdited`. The field's
-consumers are the Today advisor (`promptOnlyFacts`: "planning work") and the breakdown bias —
+consumers are the Brief's advisor (`promptOnlyFacts`: "planning work") and the breakdown bias —
 and because no human correction exists, the classifier is **evaluated**: `RambleEvalTests`
 scores a labeled kind field with a regression floor. An AI-owned field earns trust through
 evaluation, not invisibility.
@@ -119,17 +119,19 @@ evaluation, not invisibility.
 
 ### The Advisor — what is the best next move?
 
-**A judgment layer, not a feature catalog** (2026-08-12, the S4 → Advisor pivot). The three capability cards (Thinking Partner · Break this down · Unstick) were three modules the user had to tell apart; the Advisor is ONE surface answering one question — *what would make this task easier right now?* — and the intervention type is hidden metadata. This deliberately reverses "deterministic triggers decide which card": the **model now judges the shape of help** (`AdvisorMove`: `nothing / advise / decide / createSteps / openBlocker`), while the deterministic system stays authoritative three ways — as **sensors** (`StallDetector`, `BreakdownEligibility`, `DecisionShape` become FACT lines the model interprets but cannot invent or contradict), as the **gate** (`TaskCapabilities.advisorWorthy` — a cost heuristic, never a semantic verdict), and as the complete **off-device fallback** (the template diagnosis content). The pivot mirrors the Today advisor's ("model never ranks" reversed for the Today plan); `TaskCapabilities.available` and every trigger survive untouched, re-cast as the Understand/Diagnose half.
+**A judgment layer, not a feature catalog** (2026-08-12, the S4 → Advisor pivot). The three capability cards (Thinking Partner · Break this down · Unstick) were three modules the user had to tell apart; the Advisor is ONE surface answering one question — *what would make this task easier right now?* — and the intervention type is hidden metadata. This deliberately reverses "deterministic triggers decide which card": the **model now judges the shape of help** (`AdvisorMove`: `nothing / advise / decide / createSteps / openBlocker`), while the deterministic system stays authoritative three ways — as **sensors** (`StallDetector`, `BreakdownEligibility`, `DecisionShape` become FACT lines the model interprets but cannot invent or contradict), as the **gate** (`TaskCapabilities.advisorWorthy` — a cost heuristic, never a semantic verdict), and as the complete **off-device fallback** (the template diagnosis content). The pivot mirrors the Today advisor's ("model never ranks" reversed for the Today plan); the triggers survive untouched as the Understand/Diagnose half — though `TaskCapabilities.available` itself no longer has a production caller; the live path is `advisorWorthy` / `advisorGateReason`.
 
 The product model: **the user manages intent, the system manages the work, the Advisor manages the next move.** Ten locked principles, compressed:
 
 1. Judgment layer, not a feature catalog. 2. Deterministic systems establish facts; AI interprets them. 3. `nothing` is a successful outcome. 4. One coherent interpretation per meaningful task state — never a stream of AI activity. 5. A **facts fingerprint** defines when a new judgment is warranted (*continuously understanding ≠ continuously generating*). 6. A revealed reading is immutable until the facts change. 7. The Advisor recommends; existing task actions execute (the pinned CTA owns the lifecycle — `start` is deliberately NOT a move; readiness is advice). 8. The model never mutates task state. 9. **Progression — not AI activity — is the quality signal** (`AdvisorMetrics`: offered/acted/dismissed per move, plus "% of advised tasks that later moved" and the re-intervention rate). 10. V1 proves judgment quality before agentic capabilities (tools, streaming/salvage, per-task sessions are each deferred behind a named tripwire).
 
-**Every task detail has an Advisor; its judgment is usually silence.** `.quiet(.gate)` (deterministic, zero model cost — a clean 15-minute task never spends a call) and `.quiet(.model)` (the model's own honest "nothing useful to add") are both first-class judgments that occupy zero visual attention — never "no Advisor here". The gate must not calcify (the `CaptureRoute` precedent). One-intervention-per-problem is now solved **by construction** — a single-move reading can't stack cards — which retired `suppressChoiceRung` and the tooBig-subsumes-breakdown rule as UI concerns (the pure functions keep both for the fallback path).
+**The loop is the product, and it must actually close** (2026-08-13). `ACTION → task state changes → Advisor re-evaluates` shipped documented and untrue: `ensure` ran only at mount and on `isActive` flips, so a reading survived the action that invalidated it — the Advisor was a static recommendation generator wearing a stateful design. It closes on two hooks in `TaskDetailView`: `onChange(of: task.updatedAt)` (every mutation helper bumps it, so one hook covers advisor actions, chip edits and status changes) and `onChange(of: openedBlocker)` on return (resolving a blocker changes the *blocker's* state, which the first hook cannot see). The **golden scenarios** — blocked → unblocked, broad → decomposed, ambiguous → decided, clean → silent — are the product acceptance tests, each asserting the previous reading is gone, a new fingerprint was evaluated, and no intermediate reading was shown. **What the loop closes TO is the gate's call, and it is often silence**: writing them exposed that a task usually stops being advisor-worthy the moment the user acts on it, and that is correct — "you're unblocked now" is the Advisor narrating the user's own action back at them, and a decomposed umbrella should get out of its steps' way (the `containerRecede` instinct). Work still in flight (`.doing`) stays worthy and does get the closing read, which is where "the blocker cleared, you're ready to continue" genuinely belongs. They run against an **injected judge** (`TaskAdvisorStore.init(judge:isModelAvailable:)`), because `ModelRun` and `AppBrain.onDeviceModelAvailable()` are both hard-false under XCTest and would otherwise put the whole loop behind a gate the tests cannot open. **Learning closes the arc**: the system observes what happened after an intervention (`AdvisorMetrics` progression + re-intervention rate) — no ML, no model memory, just the loop noticing whether the work moved.
+
+**Every task detail has an Advisor; its judgment is usually silence.** `.quiet(.gate)` (deterministic, zero model cost — a clean 15-minute task never spends a call) and `.quiet(.model)` (the model's own honest "nothing useful to add") are both first-class judgments that occupy zero visual attention — never "no Advisor here"; `.unevaluated` is the distinct third thing (no judgment yet — the page hasn't opened), modelled separately because two states that render identically and mean opposite things are how a store starts lying about what it knows. The two silences are also **counted apart** (`gated` vs `zip`): *are we skipping too much?* and *does the Advisor know when to shut up?* are different questions, and gate skips accumulate on every fingerprint change of every trivial task. The gate must not calcify (the `CaptureRoute` precedent). One-intervention-per-problem is now solved **by construction** — a single-move reading can't stack cards — which retired `suppressChoiceRung` and the tooBig-subsumes-breakdown rule as UI concerns (the pure functions keep both for the fallback path).
 
 **The reading is ambient, cached, and structurally immutable once shown.** `TaskAdvisorStore.ensure` fires when a page becomes active and no-ops unless the **fingerprint** changed — the exact fields are pinned in `TaskAdvisorFactsTests`, and the raw staleness clock is deliberately excluded (the diagnosis *case* flipping is the fact; the AI must not have a different opinion each open). `AdvisorRevealGate` refuses a second reveal for the same fingerprint (the `Interpretation` lesson: rules leak, types don't), so retries, pager transitions and latency cannot churn the screen — the reading arrives as a single thought. **Dismiss** binds to the fingerprint: the Advisor had an opinion, the human chose not to engage (counted — repeated dismissals are a judgment-quality signal), and it never resurfaces until the facts genuinely change.
 
-**Model output is untrusted transport; `ValidatedReading` is the contract.** `validated(against:)` drops/degrades, never substitutes: `decide` options clamp 2–4 and a recommendation must name one of its OWN options verbatim (the grounded-recommendation rule, kept from the Thinking Partner — an honest abstention beats a coin flip dressed as advice, and `resolveDecision()` stays the only clearer); `createSteps` sanitizes to 2–5 steps with clamped efforts (accepting still commits through `splitInto`, Corrections for deselections included); `openBlocker` requires a real blocker in the facts; unknown move strings degrade to `advise` — which is how research/draft/schedule/delegate arrive later without a schema rewrite.
+**Model output is untrusted transport; `ValidatedReading` is the contract.** The move is constrained at the DECODER — `@Guide(.anyOf(AdvisorMove.allCases…))`, the first `.anyOf` in the codebase — because a `description` is prompt text the model may violate while a `GenerationGuide` is enforced by constrained decoding; the field stays a `String` with `AdvisorMove(lenient:)` behind it, so the app keeps an escape hatch even though the model can no longer need one (*constrain the model where possible, preserve an application-level escape hatch where necessary*). `validated(against:)` then drops/degrades, never substitutes: `decide` options clamp 2–4 and a recommendation must name one of its OWN options verbatim (the grounded-recommendation rule, kept from the Thinking Partner — an honest abstention beats a coin flip dressed as advice, and `resolveDecision()` stays the only clearer); `createSteps` sanitizes to 2–5 steps with clamped efforts (accepting still commits through `splitInto`, Corrections for deselections included); `openBlocker` requires a real blocker in the facts; unknown move strings degrade to `advise` — which is how research/draft/schedule/delegate arrive later without a schema rewrite.
 
 **Every reading-taken action clears the stall it was read against** — `advisorActed` routes each tap through the acted metric (recording the lifecycle position it acted FROM, the progression baseline) and `touchHuman()` whenever a stall diagnosis is present; a card its own buttons can't dismiss is a scold. `deferralCount` stays consecutive-not-lifetime for exactly this reason, and `carriedOverCount` is still deliberately never reset.
 
@@ -141,7 +143,7 @@ The product model: **the user manages intent, the system manages the work, the A
 
 The *model's* classification is on-device only, and Apple Intelligence can be **off by user setting or unavailable by region** — not just absent on old hardware. Those users would otherwise get nil intent on every task, and no capability voiced by type.
 
-`IntentResolver.inferredWorkIntent` closes that gap: it backfills lexically at resolve time (planning phrases — including choice-shaped wording, which lands `.planning` — else `.action`), so the confirm card's kind chip is populated on every engine. It **never reads `isJudgmentCall`/`needsDecision`**, which would fuse axes 2 and 3 — test-enforced by `IntentResolverTests.workIntentIgnoresJudgmentFlag`. Its `.action` default is behaviourally identical to nil (same CTA verb, same capability set), so the backfill is a naming, not a behaviour change.
+`IntentResolver.inferredWorkIntent` closes that gap: it backfills lexically at resolve time (planning phrases — including choice-shaped wording, which lands `.planning` — else `.action`), so the axis is never nil at creation on any engine. (It populates no chip — there isn't one; it exists so the internal consumers always have a value.) It **never reads `isJudgmentCall`/`needsDecision`**, which would fuse axes 2 and 3 — test-enforced by `IntentResolverTests.workIntentIgnoresJudgmentFlag`. Its `.action` default is behaviourally identical to nil (same CTA verb, same capability set), so the backfill is a naming, not a behaviour change.
 
 A model-supplied classification always wins over the backfill.
 
@@ -209,7 +211,7 @@ Pre-Confirm the capture is single-player even when the inferred owner isn't you:
 
 ### The sync gate
 
-`HouseholdSync.isLive` (compile-time `false`) gates the proposer's **inferred** non-self rungs and Today's ownership filter. Without sync, a task assigned to Maya has nowhere to go — she has no device in the graph — so applying either now would let work leave your briefing and land nowhere anyone can act on it. Single-device installs keep everything in Today regardless of nominal owner.
+`HouseholdSync.isLive` (compile-time `false`) gates the proposer's **inferred** non-self rungs and the Brief's ownership filter. Without sync, a task assigned to Maya has nowhere to go — she has no device in the graph — so applying either now would let work leave your briefing and land nowhere anyone can act on it. Single-device installs keep everything in the Brief regardless of nominal owner.
 
 ---
 
@@ -223,8 +225,8 @@ Pre-Confirm the capture is single-player even when the inferred owner isn't you:
 - **`TaskDraft.id` is `var`, not `let`.** Synthesized `Codable` silently skips an immutable property with an initial value: it compiles, encodes fine, and mints fresh ids on every restore.
 - **Parking is a list, not a slot.** Opening the composer always starts a new capture; being interrupted twice is ordinary.
 - **Swipe-down parks; only Discard destroys.**
-- **A parked capture is not a task** — no ranking, no Today, no My Tasks, nobody's plate.
-- **The surface decays.** "N captures waiting" on the Today resting surface is the one surface with no resolution path but reopening the composer, so `BrainSweeps` prunes a long-parked capture — dropping the derived drafts, keeping `rawText` forever — as a **logged, reversible** `.ai` action. A silent prune would reintroduce the exact failure this prevents, on a longer clock.
+- **A parked capture is not a task** — no ranking, no Brief, no My Tasks, nobody's plate.
+- **The surface decays.** "N captures waiting" on the Brief's resting surface is the one surface with no resolution path but reopening the composer, so `BrainSweeps` prunes a long-parked capture — dropping the derived drafts, keeping `rawText` forever — as a **logged, reversible** `.ai` action. A silent prune would reintroduce the exact failure this prevents, on a longer clock.
 
 ---
 

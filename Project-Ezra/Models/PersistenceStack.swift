@@ -79,22 +79,18 @@ enum PersistenceStack {
     /// claims the class binding), so every fixture — pure-engine arrays *and* the integration
     /// tests' `TestStore` — funnels through this one. That makes it **not** thread-safe, so
     /// the test suite runs serially (see the scheme's disabled parallelization).
-    static let scratch: NSManagedObjectContext = {
+    /// `var`, not `let`, as a TEST SEAM: `TestStore.makeContext()` repoints this at each
+    /// test's fresh container so fixtures built through the default `in:` parameter land
+    /// in the same context the test fetches from. Nothing in the app writes it.
+    ///
+    /// NOTE (iOS 27 beta): never wipe/reset this context or delete its objects en
+    /// masse. After a heap-length String attribute has been read, snapshot teardown
+    /// of that object crashes (see TestStore.makeContext) — this context is safe
+    /// precisely because fixtures only accumulate here and nothing tears them down.
+    static var scratch: NSManagedObjectContext = {
         let container = NSPersistentContainer(name: "ProjectEzra", managedObjectModel: model)
-        // SQLite in the temp directory, NOT an in-memory store. On the iOS 27 beta
-        // simulator the in-memory store corrupts an object's snapshot state after a
-        // heap-length String attribute is read back (bisected in the test suite's
-        // crash history: reading such a value, then faulting/resetting/deleting that
-        // object, dies in `_CDSnapshot` retain/release with a non-pointer value —
-        // ~70 EXC_BAD_ACCESS reports since 2026-08-07, previously mis-filed as an
-        // environmental sim flake). SQLite rows materialize fresh values on fetch —
-        // the same semantics the app's real store has — and the crash is gone. The
-        // PID suffix keeps parallel sim processes from sharing a file.
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "ezra-scratch-\(ProcessInfo.processInfo.processIdentifier).sqlite")
-        try? FileManager.default.removeItem(at: url)
-        let desc = NSPersistentStoreDescription(url: url)
-        desc.type = NSSQLiteStoreType
+        let desc = NSPersistentStoreDescription()
+        desc.type = NSInMemoryStoreType
         container.persistentStoreDescriptions = [desc]
         container.loadPersistentStores { _, error in
             if let error { fatalError("Could not load the scratch store: \(error)") }

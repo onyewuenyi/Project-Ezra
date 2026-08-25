@@ -1002,7 +1002,7 @@ struct TaskDetailView: View {
         return DetailActivityTimeline.Creation(date: task.createdAt, actorID: task.creatorID)
     }
 
-    /// Revert one timeline entry (the "edited" rows the Inbox doesn't surface). Mirrors the
+    /// Revert one timeline entry (the "edited" rows Activity doesn't surface). Mirrors the
     /// Inbox's action-aware undo: mark undone, revert the field, save.
     private func undoEntry(_ entry: ChangeLogEntry) {
         actionPulse += 1
@@ -1021,7 +1021,7 @@ struct TaskDetailView: View {
     }
 }
 
-// MARK: - Staggered rise (the TodayView entrance pattern, capped ≤0.15s spread)
+// MARK: - Staggered rise (the BriefView entrance pattern, capped ≤0.15s spread)
 
 extension View {
     fileprivate func rise(_ index: Int, _ appeared: Bool, _ reduceMotion: Bool) -> some View {

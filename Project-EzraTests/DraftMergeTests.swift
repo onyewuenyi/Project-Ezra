@@ -177,49 +177,7 @@ struct DraftMergeTests {
         #expect(merged[0].id != current.id)  // dropped and replaced, today's behavior
     }
 
-    // MARK: - The additive provisional merge
-
-    @Test("A provisional pass never downgrades a model-derived card")
-    func provisionalNeverDowngradesModelCard() {
-        // The model already tightened this card; a later keystroke's provisional pass
-        // re-reads the same clause and must leave it BYTE-IDENTICAL.
-        var modelCard = draft("Book flights")
-        modelCard.category = "Travel"
-        let candidate = provisional(
-            "Get around to booking the flights",
-            source: "I should probably get around to booking the flights")
-
-        let merged = DraftMerge.mergeProvisional(
-            fresh: [candidate], into: [modelCard], removed: none)
-
-        #expect(merged.count == 1)
-        #expect(merged[0].id == modelCard.id)
-        #expect(merged[0].title == "Book flights")
-        #expect(!merged[0].isProvisional)
-    }
-
-    @Test("A provisional pass adds only genuinely new clauses")
-    func provisionalAddsOnlyNewClauses() {
-        let existing = draft("Renew passport")
-        let known = provisional("Renew passport", source: "renew passport")
-        let fresh = provisional("Call mom back", source: "call mom back")
-
-        let merged = DraftMerge.mergeProvisional(
-            fresh: [known, fresh], into: [existing], removed: none)
-
-        #expect(merged.count == 2)
-        #expect(merged[0].id == existing.id)  // matched, untouched
-        #expect(merged[1].title == "Call mom back")  // the new clause entered
-    }
-
-    @Test("A card the segmenter stops seeing rides along instead of vanishing mid-keystroke")
-    func provisionalKeepsUnmatchedCurrentCards() {
-        let modelCard = draft("Book flights")
-        let candidate = provisional("Renew passport", source: "renew passport")
-        let merged = DraftMerge.mergeProvisional(
-            fresh: [candidate], into: [modelCard], removed: none)
-        #expect(merged.count == 2)
-    }
+    // MARK: - Removal survives a retitle
 
     @Test("A removed provisional card stays removed when the model re-proposes it retitled")
     func removedProvisionalStaysRemovedAcrossRetitle() {
@@ -232,55 +190,6 @@ struct DraftMergeTests {
             fresh: [draft("Book flights"), draft("Call mom")], into: [], removed: removed)
 
         #expect(merged.map(\.title) == ["Call mom"])
-    }
-
-    // MARK: - Streaming partials keep the tail
-
-    @Test("A partial snapshot keeps the cards it hasn't reached yet")
-    func partialKeepsUnreachedCards() {
-        let a = draft("renew passport")
-        let b = draft("book dentist appointment")
-        let c = draft("water the plants")
-        // A chained re-parse's stream starts over from the top of the text: its
-        // first snapshot reads one line, not zero of the others.
-        let firstSnapshot = [draft("renew passport")]
-
-        let merged = DraftMerge.merge(
-            fresh: firstSnapshot, into: [a, b, c], removed: none, keepingUnmatched: true)
-
-        #expect(merged.map(\.id) == [a.id, b.id, c.id])
-    }
-
-    @Test("A partial's growing tail claims its card; only a completed parse drops one")
-    func partialGrowsWithoutDropping() {
-        let a = draft("renew passport")
-        let b = draft("book dentist appointment")
-        let partial = [draft("renew passport"), draft("book dentist")]
-
-        let streamed = DraftMerge.merge(
-            fresh: partial, into: [a, b], removed: none, keepingUnmatched: true)
-        #expect(streamed.map(\.id) == [a.id, b.id])
-
-        // The completed parse re-read every line — its drop is authoritative.
-        let completed = DraftMerge.merge(
-            fresh: [draft("renew passport")], into: [a, b], removed: none)
-        #expect(completed.map(\.id) == [a.id])
-    }
-
-    @Test("A kept unmatched card retains its user edits untouched")
-    func partialKeepsEditsOnUnreachedCards() {
-        var edited = draft("call the vet")
-        edited.category = "Health"
-        edited.markEdited(.category)
-
-        let merged = DraftMerge.merge(
-            fresh: [draft("renew passport")], into: [edited], removed: none,
-            keepingUnmatched: true)
-
-        #expect(merged.count == 2)
-        #expect(merged[1].id == edited.id)
-        #expect(merged[1].category == "Health")
-        #expect(merged[1].userEdited(.category))
     }
 
     // MARK: - Removal stickiness
@@ -348,4 +257,36 @@ struct DraftMergeTests {
     }
 
 
+    // MARK: - Pass C is reachable — do not delete it
+
+    @Test("A local reveal, then more prose, then the authority: cards keep identity and edits")
+    func passCSurvivesTheResubmitPath() {
+        // Pass C was assumed dead after routing collapsed to local/cloud, on the grounds
+        // that the two arms are exclusive: a local capture never sees a model result.
+        // That is true for ONE submit and false for the flow this test describes.
+        //
+        //   type a list        → explicit structure → LOCAL reveal (provisional cards)
+        //   tap Back           → `reopen()` deliberately KEEPS those drafts
+        //   add a sentence     → now unstructured  → CLOUD
+        //   the model answers  → merges into cards that carry `provisionalSource`
+        //
+        // Which is exactly Pass C's gate. Deleting it would not have failed a build or a
+        // test; it would have silently dropped the user's edits and swapped their cards
+        // for new ones with fresh ids, in a flow nobody would think to check.
+        var typed = provisional("Renew passport", source: "renew passport")
+        typed.category = "Health"
+        typed.markEdited(.category)
+
+        // The model rewrites the title, so Passes A and B structurally cannot match:
+        // word overlap between "Renew passport" and "Sort out the passport renewal" is
+        // below `retitleSimilarityFloor`.
+        let fromAuthority = draft("Sort out the passport renewal")
+
+        let merged = DraftMerge.merge(
+            fresh: [fromAuthority], into: [typed], removed: none)
+
+        #expect(merged.count == 1)
+        #expect(merged[0].id == typed.id, "the card lost its identity across the re-submit")
+        #expect(merged[0].category == "Health", "the user's edit was discarded")
+    }
 }

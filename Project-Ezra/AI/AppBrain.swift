@@ -44,11 +44,22 @@ final class AppBrain {
     /// place a generation completes — see `TodayPlanService`.
     let planMetrics = PlanMetrics()
 
+    /// Where committed captures' receipts are written (`CaptureProvenance`).
+    ///
+    /// A `var` so a test can point it at a throwaway file, for the same reason
+    /// `PersistenceStack.StoreLocation` is injectable: this one WRITES AND TRIMS A REAL
+    /// FILE, so a suite reaching the shared instance would churn the developer's own
+    /// capture history as a side effect of testing something else.
+    var provenanceStore: CaptureProvenanceStore = .shared
+
     /// The per-day advisor conversation (profile + tools + transcript) — created on
     /// the day's first on-device generation, reused for recompose turns, replaced on
     /// day change. Nil off-device and before the first generation. See
-    /// `AdvisorSession.swift`.
-    var advisorSession: AdvisorSession?
+    /// `BriefSession.swift`.
+    var briefSession: BriefSession?
+    /// Serializes Brief generation, because the on-device tier's `LanguageModelSession`
+    /// is cached per DAY and cannot be re-entered. See `SerialGate` and `todayPlan`.
+    let planGate = SerialGate()
 
     /// True while a triage call is in flight — drives the soft-glow processing UI.
     var isProcessing = false
@@ -121,6 +132,7 @@ final class AppBrain {
         // session with the true instruction block and prompt head starts warming
         // behind the sheet-presentation animation.
         FoundationModelsEngine.prewarmCaptureSession()
+        // The confidence gate runs BEFORE the parse and is the only thing standing
         _ = EmbeddingStore.sentenceEmbedding
         EmbeddingStore.warmUp(in: context)
     }
@@ -148,30 +160,58 @@ final class AppBrain {
     ) -> [TaskDraft] {
         let clauses = Segmentation.items(from: rawText)
         guard !clauses.isEmpty else { return [] }
-        var drafts = IntentResolver.resolve(
-            clauses.map { HeuristicEngine.intent(from: $0) }, rules: learned, now: now)
-        proposeOwners(to: &drafts, ownership: ownership)
-        // `resolve` filters to `.create` and maps 1:1, and every heuristic intent is
-        // `.create` — so drafts[i] came from clauses[i]. Guarded rather than assumed,
-        // because the upgrade match's lineage rides on it.
-        if drafts.count == clauses.count {
-            for index in drafts.indices { drafts[index].provisionalSource = clauses[index] }
+        // Resolved per clause, so each draft is stamped with the clause it actually came
+        // from. This used to resolve the whole batch and index drafts against clauses
+        // positionally, behind a `drafts.count == clauses.count` guard — correct while
+        // `resolve` mapped 1:1, and quietly self-disabling the day it stopped:
+        // `IntentResolver.expand` fans one clause out into several drafts ("walk the dog
+        // monday and tuesday"), the counts diverge, and the guard drops the lineage for
+        // EVERY card in the capture rather than the one that expanded. Carrying the
+        // clause through the loop makes the fan-out a non-event — every instance keeps
+        // the source its upgrade match needs, and there is no count to agree on.
+        var drafts: [TaskDraft] = []
+        for clause in clauses {
+            var resolved = IntentResolver.resolve(
+                [HeuristicEngine.intent(from: clause)], rules: learned, now: now)
+            for index in resolved.indices { resolved[index].provisionalSource = clause }
+            drafts.append(contentsOf: resolved)
         }
+        proposeOwners(to: &drafts, ownership: ownership)
         return drafts
     }
 
-    /// One completed live parse. `candidates` is the retrieval set this parse
-    /// awaited at its end — the chain hands it to the NEXT parse's prompt, which is
-    /// how the model gets a candidate package without first-draft latency ever
-    /// paying for retrieval (audit A1).
+    /// One completed live parse. `candidates` is everything retrieval found — what the
+    /// prompt was given, plus whatever landed after it — so a caller running a burst can
+    /// hand it forward as the next parse's package.
+    ///
+    /// `suggestsEnrichment` used to live here: a flag saying "this parse prompted blind,
+    /// so chain one more with candidates". It is gone rather than fixed. Its consumer was
+    /// deleted when the reveal contract made a post-reveal enrichment illegal, and the
+    /// flag stayed behind — computed on every parse, read by nothing, and describing a
+    /// mechanism that no longer existed. Duplicate/child proposals now land on the FIRST
+    /// parse (see the bounded retrieval wait in `triage`), which is where they always
+    /// needed to be: after the reveal is too late by construction.
     struct TriageRun {
         var drafts: [TaskDraft] = []
         var candidates: [RetrievalCandidate] = []
-        /// This parse ran candidate-blind on-device and retrieval found neighbours —
-        /// the composer chains ONE re-parse over the same text so duplicate/child
-        /// proposals can land on single-shot captures too.
-        var suggestsEnrichment = false
+        /// How this parse actually ran — rung, arm, outcome, cost. Every field on it was
+        /// already computed inside `triage` and then discarded at this `return`; the
+        /// winning arm in particular (`CaptureTriageRace.HedgedResult.arm`) was read
+        /// nowhere at all. It rides out on the run so `commit` can write one durable
+        /// receipt per capture (`CaptureProvenance`) instead of the app knowing only the
+        /// last-write-wins average in `ModelMetrics`.
+        var telemetry = CaptureRunTelemetry()
     }
+
+    /// How long a parse will wait for its own retrieval before prompting the model
+    /// candidate-blind.
+    ///
+    /// The bound is the whole design: it converts "never pay retrieval on the critical
+    /// path" (audit A1) into "never pay MORE THAN THIS", which restores duplicate/child
+    /// detection in the common case while keeping A1's guarantee that first-draft latency
+    /// cannot scale with store size. Imperceptible against a parse measured in seconds,
+    /// and `EmbeddingStore.warmUp` runs before this, so a warm cache lands well inside it.
+    static let candidateWaitSeconds: Double = 0.25
 
     /// Run the raw capture through the active engine, then the deterministic
     /// resolver (dates, learned rules, needs-decision, always-inbox). Never throws
@@ -199,6 +239,8 @@ final class AppBrain {
         suppressions: [RelationshipSuppression] = [],
         ownership: OwnershipContext = .none,
         preparedCandidates: [RetrievalCandidate] = [],
+        route: CaptureRoute = .cloud,
+        allowHedge: Bool = true,
         onPartial: (@MainActor ([TaskDraft]) -> Void)? = nil
     ) async -> TriageRun {
         isProcessing = true
@@ -206,6 +248,16 @@ final class AppBrain {
         // The parse clock starts HERE — before retrieval — so the recorded latency is
         // what the user experiences from the debounce surviving, not just generation.
         let parseStarted = Date()
+        // The receipt for this parse, filled in as the facts become known and handed back
+        // on the `TriageRun`. Seeded with the routing DECISION (which is knowable now)
+        // rather than only its outcome, because "which rung was chosen and why" and "which
+        // rung answered" are different questions and a degrade makes them diverge.
+        var telemetry = CaptureRunTelemetry(
+            route: route.metricName,
+            rung: route.rung.rawValue,
+            segmentation: Segmentation.structure(of: rawText).label,
+            reasoningDepth: CaptureRoute.captureDepth(for: rawText).map(String.init(describing:)),
+            cloudAvailable: CloudModel.isAvailable)
         // Retrieval runs CONCURRENTLY with generation (audit A1): the model is
         // prompted the moment the debounce survives, with whatever candidate package
         // the CALLER prepared — the previous parse's retrieval, riding the rolling
@@ -220,25 +272,60 @@ final class AppBrain {
             let ranked = ContextRetrieval.candidates(matching: rawText, among: openTasks)
             return (ranked, Int(Date().timeIntervalSince(retrievalStarted) * 1000))
         }
+        // The candidate package the MODEL is shown — and, before this, the reason an
+        // entire shipped feature was inert.
+        //
+        // `preparedCandidates` is the rolling chain's hand-off: the PREVIOUS parse's
+        // retrieval, carried forward so a burst's later parses prompt with neighbours
+        // already in hand. The shipped composer does exactly ONE parse and so has no
+        // previous one — and no caller in the app passes this argument at all. Every
+        // production prompt was therefore candidate-blind, which means the model was
+        // never shown an id it could cite, which means `duplicateOf`/`childOf` were
+        // always nil, which means `IntentResolver.edgeProposals` (whose first act is to
+        // drop ids that aren't candidates) always returned empty. Capture-time duplicate
+        // detection, the child-link proposal, the merge-at-commit path and the
+        // capture-form suppression were all reachable only from tests. The backstop meant
+        // to catch exactly this (`suggestsEnrichment`) was computed and read by nobody,
+        // because the reveal contract had since made a post-reveal enrichment illegal and
+        // the composer's arm was deleted without the signal going with it.
+        //
+        // The fix keeps audit A1's guarantee rather than reversing it. A1's concern was
+        // that first-draft latency must not scale with store size, so retrieval was moved
+        // off the critical path entirely. Here it is awaited, but under a hard, small
+        // bound: retrieval can add at most `candidateWaitSeconds` and then generation
+        // starts regardless. `EmbeddingStore.warmUp` has already primed the cache by this
+        // point, so the common case lands in milliseconds; a cold or huge store simply
+        // prompts blind exactly as it did before, and the enrichment signal below stays
+        // honest about which happened.
+        var promptCandidates = preparedCandidates
+        if promptCandidates.isEmpty {
+            promptCandidates =
+                (try? await ModelDeadline.race(timeout: Self.candidateWaitSeconds) {
+                    await retrievalTask.value.0
+                }) ?? []
+        }
         let context = TriageContext(
             personalization: CorrectionProfile.instructionLines(learned),
             roster: roster,
             openTasks: openTasks,
-            candidates: preparedCandidates,
+            candidates: promptCandidates,
             suppressions: suppressions
         )
         // Resolve intents → drafts and propose an owner for each — the one path both
         // the streaming partials and the final result run through. Partials resolve
-        // against the PREPARED candidates (what the model was actually shown); the
-        // final result resolves against prepared ∪ fresh, so the completed parse is
-        // never candidate-blind even on a burst's first run.
-        var gateCandidates = preparedCandidates
+        // against what the model was actually SHOWN; the final result resolves against
+        // shown ∪ fresh, so a parse that prompted blind (retrieval missed its bound)
+        // still validates against everything retrieval eventually found.
+        var gateCandidates = promptCandidates
         func resolveAndGate(_ intents: [TaskIntent]) -> [TaskDraft] {
             // Grounding first: an intent the capture contains no evidence for never becomes
             // a draft at all, so nothing downstream has to decide what to do with it.
             let grounded = intents.filter { Self.grounded($0, in: rawText) }
             let dropped = intents.count - grounded.count
-            if dropped > 0 { ModelMetrics.shared.recordUngroundedDrop(dropped) }
+            if dropped > 0 {
+                ModelMetrics.shared.recordUngroundedDrop(dropped)
+                telemetry.ungroundedDrops += dropped
+            }
             var drafts = IntentResolver.resolve(
                 grounded, rules: learned, openTasks: openTasks, candidates: gateCandidates,
                 suppressions: suppressions)
@@ -269,17 +356,98 @@ final class AppBrain {
                 handler(resolveAndGate(intents))
             }
         }
+        // Which engine drives the model arm of THIS parse, if any.
+        //
+        // The cloud arm is the same `FoundationModelsEngine` with a cloud session
+        // source — same instructions, same schema, same grounding — so everything below
+        // this line is rung-agnostic, and the capture contract cannot drift between
+        // arms. `nil` means no model: the deterministic branch, which is also the branch
+        // every capture test exercises (XCTest forces the heuristic).
+        let modelEngine: AIEngine? = {
+            switch route {
+            case .local:
+                return nil
+            case .cloud where CloudModel.isAvailable:
+                return FoundationModelsEngine(sessionSource: .cloud)
+            case .cloud:
+                // A cloud route with no reachable provider is not an error — it is the
+                // routing answer for "offline", and it degrades to the arm below it.
+                // That degrade is DEGRADED OFFLINE CAPTURE, not a rung the router chose:
+                // the on-device full parse is the arm device evidence says fails at
+                // segmentation, and it exists so capture never blocks, never as the
+                // standard the pipeline is tuned against.
+                return status.isOnDevice ? engine : nil
+            }
+        }()
+        // The HEDGE arm: the free model, started only if the paid one turns out to be
+        // slow (`CaptureTriageRace.hedged`). It exists only when the primary is the cloud
+        // and there is a local model to hedge WITH — hedging the on-device arm against
+        // itself is nothing, and there is no third arm below it but the deterministic
+        // read, which is instant and needs no head start.
+        //
+        // `allowHedge: false` exists for MEASUREMENT, and only for it. An instrument that
+        // says "cloud arm" has to have measured the cloud arm; a hedged run would fold
+        // on-device answers into that table for exactly the slow, hard cases the cloud
+        // arm is being evaluated on, and the served-call delta would still look right
+        // because the cloud calls really were issued. That is the "a green table proved
+        // the fallback, not the front door" failure with a new coat of paint, so
+        // `-RambleEval` turns the hedge off rather than reporting a blend.
+        let hedgeEngine: AIEngine? = {
+            guard allowHedge, let modelEngine, !modelEngine.isOnDevice, status.isOnDevice
+            else { return nil }
+            return engine
+        }()
+        // Which model this parse ACTUALLY reached, recorded after the availability
+        // degrade rather than from the route — a `.cloud` route on a device with no
+        // reachable provider runs on-device, and a receipt that named the intent would
+        // claim a paid call that never happened (the same rule the ledger follows).
+        telemetry.engineName = modelEngine?.engineName
+        telemetry.rung =
+            modelEngine.map { $0.isOnDevice ? IntelligenceRung.onDevice : .cloud }?.rawValue
+            ?? IntelligenceRung.facts.rawValue
+        if let modelEngine, !modelEngine.isOnDevice {
+            telemetry.modelIdentifier = CloudModel.provider.identifier
+            telemetry.modelVersion = CloudModel.provider.modelVersion
+        }
+
         var intents: [TaskIntent]
-        if status.isOnDevice {
-            // The on-device parse is bounded (`cardSeconds` — the user is watching the
+        if let modelEngine {
+            // The model parse is bounded (`captureSeconds` — the user is watching the
             // composer) with streamed-partial salvage, and it is the one place capture
             // metrics are recorded: completed calls only, so debounce cancellations
-            // can't pollute the deadline-tuning evidence.
-            let outcome = await CaptureTriageRace.run(
-                deadline: ModelDeadline.captureSeconds, onPartial: partialHandler
-            ) { tee in
-                try await self.engine.triage(rawText: rawText, context: context, onPartial: tee)
+            // can't pollute the deadline-tuning evidence. The deadline is the same on
+            // both arms deliberately: it measures the user's patience, not the model's
+            // speed, and a slower rung does not buy more of it.
+            IntelligenceLedger.shared.record(modelEngine.isOnDevice ? .onDevice : .cloud, for: .ramble)
+            let raced = await CaptureTriageRace.hedged(
+                budget: ModelDeadline.captureSeconds,
+                hedgeAfter: ModelDeadline.captureHedgeSeconds,
+                onPartial: partialHandler,
+                primary: { tee in
+                    try await modelEngine.triage(rawText: rawText, context: context, onPartial: tee)
+                },
+                hedge: hedgeEngine.map { free in
+                    { tee in
+                        try await free.triage(rawText: rawText, context: context, onPartial: tee)
+                    }
+                }
+            )
+            let outcome = raced.outcome
+            // Recorded only if the hedge actually issued a call. A hedge that never woke
+            // up — the ordinary case, because a healthy cloud read lands first — must not
+            // appear in the ledger, which is the same rule that stops the availability
+            // degrade from reporting paid calls that never happened. When it DID run,
+            // both rungs are recorded: the capture genuinely asked two models, and the
+            // footer showing that is how the hedge delay gets tuned.
+            if raced.hedgeStarted {
+                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
             }
+            if hedgeEngine != nil {
+                ModelMetrics.shared.recordHedge(
+                    started: raced.hedgeStarted, won: raced.arm == .hedge)
+            }
+            telemetry.hedgeStarted = raced.hedgeStarted
+            telemetry.armWon = raced.arm.map(String.init(describing:))
             if case .cancelled = outcome {
                 // Debounce supersession — the caller already dropped this generation.
                 return TriageRun()
@@ -291,7 +459,14 @@ final class AppBrain {
             // Latency includes retrieval and the fold (the clock starts at parse
             // start) — it is the user's wait, not the model's.
             let latency = Int(Date().timeIntervalSince(parseStarted) * 1000)
+            telemetry.parseMs = latency
+            telemetry.retrievalMs = retrievalMs
+            telemetry.firstPartialMs = firstPartialMs.nonNegative
+            telemetry.partialCount = appliedPartials
             func recordCapture(_ outcome: ModelMetrics.Outcome) {
+                // One label, two destinations: the aggregate counter that tunes the
+                // deadline, and this parse's own receipt.
+                telemetry.outcome = Self.outcomeLabel(outcome)
                 ModelMetrics.shared.record(
                     .captureTriage, outcome, latencyMs: latency, retrievalMs: retrievalMs,
                     firstPartialMs: firstPartialMs, partialCount: appliedPartials)
@@ -321,16 +496,27 @@ final class AppBrain {
             // user's wait: the exact prompt this parse sent, counted by the model's
             // own tokenizer, against its context size — the evidence the chunking
             // and context-budget decisions are designed on.
-            Task {
-                let prompt = FoundationModelsEngine.prompt(for: rawText, context: context)
-                guard let tokens = try? await SystemLanguageModel.default.tokenCount(for: prompt)
-                else { return }
-                ModelMetrics.shared.recordTokens(
-                    .captureTriage, promptTokens: tokens,
-                    contextSize: SystemLanguageModel.default.contextSize)
+            //
+            // On-device only. `SystemLanguageModel.default`'s tokenizer and context size
+            // describe the LOCAL model; asking it about a prompt that went to a cloud
+            // provider would record a confident number about the wrong model, which is
+            // worse than recording none.
+            if modelEngine.isOnDevice {
+                Task {
+                    let prompt = FoundationModelsEngine.prompt(for: rawText, context: context)
+                    guard let tokens = try? await SystemLanguageModel.default.tokenCount(for: prompt)
+                    else { return }
+                    ModelMetrics.shared.recordTokens(
+                        .captureTriage, promptTokens: tokens,
+                        contextSize: SystemLanguageModel.default.contextSize)
+                }
             }
-            // Model found nothing / timed out empty / failed → deterministic fallback,
-            // exactly the degrade the old unbounded path promised.
+            // The on-device retry that used to live here is gone: it ran only AFTER the
+            // cloud arm had spent the entire capture deadline, and then took a fresh one
+            // of its own — two full waits for one capture. It is now the hedge arm above,
+            // which starts while the cloud arm is still stalling rather than after it has
+            // finished failing, and shares the one budget. What remains below is the
+            // deterministic read, which is instant and cannot fail.
             if intents.isEmpty {
                 intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
             }
@@ -346,21 +532,33 @@ final class AppBrain {
             } catch {
                 intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
             }
-            let (fresh, _) = await retrievalTask.value
+            let (fresh, retrievalMs) = await retrievalTask.value
             mergeFresh(fresh, into: &gateCandidates)
+            // The deterministic arm is instrumented too. It costs nothing and it is the
+            // baseline every model arm is argued against — an arm with no number cannot
+            // be the thing a slower one has to beat.
+            telemetry.parseMs = Int(Date().timeIntervalSince(parseStarted) * 1000)
+            telemetry.retrievalMs = retrievalMs
         }
         let drafts = resolveAndGate(intents)
-        return TriageRun(
-            drafts: drafts,
-            candidates: gateCandidates,
-            // The enrichment backstop (single-shot captures): this parse ran
-            // candidate-blind on-device, retrieval found neighbours, and there are
-            // drafts to enrich — worth ONE chained re-parse with candidates in the
-            // prompt. An enrichment parse itself carries candidates, so it can never
-            // suggest another.
-            suggestsEnrichment: preparedCandidates.isEmpty && !gateCandidates.isEmpty
-                && status.isOnDevice && !drafts.isEmpty
-        )
+        // What the MODEL was shown, not everything retrieval eventually found: these are
+        // the only ids it was permitted to cite for a duplicate/child proposal, so they
+        // are what explains a proposal's presence or absence.
+        telemetry.candidateTitles = promptCandidates.map(\.title)
+        return TriageRun(drafts: drafts, candidates: gateCandidates, telemetry: telemetry)
+    }
+
+    /// The parse outcome as one stable word for the receipt. `salvaged` is deliberately
+    /// distinct from `timedOut`: the deadline fired in both, but salvage SERVED the user
+    /// real candidates, and device measurement showed it is the normal path for a long
+    /// ramble rather than a failure.
+    private static func outcomeLabel(_ outcome: ModelMetrics.Outcome) -> String {
+        switch outcome {
+        case .success: return "success"
+        case .salvaged: return "salvaged"
+        case .timedOut: return "timedOut"
+        case .failed(let label): return "failed(\(label))"
+        }
     }
 
     /// Does the capture contain evidence that this task should exist?
@@ -555,6 +753,7 @@ final class AppBrain {
         _ drafts: [TaskDraft], rawCapture: String, source: CaptureSource = .text,
         imageRef: String? = nil,
         parked: Capture? = nil,
+        telemetry: CaptureRunTelemetry? = nil,
         into context: NSManagedObjectContext
     ) -> [TaskItem] {
         let commitStarted = Date()
@@ -600,7 +799,7 @@ final class AppBrain {
             // restore: commit IS the confirm, so there is no pre-AI category the task
             // ever held, and the task did not exist a moment ago. `ChangeLogUndo` has no
             // "filed" arm, so the default arm ran — setting `.todo` on a task born
-            // `.todo`, a visible button that did nothing. Worse, the Inbox renders Undo
+            // `.todo`, a visible button that did nothing. Worse, the Activity renders Undo
             // on `isReversible && !undone` and `Metrics.acceptanceRate` counts `!undone`
             // AI entries, so tapping that dead button scored as the user REJECTING the
             // AI. An entry whose action can't be reversed must say so rather than mint a
@@ -646,11 +845,75 @@ final class AppBrain {
         // the number that decides whether the remaining commit-path work (the
         // per-created-task dependent rescan in `AttentionEngine.metadata`) is worth
         // restructuring. Measure before optimizing: nobody has seen this number yet.
-        ModelMetrics.shared.recordCommit(
-            latencyMs: Int(Date().timeIntervalSince(commitStarted) * 1000))
+        let commitMs = Int(Date().timeIntervalSince(commitStarted) * 1000)
+        ModelMetrics.shared.recordCommit(latencyMs: commitMs)
+        recordProvenance(
+            telemetry: telemetry, capture: capture, drafts: drafts, created: created,
+            mergeTargets: mergeTargets, commitMs: commitMs, in: context)
         lastCommitSummary = CommitSummary(
             created: created.count, mergedTitles: mergeTargets.map(\.title))
         return created
+    }
+
+    /// Write this capture's durable receipt, and the one Activity row that makes it
+    /// reachable.
+    ///
+    /// **Why the row exists.** Only a `.silent`-autonomy draft logs a `"filed"` entry, so a
+    /// capture whose drafts all came back `.suggest`/`.ask` left NO trace in the Activity
+    /// feed at all — the captures with the most interesting provenance were exactly the
+    /// ones with nothing to tap. One entry per commit closes that, and makes
+    /// capture → N tasks the headline rather than something reconstructed from N separate
+    /// rows.
+    ///
+    /// It is **not reversible**: commit IS the confirm, so there is no prior state for an
+    /// undo to restore, and `ChangeLogUndo` has no arm for it. Shipping it reversible
+    /// would repeat the `"filed"` mistake — a button that appears to work, does nothing,
+    /// and scores as the user REJECTING the AI in `Metrics.acceptanceRate`.
+    private func recordProvenance(
+        telemetry: CaptureRunTelemetry?, capture: Capture, drafts: [TaskDraft],
+        created: [TaskItem], mergeTargets: [TaskItem], commitMs: Int,
+        in context: NSManagedObjectContext
+    ) {
+        guard let captureID = capture.uuid else { return }
+        // A caller with no composer session (onboarding, the seed args) has no telemetry
+        // and gets a receipt that says so, rather than one that quietly claims the
+        // deterministic route ran.
+        let run = telemetry ?? CaptureRunTelemetry(route: "unrecorded", rung: "unrecorded")
+        let stats = ModelMetrics.shared.stats[.captureTriage]
+        let provenance = CaptureProvenance(
+            captureID: captureID,
+            rawText: capture.rawText,
+            capturedAt: capture.createdAt,
+            committedAt: capture.committedAt ?? Date(),
+            run: run,
+            // Sampled rather than threaded: these live on `ModelMetrics`'s last-write-wins
+            // fields, which is correct here because the composer is modal and exactly one
+            // capture is ever in flight. The token count is the exception — it lands from
+            // a detached `Task` — so a fast commit records nil, which the detail prints as
+            // "pending" and never as zero.
+            provisionalMs: stats.flatMap { $0.lastProvisionalMs.nonNegative },
+            commitMs: commitMs,
+            promptTokens: stats.flatMap { $0.lastPromptTokens.nonNegative },
+            contextSize: stats.flatMap { $0.lastContextSize.nonNegative },
+            drafts: drafts,
+            createdTaskIDs: created.compactMap(\.uuid),
+            mergedTaskIDs: mergeTargets.compactMap(\.uuid))
+        provenanceStore.record(provenance)
+
+        let noun = drafts.count == 1 ? "task" : "tasks"
+        let entry = ChangeLogEntry(
+            summary: "Captured \(drafts.count) \(noun)",
+            detail: provenance.summaryLine,
+            action: ChangeLogEntry.capturedAction,
+            // The capture id rides `oldValue` — the existing convention for an entry that
+            // points at a Capture rather than a task (`"prunedCapture"`, `BrainSweeps`).
+            // `taskUUID` stays nil because this entry is about the EVENT, not one task.
+            oldValue: captureID.uuidString,
+            initiatedBy: .ai,
+            isReversible: false,
+            in: context)
+        context.insert(entry)
+        context.saveChanges()
     }
 
     /// Apply the reverse dependencies detected at capture: each open task the
@@ -943,10 +1206,23 @@ final class AppBrain {
     /// When delivery lands, the target behavior is three-part (see `docs/task-model.md`):
     /// one notification per assignment bound to this event, re-notify only on a genuine
     /// reassignment, and copy that names the source ("Charles assigned you: …").
-    private func publishAssignments(_ created: [TaskItem], in context: NSManagedObjectContext) {
-        guard HouseholdSync.isLive else { return }
+    /// `syncIsLive` is a parameter so the SELECTION half can be tested at `true` while
+    /// delivery stays unimplemented. Which tasks count as handed off — owned, and owned
+    /// by somebody who is not me — is the part that has to be right on the day the gate
+    /// flips; a notification bug is visible and fixable, publishing the wrong SET is a
+    /// message sent to the wrong person.
+    @discardableResult
+    func handedOffAssignments(
+        _ created: [TaskItem], in context: NSManagedObjectContext,
+        syncIsLive: Bool = HouseholdSync.isLive
+    ) -> [TaskItem] {
+        guard syncIsLive else { return [] }
         let me = UserProfile.currentMemberID(in: context)
-        let handedOff = created.filter { $0.ownerID != nil && $0.ownerID != me }
+        return created.filter { $0.ownerID != nil && $0.ownerID != me }
+    }
+
+    private func publishAssignments(_ created: [TaskItem], in context: NSManagedObjectContext) {
+        let handedOff = handedOffAssignments(created, in: context)
         guard !handedOff.isEmpty else { return }
         // Delivery lands here. Deliberately unimplemented rather than stubbed with a
         // local notification: notifying yourself about a task you just created is

@@ -42,7 +42,7 @@ final class ChangeLogEntry: NSManagedObject {
     /// Stable link to the affected task, so Undo can revert the real task.
     @NSManaged var taskUUID: UUID?
     /// For a human-initiated action, WHO did it — a `FamilyMember.uuid`. Drives the
-    /// Inbox feed's leading avatar ("Maya completed…"). Nil for AI actions (the feed
+    /// Activity feed's leading avatar ("Maya completed…"). Nil for AI actions (the feed
     /// renders a gradient sparkles tile instead) and for pre-redesign entries.
     @NSManaged var actorID: UUID?
     @NSManaged var timestamp: Date
@@ -54,13 +54,13 @@ final class ChangeLogEntry: NSManagedObject {
 
     /// The verb reserved for a human's manual field edit on a task (priority, title, due
     /// date, category, effort, description, stage, blockers). These live ONLY in the
-    /// task's own Activity timeline — never the global Inbox feed — so this one string is
+    /// task's own Activity timeline — never the global Activity feed — so this one string is
     /// the discriminator both the feed predicate and the unread badge read (see
-    /// `isInboxVisible` / `inboxVisiblePredicate`), and the timeline's context-menu Undo
+    /// `isActivityVisible` / `activityVisiblePredicate`), and the timeline's context-menu Undo
     /// routes on (`ChangeLogUndo`).
     static let editedAction = "edited"
 
-    /// The verb for a Today-plan generation. Excluded from the Inbox for the same
+    /// The verb for a Today-plan generation. Excluded from Activity for the same
     /// reason `Metrics.acceptanceRate` already excludes it: a daily plan is not a
     /// per-task action the user accepts or rejects, so it is neither household news
     /// nor something an Undo can meaningfully reverse.
@@ -73,6 +73,19 @@ final class ChangeLogEntry: NSManagedObject {
     /// to succeed while doing nothing is the most corrosive thing a product built on
     /// "every AI action is reversible" can ship.
     static let plannedAction = "planned"
+
+    /// The verb for one committed capture — "Captured 3 tasks".
+    ///
+    /// It exists because the Activity feed had a hole exactly where the most interesting
+    /// provenance was: only a `.silent`-autonomy draft writes a `"filed"` entry, so a
+    /// capture whose drafts all came back `.suggest`/`.ask` left no row at all. This one
+    /// entry per commit is the handle on the capture → N tasks event, and carries the
+    /// capture's uuid in `oldValue` (the `"prunedCapture"` convention) so the provenance
+    /// detail can resolve the run.
+    ///
+    /// **Activity-visible, deliberately** — unlike the two verbs above, being seen is the
+    /// entire point. But **never** acceptance-counted: see `nonAcceptanceActions`.
+    static let capturedAction = "captured"
 
     convenience init(
         summary: String,
@@ -109,27 +122,42 @@ final class ChangeLogEntry: NSManagedObject {
     }
 }
 
-// MARK: - Inbox visibility (one seam for the feed AND the unread badge)
+// MARK: - Activity visibility (one seam, two forms)
 
 extension ChangeLogEntry {
-    /// Verbs that never reach the global Inbox feed. `editedAction` lives only in the
+    /// Verbs that never reach the global Activity feed. `editedAction` lives only in the
     /// task's own Activity timeline; `plannedAction` is the app's own daily background
     /// work rather than an action anyone took. Both forms below read THIS list, so a
     /// future verb can't be excluded from one and not the other.
-    static let inboxHiddenActions = [ChangeLogEntry.editedAction, ChangeLogEntry.plannedAction]
+    static let activityHiddenActions = [ChangeLogEntry.editedAction, ChangeLogEntry.plannedAction]
 
-    /// The single predicate deciding whether an entry belongs in the global Inbox feed
-    /// (and its unread tab badge). `InboxView` and `RootTabView.unreadInboxCount` MUST
-    /// both read this seam so a future verb can't drift the feed and the badge apart.
-    /// (`action == nil` keeps pre-redesign entries.)
-    static let inboxVisiblePredicate = NSPredicate(
-        format: "action == nil OR NOT (action IN %@)", ChangeLogEntry.inboxHiddenActions)
+    /// Verbs excluded from `Metrics.acceptanceRate`, because they are not AI actions on a
+    /// task that a user accepts or rejects.
+    ///
+    /// `planned` was already excluded for that reason. `captured` joins it for a sharper
+    /// one: it is AI-initiated and permanently `isReversible == false`, so it can only ever
+    /// count as KEPT — an entry the metric is structurally incapable of scoring against.
+    /// Left in, every commit would drag acceptance toward 1.0 and the product's primary
+    /// trust number would improve simply because the user captured more. A metric that
+    /// cannot fail cannot support the claim it is making.
+    static let nonAcceptanceActions = [ChangeLogEntry.plannedAction, ChangeLogEntry.capturedAction]
 
-    /// The in-memory mirror of `inboxVisiblePredicate`, for filtering an already-fetched
-    /// set (the unread badge counts over a live `FetchedResults`).
-    var isInboxVisible: Bool {
+    /// The single predicate deciding whether an entry belongs in the global Activity
+    /// feed. (`action == nil` keeps pre-redesign entries.)
+    ///
+    /// The two forms exist because the predicate can only filter a FETCH and the mirror
+    /// can only filter an already-fetched set; they were once read by different call
+    /// sites (the feed and the tab's unread badge), and drifting them apart was the
+    /// specific bug this seam prevents. The badge died with the tab in the v2 collapse —
+    /// the mirror stays because filtering in memory is still the cheaper answer wherever
+    /// a live `FetchedResults` is already in hand.
+    static let activityVisiblePredicate = NSPredicate(
+        format: "action == nil OR NOT (action IN %@)", ChangeLogEntry.activityHiddenActions)
+
+    /// The in-memory mirror of `activityVisiblePredicate`.
+    var isActivityVisible: Bool {
         guard let action else { return true }
-        return !ChangeLogEntry.inboxHiddenActions.contains(action)
+        return !ChangeLogEntry.activityHiddenActions.contains(action)
     }
 }
 

@@ -5,7 +5,7 @@
 //  The leading marker on the RECORD surfaces (My Tasks rows + the detail chips).
 //  Replaces the retired `PriorityBadgeView` bars: attention is a computed system score
 //  and never a badge. A task with nothing to say renders NOTHING (zero footprint), so
-//  the row title sits flush against the status glyph — Today (`TodayTaskRow`/
+//  the row title sits flush against the status glyph — Today (`BriefTaskRow`/
 //  `TaskCardView`) stays entirely marker-free by design.
 //
 //  **One slot, two residents, an explicit precedence.** The slot means "the one thing

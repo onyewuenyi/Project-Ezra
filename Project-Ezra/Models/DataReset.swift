@@ -75,7 +75,8 @@ enum DataReset {
         _ scope: Scope, in context: NSManagedObjectContext,
         metrics: MetricsRecorder? = nil, planMetrics: PlanMetrics? = nil,
         defaults: UserDefaults = .standard, now: Date = Date(),
-        at location: PersistenceStack.StoreLocation = .default
+        at location: PersistenceStack.StoreLocation = .default,
+        provenance: CaptureProvenanceStore? = nil
     ) -> StoreResetRecord {
         // A copy first, always — the same rule `destroyStore` holds. Best-effort by
         // design, and weaker here than there: this copies a store that is currently OPEN,
@@ -87,6 +88,13 @@ enum DataReset {
         // deleting the row alone would orphan them in the container forever.
         let captures = (try? context.fetch(NSFetchRequest<Capture>(entityName: "Capture"))) ?? []
         for ref in captures.compactMap(\.imageRef) { CaptureImageStore.delete(ref) }
+
+        // Capture provenance receipts are a file sidecar keyed by `Capture.uuid`, so they
+        // orphan exactly the way the image bytes above do — and BOTH scopes delete
+        // `Capture`, so this is not an `.everything` concern. Passed in rather than reached
+        // for, like `metrics`: it deletes a real file, and a test reaching `.shared` would
+        // unlink the developer's own receipts.
+        provenance?.reset()
 
         for name in entityNames(for: scope, in: context) {
             let request = NSFetchRequest<NSManagedObject>(entityName: name)
@@ -101,7 +109,8 @@ enum DataReset {
             metrics?.reset(now: now)
             planMetrics?.reset()
             ModelMetrics.shared.reset()
-            CapabilityMetrics.shared.reset()
+            AdvisorMetrics.shared.reset()
+            IntelligenceLedger.shared.reset(now: now)
             // Never leave the app without an identity: this is exactly what a first
             // launch creates, and `currentMemberID` is read from ownership to Today.
             _ = UserProfile.bootstrapIdentity(in: context)

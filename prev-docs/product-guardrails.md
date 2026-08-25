@@ -72,22 +72,24 @@ Grounded in `AutonomyPolicy` (the code's source of truth):
 - **suggest** = 0.5–0.8, one-tap confirm
 - **ask** = < 0.5 OR judgment call OR irreversible
 
-These tiers (`AutonomyPolicy.tier`) are unchanged. What changed with the state-layer
-split: the tier no longer *is* the task's state — it only drives **workflow routing**
-via `AutonomyPolicy.proposedWorkflow`. Only the **silent** tier is filed straight to
-the `.ready` lane; **suggest**, **ask**, and every judgment call enter `.suggested`
-(the Suggested lane / Inbox), awaiting the user's "Make ready". Workflow lanes
-(Suggested / Ready / In Progress / Done) are the only user-owned states; **Blocked**,
-**Up for Grabs**, and **Needs Decision** are now *derived assessments* (`TaskAssessment`,
-never stored — computed from the `blockers` list, `ownerPending`, and
-`isJudgmentCall`/`confidence`) that a card wears without changing its lane.
+These tiers (`AutonomyPolicy.tier`) are unchanged, and the judgment-category carve-out
+is still the point of them: a values-laden call is always `.ask`, no matter how confident
+the model is.
 
-The **auto-commit threshold is 0.85**, deliberately above the silent floor (0.8):
-auto-commit skips even the review glance, so it demands a stricter bar, and it
-additionally requires exactly one draft and no judgment call (`CapturePolicy`).
-**Judgment calls never auto-anything at any confidence** — the invariant extends
-from filing to committing, and a judgment call always routes to `.suggested`
-regardless of how confident the model is.
+**What changed (four-axis model, 2026-08-11): the tier no longer routes anything.** The
+workflow lanes this section used to describe — `.suggested` / `.ready` / "Make ready",
+and the `proposedWorkflow` + `CapturePolicy` auto-commit machinery — are all deleted.
+Lifecycle is one axis with four cases (`todo` · `doing` · `done` · `canceled`), and
+**capture is always-confirm**: nothing is gated on confidence, every draft reaches the
+confirm card populated and editable, and `AppBrain.commit` *is* the publish boundary.
+Uncertainty is a visual state on the confirm card, never a destination.
+
+So the tier's job is narrower than it was: it describes how much autonomy an inference
+*deserves*, and it feeds `needsDecision` at birth (via the judgment flag) — it does not
+decide whether a task is created, nor where it lands. The one place confidence still
+gates an action is inference that **destroys or merges existing user data** (the duplicate
+merge, tiered at 0.85 / 0.5), because that is the only case where being wrong costs the
+user something they already had.
 
 ## Future Feature Checklist
 
@@ -106,7 +108,7 @@ streaming/crystallize theater, confetti, priority systems, swipe-card boards,
 
 ## Architecture Principles (prevent drift)
 
-- Pure logic lives outside views and is testable (`AutonomyPolicy`, `CapturePolicy`, `TaskItem` mutations in `TaskMutations.swift`).
+- Pure logic lives outside views and is testable (`AutonomyPolicy`, `IntentResolver`, `TaskRanking`, `TaskItem` mutations in `TaskMutations.swift`).
 - Views stay declarative; behavior lives in models/services.
 - Everything AI is engine-agnostic — it operates on `TaskDraft`, identical for `FoundationModelsEngine` and `HeuristicEngine`.
 - SwiftData owns persistence; views never invent state the model can hold.

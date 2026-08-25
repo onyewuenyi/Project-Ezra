@@ -13,13 +13,67 @@
 //  the deterministic `IntentResolver`'s job, in app code, so which Friday "next
 //  week" means is never a generation artifact.
 //
+//  **It also drives the CLOUD arm, and that is deliberate rather than lazy.** A
+//  `CloudModelProvider` hands back a `LanguageModelSession`, which is the only thing
+//  this file has ever talked to — so the cloud arm is this engine with a different
+//  `SessionSource`, not a parallel pipeline. The payoff is that the capture contract
+//  cannot drift between rungs: the same instructions, the same `@Generable` schema,
+//  the same verbatim-quote grounding, the same "emit raw expressions, let the resolver
+//  do the date math" rule, because it is the same code. A second engine class would
+//  have been two places for that contract to rot.
+//
 
 import Foundation
 import FoundationModels
 
 struct FoundationModelsEngine: AIEngine {
-    let engineName = "Apple Intelligence (on-device)"
-    let isOnDevice = true
+    /// Where this engine's session comes from — the ONLY difference between the arms.
+    enum SessionSource: Equatable {
+        /// Apple's on-device model, through the prewarmed capture pool.
+        case onDevice
+        /// The installed cloud provider (Rung 3). No pool: a prewarmed spare buys a
+        /// hot local prefix, and there is no local prefix to warm on a network call.
+        case cloud
+    }
+
+    var sessionSource: SessionSource = .onDevice
+
+    var engineName: String {
+        switch sessionSource {
+        case .onDevice: return "Apple Intelligence (on-device)"
+        case .cloud: return "Cloud (\(CloudModel.provider.identifier))"
+        }
+    }
+
+    var isOnDevice: Bool { sessionSource == .onDevice }
+
+    /// The session for one parse. The on-device arm takes a prewarmed spare and leaves
+    /// the next one warming; the cloud arm constructs per call and can throw — an
+    /// unavailable provider is a *routing* answer, not a crash, so the caller falls
+    /// through the chain exactly as the Brief's tier chain does.
+    private func makeTriageSession(
+        context: TriageContext, text: String
+    ) throws
+        -> LanguageModelSession
+    {
+        switch sessionSource {
+        case .onDevice:
+            return Self.sessionPool.take(
+                context: context,
+                fingerprint: .init(
+                    instructions: Self.instructionText(for: context), roster: context.roster))
+        case .cloud:
+            // Depth is decided per-ramble, not per-feature: the common short capture
+            // runs reasoning-free (the front door is the most latency-sensitive surface
+            // in the product) and only the long, many-intent dumps — the ones that
+            // actually failed segmentation on device — buy a reasoning level. The policy
+            // itself lives in `CaptureRoute`, with the rest of capture's routing.
+            var config = CapabilityProfiles.capture
+            config.reasoningLevel = CaptureRoute.captureDepth(for: text)
+            return try CloudModel.provider.session(
+                instructions: Self.instructionText(for: context), config: config)
+        }
+    }
 
     func triage(
         rawText: String,
@@ -29,13 +83,11 @@ struct FoundationModelsEngine: AIEngine {
         let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        // A prewarmed single-use session when the pool's fingerprint still matches;
-        // cold construction otherwise. Either way the next parse's spare starts
-        // warming while this one generates.
-        let session = Self.sessionPool.take(
-            context: context,
-            fingerprint: .init(
-                instructions: Self.instructionText(for: context), roster: context.roster))
+        // On device: a prewarmed single-use session when the pool's fingerprint still
+        // matches, cold construction otherwise, and either way the next parse's spare
+        // starts warming while this one generates. On the cloud arm: constructed per
+        // call, and it may throw if the provider isn't there.
+        let session = try makeTriageSession(context: context, text: trimmed)
         let prompt = Self.prompt(for: trimmed, context: context)
 
         guard let onPartial else {
@@ -262,11 +314,61 @@ struct FoundationModelsEngine: AIEngine {
         Hard rules, before anything else:
         - EVERY task you return must come from something the user actually said. Never
           invent a task, however useful or likely it seems.
-        - If the text describes one task, return exactly one. Do not pad the list.
         - sourceQuote: copy the user's own words that this task comes from, VERBATIM from
           the text above. If you cannot quote the words, the task does not belong here.
         - Filling in a task's FIELDS is expected — a date, an effort, a category the user
           didn't spell out. Filling in a task they never mentioned is not.
+        - Do not pad the list. Returning one task for one outcome is a complete answer.
+
+        DECOMPOSITION — how many tasks, and where each one starts and stops.
+
+        This is the hard part, and it is why you were asked. What reaches you is usually
+        SPOKEN: no punctuation you can rely on, connectives missing, thoughts that
+        restart mid-sentence. Count the OUTCOMES the person intends. Do not count
+        sentences, lines, verbs, or numbers.
+
+        - Punctuation does not decide the count, in EITHER direction. Ten unpunctuated
+          lines can be eight tasks. Three sentences in a row can be ONE task when they
+          are three sentences about the same outcome: "I have to sort the passport. It
+          expires in March. The office is only open weekdays." is one task, not three.
+        - A run-on with no connectives is still several tasks. "take the kids to school
+          tomorrow go to the park cook a lunch for next week" has no "and", no "then",
+          no commas — and it is three outcomes. Find where one intended outcome ends and
+          the next begins, and cut there.
+        - One task per distinct intended OUTCOME, never one per verb. "wash and fold the
+          laundry" is one outcome with two verbs. "pick up and drop off the kids" is one.
+          "call mom and dad" is one.
+        - A quantity or a cadence inside one outcome does not multiply it. "cook a lunch
+          for three days of the week for next week" is ONE task — one cooking session
+          with a quantity attached — not three.
+        - Several NAMED OCCASIONS of one outcome are still ONE task from you. "walk my
+          dog Monday and Tuesday" is one task whose dateExpression is "Monday and
+          Tuesday". The app turns that into one task per day. Never split the occasions
+          yourself, and never drop the later ones.
+        - Attach every modifier to the outcome it belongs to, not to the nearest one. In
+          "take the kids to school tomorrow go to the park cook a lunch for next week",
+          "tomorrow" belongs to the school run and "for next week" to the cooking. The
+          park trip has no time at all — giving it one would be inventing.
+        - A leading time or place applies to everything after it until something replaces
+          it. "tomorrow dentist bank pick up the parcel" is three tasks, all "tomorrow".
+        - A trailing reason stays with its task. "figure out whether we keep the storage
+          unit because it's four hundred a month and we never go there" is ONE task; the
+          reason is not a second one.
+        - Self-corrections REPLACE, they do not add. "call the plumber, actually no, the
+          electrician" is ONE task, about the electrician. "actually", "no wait",
+          "scratch that", "I mean", "or rather" all mean the person is revising what they
+          just said. Return only the revised version, and quote the revised words in
+          sourceQuote.
+        - Pronouns bind to the nearest preceding thing they can mean, and you resolve
+          them in the title. "renew the passport it expires in March and book flights
+          after that" — "it" is the passport, "that" is the renewal, so the flights task
+          is blocked on it. No title may read "it", "that" or "them".
+        - Filler and throat-clearing are not tasks. Neither is a header, a mood ("this
+          week is a lot"), or a note with nothing to do in it. Skip them.
+
+        If splitting one outcome in two is a bad answer, inventing a third is a worse
+        one. When you are unsure whether two things are one outcome or two, prefer the
+        split — but only if you can quote the person's own words for BOTH.
 
         For each distinct task:
 
@@ -303,7 +405,11 @@ struct FoundationModelsEngine: AIEngine {
           week", "friday", "before the trip") whenever the task has any time \
           dimension. Do NOT resolve it to a date — never output a computed date the \
           user didn't say. Null only for genuinely open-ended items with no time \
-          pressure at all.
+          pressure at all. When the user names SEVERAL occasions for the SAME outcome \
+          ("walk the dog Monday and Tuesday"), return ONE task and copy ALL the days \
+          into dateExpression ("Monday and Tuesday") — the app turns that into one task \
+          per day. Never split the occasions into separate tasks yourself, and never \
+          drop the later ones.
 
         - duplicateOfID / childOfID: when a CANDIDATES list is provided, decide whether \
           this task is the SAME as one of them (set duplicateOfID + duplicateConfidence) \
@@ -346,10 +452,13 @@ struct ExtractedTask {
     /// would be circular: model-generated evidence proving the model's own output.
     ///
     /// A verbatim quote rather than character offsets, deliberately. Offsets are the
-    /// cleaner reference in theory and the worse one in practice — small on-device models
-    /// count characters unreliably, so an offset scheme would reject good tasks for reasons
-    /// that have nothing to do with grounding. A quote is easy to emit and trivial to check
-    /// by substring match against the raw capture.
+    /// cleaner reference in theory and the worse one in practice — small models count
+    /// characters unreliably, so an offset scheme would reject good tasks for reasons that
+    /// have nothing to do with grounding. A quote is easy to emit and trivial to check by
+    /// substring match against the raw capture.
+    ///
+    /// This wording fails SILENTLY if it softens: a rung told to paraphrase does not
+    /// error, it just starts losing good tasks at the grounding check.
     @Guide(
         description:
             "The user's own words this task comes from, copied VERBATIM from the input text. Never paraphrase here, and never write words the user did not say."
@@ -403,9 +512,13 @@ struct ExtractedTask {
     @Guide(description: "One short plain-language sentence explaining the categorization.")
     let reasoning: String
 
+    /// The single most load-bearing description in the schema: it is the input
+    /// `IntentResolver.expand` fans out on, and the instruction that keeps calendar
+    /// arithmetic out of the model. A rung that starts resolving dates itself does not
+    /// fail loudly — it fails as a wrong date on a task the user has to notice.
     @Guide(
         description:
-            "The user's time phrase copied VERBATIM (\"tomorrow\", \"next week\", \"friday\") when the task has a time dimension; null otherwise. Never a computed or resolved date the user didn't say."
+            "The user's time phrase copied VERBATIM (\"tomorrow\", \"next week\", \"friday\") when the task has a time dimension; null otherwise. Never a computed or resolved date the user didn't say. When several occasions are named for the same task, copy them all into this one field (\"Monday and Tuesday\")."
     )
     let dateExpression: String?
 

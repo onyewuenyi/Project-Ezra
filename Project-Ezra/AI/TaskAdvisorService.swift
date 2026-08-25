@@ -28,14 +28,40 @@ struct TaskAdvisorService {
     /// but the page is on screen and a hung generation would pin the loading treatment.
     /// Validation failure reads as `noUsableOutput`: a response arrived, but nothing a
     /// user could be shown survived the trust boundary.
-    func read(_ facts: TaskAdvisorFacts) async -> ModelResult<ValidatedReading> {
-        let outcome = await ModelRun.perform(.taskAdvisor, deadline: ModelDeadline.cardSeconds) {
-            // The warm spare when one is waiting; a cold build otherwise. Either way the
-            // next spare starts warming, so a pager swipe lands on a hot prefix.
-            let session = Self.sessionPool.take(instructions: Self.instructions)
+    ///
+    /// `rung` chooses WHERE it generates. Same prompt, same `@Generable` schema, same
+    /// `validated(against:)` boundary — the cloud arm is not trusted more for being
+    /// expensive, and `ValidatedReading` still drops or degrades rather than substituting.
+    /// **Silence survives the upgrade too**: a cloud model must be allowed to answer
+    /// `nothing`, or the spend buys noise.
+    ///
+    /// The DEADLINE, however, is per rung and per presence — see
+    /// `ModelDeadline.advisorSeconds`. One number for every rung was a real bug: 20s is
+    /// right for a local read and far too short for deep reasoning, so the paid rung would
+    /// have timed out routinely while everything said it worked.
+    func read(
+        _ facts: TaskAdvisorFacts, rung: IntelligenceRung = .onDevice, presenceTime: Bool = true
+    ) async -> ModelResult<ValidatedReading> {
+        let outcome = await ModelRun.perform(
+            .taskAdvisor,
+            deadline: ModelDeadline.advisorSeconds(rung: rung, presenceTime: presenceTime)
+        ) {
+            let session = try Self.session(for: rung)
             return try await session.respond(
                 to: Self.prompt(for: facts), generating: TaskAdvisorReading.self
             ).content
+        }
+        // **Salvage down a rung rather than surfacing a failure.** A deep read that ran out
+        // of time has not shown there is nothing to say — it has shown THIS rung could not
+        // say it in the time available, which is a different claim. Falling back to
+        // on-device produces a real judgment (cheaper, and the one most tasks get anyway)
+        // where the alternative is an empty surface or a retry line asking the user to
+        // request thinking they never asked for.
+        //
+        // Guarded on `.cloud`, so it cannot recurse: the on-device arm's own timeout is a
+        // genuine failure with nowhere cheaper to go.
+        if rung == .cloud, case .timedOut = outcome {
+            return await read(facts, rung: .onDevice, presenceTime: presenceTime)
         }
         switch outcome {
         case .success(let reading):
@@ -50,10 +76,31 @@ struct TaskAdvisorService {
         }
     }
 
+    /// The session for one reading.
+    ///
+    /// On device: the warm spare when one is waiting, a cold build otherwise, and either
+    /// way the next spare starts warming so a pager swipe lands on a hot prefix. On the
+    /// cloud rung: constructed per call and no pool — a prewarmed spare buys a hot LOCAL
+    /// prefix, and there is no local prefix on a network call. It can throw, and that
+    /// surfaces through `ModelRun` as an ordinary failure, which is what the Advisor's
+    /// `.failed`/retry path already handles.
+    private static func session(for rung: IntelligenceRung) throws -> LanguageModelSession {
+        switch rung {
+        case .cloud:
+            return try CloudModel.provider.session(
+                instructions: Self.instructions, config: CapabilityProfiles.taskAdvisor)
+        case .onDevice, .facts, .memory:
+            // `.facts`/`.memory` never reach here — they are answered before a judge is
+            // ever called — so treating them as on-device is a total switch rather than a
+            // silent fallback with meaning attached to it.
+            return Self.sessionPool.take(instructions: Self.instructions)
+        }
+    }
+
     /// Prewarmed sessions. The builder constructs the real profile — instructions and
     /// config both — so the prefix being warmed is the prefix that will be sent, which is
     /// the whole difference between this and the anonymous warm-up it replaces.
-    static let sessionPool = AdvisorSessionPool<LanguageModelSession> { instructions in
+    static let sessionPool = TaskAdvisorSessionPool<LanguageModelSession> { instructions in
         let session = CapabilityProfiles.session(
             instructions: instructions, config: CapabilityProfiles.taskAdvisor)
         session.prewarm()

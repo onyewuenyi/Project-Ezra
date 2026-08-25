@@ -64,7 +64,7 @@ struct TaskMutationTests {
         #expect(task.currentStateEnteredAt != nil)
     }
 
-    @Test("Starting a task is not household news — it stays out of the Inbox feed")
+    @Test("Starting a task is not household news — it stays out of the Activity feed")
     func startStaysOutOfTheFeed() throws {
         let context = TestStore.makeContext()
         let task = TaskItem(title: "x", status: .todo, in: context)
@@ -75,7 +75,7 @@ struct TaskMutationTests {
         #expect(!mine.isEmpty)
         // Nudging a task in and out of flight while you work is a personal marker,
         // not something the rest of the household needs pushed at them.
-        #expect(mine.allSatisfy { !$0.isInboxVisible })
+        #expect(mine.allSatisfy { !$0.isActivityVisible })
     }
 
     // MARK: - Reopen restores the prior status (from the state timeline)

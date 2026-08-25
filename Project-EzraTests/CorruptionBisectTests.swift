@@ -111,6 +111,45 @@ struct CorruptionBisectTests {
         _ = TestStore.makeContext()
     }
 
+    @Test("D: split + SAVE + fetch + read newValue, then wipe")
+    func savedReadThenWipe() throws {
+        let context = TestStore.makeContext()
+        let parent = TaskItem(title: "Plan the trip", status: .todo, in: context)
+        context.insert(parent)
+        _ = parent.splitInto(steps(["A", "B", "C"]), in: context)
+        context.saveChanges()
+        let splits = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
+            .filter { $0.action == "split" }
+        let entry = try #require(splits.first)
+        let s = entry.newValue ?? ""
+        #expect(s.count > 10)
+        _ = TestStore.makeContext()
+    }
+
+    @Test("E: app path — read long titles, then DataReset.clear")
+    func appClearAfterLongStringReads() throws {
+        let context = TestStore.makeContext()
+        let defaults = UserDefaults(suiteName: "CorruptionBisectTests.E")!
+        defaults.removePersistentDomain(forName: "CorruptionBisectTests.E")
+        for i in 0..<5 {
+            let task = TaskItem(
+                title: "A deliberately long task title that lives on the heap #\(i)",
+                in: context)
+            context.insert(task)
+        }
+        context.saveChanges()
+        // The poison: read the heap-length strings back, the way the app's UI does all day.
+        let all = try context.fetch(NSFetchRequest<TaskItem>(entityName: "TaskItem"))
+        #expect(all.map(\.title).allSatisfy { $0.count > 20 })
+        // The detonator candidate: the Settings clear deletes every object of every entity.
+        DataReset.clear(
+            .work, in: context, defaults: defaults,
+            at: .temporary("corruption-bisect-e"))
+        let count =
+            (try? context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: "TaskItem"))) ?? -1
+        #expect(count == 0)
+    }
+
     @Test("C4: + child uuid reads, then wipe")
     func childUUIDReadsThenWipe() throws {
         let context = TestStore.makeContext()

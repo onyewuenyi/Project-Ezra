@@ -340,6 +340,16 @@ struct HeuristicEngine: AIEngine {
     /// `IntentResolver.resolveDate` turns it into an actual date — so a truncated
     /// phrase is a wrong DATE, not just a cosmetic one.
     static func dateExpression(from lower: String) -> String? {
+        // A weekday ENUMERATION beats every single token below, and for the same reason
+        // the token order is what it is: returning "monday" for "monday and tuesday"
+        // truncates the phrase, and a truncated phrase here is a silently dropped
+        // occasion — `IntentResolver.expand` can only fan out what it is handed.
+        //
+        // Kept narrow to weekday lists on purpose. The model arm can enumerate any date
+        // form it likes; a deterministic engine trying to recognize general date lists is
+        // exactly how the "tomorrow"/"day after tomorrow" bug happened, at greater cost.
+        if let enumeration = weekdayEnumeration(in: lower) { return enumeration }
+
         // Ordering is load-bearing and used to be wrong: "tomorrow" led the list, so
         // "day after tomorrow" truncated to it and resolved a day early. Longest/most
         // specific first — every token that CONTAINS another must precede it.
@@ -368,5 +378,22 @@ struct HeuristicEngine: AIEngine {
             }
         }
         return nil
+    }
+
+    private static let weekdayAlternation =
+        "(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)"
+
+    /// Two or more weekday names joined by commas and/or "and" — "monday and tuesday",
+    /// "monday, wednesday and friday" — returned as ONE phrase for the resolver to fan
+    /// out. Nil for a single weekday, which the token list below handles.
+    ///
+    /// The separator alternatives are longest-first for the same reason the token list is:
+    /// ", and " must be tried before ", " or the trailing "and" is left stranded where a
+    /// weekday is required.
+    static func weekdayEnumeration(in lower: String) -> String? {
+        let separator = #"(?:\s*,\s*and\s+|\s*,\s*|\s+and\s+)"#
+        let pattern = #"\b"# + weekdayAlternation + "(?:" + separator + weekdayAlternation + ")+"
+        guard let range = lower.range(of: pattern, options: .regularExpression) else { return nil }
+        return String(lower[range])
     }
 }

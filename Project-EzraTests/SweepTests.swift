@@ -135,7 +135,7 @@ struct SweepTests {
         #expect(BrainSweeps.run(in: context, now: now).archived.count == 1)
         #expect(ancient.status == .canceled)
 
-        // Undo it from the change log, exactly as the Inbox feed's Undo does.
+        // Undo it from the change log, exactly as the Activity feed's Undo does.
         let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
         let archived = try #require(
             entries.first { $0.taskUUID == ancient.uuid && $0.action == "archived" })

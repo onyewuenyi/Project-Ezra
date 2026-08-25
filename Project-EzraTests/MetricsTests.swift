@@ -188,6 +188,26 @@ struct AdvisorMetricsTests {
         #expect(metrics.footerLine == "advisor: zip 1 · dec 1/1")
     }
 
+    @Test("Gate skips are counted apart from judged silence — different questions")
+    func gatedIsNotNothing() {
+        let defaults = freshDefaults()
+        let metrics = AdvisorMetrics(defaults: defaults)
+        metrics.recordGated()
+        metrics.recordGated()
+        metrics.recordOffered(.nothing)
+
+        // "We skipped this for free" and "the model looked and declined" must not share
+        // a counter: gate skips accumulate on every fingerprint change of every trivial
+        // task and would swamp the honesty denominator.
+        #expect(metrics.gated == 2)
+        #expect(metrics.stats[.nothing]?.offered == 1)
+        #expect(metrics.footerLine == "advisor: gated 2 · zip 1")
+        #expect(AdvisorMetrics(defaults: defaults).gated == 2)  // persists
+
+        metrics.reset()
+        #expect(metrics.gated == 0)
+    }
+
     @Test("Progression judges moved work, not AI activity")
     func progression() {
         let context = TestStore.makeContext()
@@ -205,7 +225,78 @@ struct AdvisorMetricsTests {
         metrics.recordActed(.decide, taskID: stuck.uuid, status: .todo)
 
         let line = metrics.progressionLine(among: [done, stuck])
-        #expect(line == "moved 50% · re-int 1.5")
+        // `lift n/a` is the important half. With no judged-silence cohort there is nothing
+        // to compare against, and the footer says so rather than reporting the bare
+        // advised rate as though it meant something — "no difference measured" and "no
+        // measurement possible" are different claims.
+        #expect(line == "moved 50% (2) · lift n/a · re-int 1.5")
+    }
+
+    @Test("Progression LIFT compares advised tasks against judged-silent ones")
+    func progressionLift() {
+        let context = TestStore.makeContext()
+        let metrics = AdvisorMetrics(defaults: freshDefaults())
+
+        // Treatment: two advised, one moved → 50%.
+        let advisedMoved = TaskItem(title: "Renew passport", status: .todo, in: context)
+        metrics.recordActed(.advise, taskID: advisedMoved.uuid, status: .todo)
+        advisedMoved.complete()
+        let advisedStuck = TaskItem(title: "Sort the garage", status: .todo, in: context)
+        metrics.recordActed(.advise, taskID: advisedStuck.uuid, status: .todo)
+
+        // Control: the Advisor looked at two worthy tasks and judged silence. Neither
+        // moved → 0%. Lift is therefore +50 points.
+        let silentA = TaskItem(title: "Book the dentist", status: .todo, in: context)
+        let silentB = TaskItem(title: "Fix the gate", status: .todo, in: context)
+        metrics.recordJudgedSilence(taskID: silentA.uuid, status: .todo)
+        metrics.recordJudgedSilence(taskID: silentB.uuid, status: .todo)
+
+        let all = [advisedMoved, advisedStuck, silentA, silentB]
+        let (advised, silent, lift) = metrics.progression(among: all)
+        #expect(advised == AdvisorMetrics.Cohort(moved: 1, total: 2))
+        #expect(silent == AdvisorMetrics.Cohort(moved: 0, total: 2))
+        #expect(lift == 0.5)
+        #expect(metrics.progressionLine(among: all)?.contains("lift +50pt") == true)
+    }
+
+    @Test("A task that was advised never counts as its own control")
+    func controlCohortIsUncontaminated() {
+        let context = TestStore.makeContext()
+        let metrics = AdvisorMetrics(defaults: freshDefaults())
+
+        // Advised once, then judged silent later (the facts changed and the Advisor had
+        // nothing to add). It belongs to the TREATMENT group — the intervention is the
+        // thing whose effect is being measured. Counting it in both would dilute the
+        // difference towards zero and make a working Advisor look ineffective.
+        let task = TaskItem(title: "Decide on the school", status: .todo, in: context)
+        metrics.recordActed(.decide, taskID: task.uuid, status: .todo)
+        metrics.recordJudgedSilence(taskID: task.uuid, status: .todo)
+        task.complete()
+
+        let (advised, silent, lift) = metrics.progression(among: [task])
+        #expect(advised == AdvisorMetrics.Cohort(moved: 1, total: 1))
+        #expect(silent == AdvisorMetrics.Cohort(moved: 0, total: 0))
+        // No usable control ⇒ no lift claim.
+        #expect(lift == nil)
+    }
+
+    @Test("A negative lift is reported with its sign — it is the most important reading")
+    func negativeLiftIsVisible() {
+        let context = TestStore.makeContext()
+        let metrics = AdvisorMetrics(defaults: freshDefaults())
+
+        // The falsifying case: advised work sat still while silent work moved. If the
+        // Advisor is not helping, this footer has to be able to say so — an unsigned
+        // percentage would let the bad news hide in plain sight.
+        let advised = TaskItem(title: "Plan the birthday", status: .todo, in: context)
+        metrics.recordActed(.advise, taskID: advised.uuid, status: .todo)
+        let silent = TaskItem(title: "Pay the water bill", status: .todo, in: context)
+        metrics.recordJudgedSilence(taskID: silent.uuid, status: .todo)
+        silent.complete()
+
+        let all = [advised, silent]
+        #expect(metrics.progression(among: all).lift == -1.0)
+        #expect(metrics.progressionLine(among: all)?.contains("lift -100pt") == true)
     }
 
     @Test("An action that itself moved the task still needs FURTHER movement to count")

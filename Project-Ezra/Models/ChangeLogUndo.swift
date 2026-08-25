@@ -2,10 +2,10 @@
 //  ChangeLogUndo.swift
 //  Project-Ezra
 //
-//  The action-aware revert behind the Inbox feed's per-entry Undo. Every change-log
+//  The action-aware revert behind the Activity feed's per-entry Undo. Every change-log
 //  entry — AI-initiated or human — knows how to be reversed by its `action` verb, so
 //  the feed can offer a single Undo that does the right thing per action rather than
-//  one blunt "send it to the Inbox". Extracted from the old AI-trail so the logic
+//  one blunt "send it to Activity". Extracted from the old AI-trail so the logic
 //  lives in one testable place.
 //
 //  The critical rule: a HUMAN "completed"/"killed" undoes by *reopening* (restoring

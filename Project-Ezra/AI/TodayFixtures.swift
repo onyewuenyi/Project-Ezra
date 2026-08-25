@@ -200,7 +200,7 @@ enum TodayFixtures {
 
         // MARK: Capture Graph — a merged capture (the accepted-duplicate result)
         // A later capture of the same task folded INTO the expense report: the target keeps
-        // the capture provenance, and a reversible `.human` "merged" entry shows in the Inbox
+        // the capture provenance, and a reversible `.human` "merged" entry shows in Activity
         // feed (Undo resurrects the folded draft as a real task).
         expenseReport.notes = "Also captured: Send in the expense report"
         let mergedDraft = TaskDraft(

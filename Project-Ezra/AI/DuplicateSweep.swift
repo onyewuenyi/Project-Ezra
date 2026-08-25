@@ -7,7 +7,7 @@
 //  (Thursday) coexist forever. This sweep finds embedding-near pairs of existing
 //  open tasks, asks the on-device model to judge each, and auto-merges at the SAME
 //  ≥0.85 tier capture-time merges use — the destructive-tier rule extended to
-//  existing pairs, with the Inbox entry + one-tap Undo as the human boundary
+//  existing pairs, with Activity entry + one-tap Undo as the human boundary
 //  (product decision, 2026-08-07). Deliberately NOT part of `BrainSweeps`' silent
 //  tier: a merge is the auto-accept invariant's destructive exception, so it lives
 //  here, named, with its own rules.
@@ -135,6 +135,10 @@ enum DuplicateSweep {
 
         var merges = 0
         for pair in pairs.prefix(maxJudgmentsPerRun) {
+            // Sweeps are on-device ONLY, hard-capped, and must never reach the cloud
+            // rung: background work nobody is waiting on has no business costing money.
+            // The counter is here so that stays a measured fact rather than an intention.
+            IntelligenceLedger.shared.record(.onDevice, for: .sweeps)
             let result = await ModelRun.perform(
                 .duplicateSweep, deadline: ModelDeadline.backgroundSeconds
             ) {

@@ -13,7 +13,7 @@ import SwiftUI
 enum LayoutMetrics {
     /// The leading status/completion-glyph column width on the dense record and Today
     /// rows — the single value the title aligns under. Replaces the scattered `28`s (and
-    /// TodayTaskRow's `32`) so the left rail is consistent across every list.
+    /// BriefTaskRow's `32`) so the left rail is consistent across every list.
     static let recordGlyphColumn: CGFloat = 28
     /// The minimum interactive tap target (HIG). Every tappable glyph/control reserves
     /// at least this, even when its visual glyph is smaller than the column.
@@ -31,6 +31,17 @@ enum LayoutMetrics {
     /// the one control operated mid-thought at arm's length. Deliberately larger than
     /// `hitTarget`: it is the surface's focal point, not merely reachable.
     static let voiceHero: CGFloat = 64
+    /// The My Tasks header row's fixed height. Its controls come and go with the
+    /// household roster — the ownership tabs appear the moment a second member exists —
+    /// and pinning the row makes that a change in WHAT the header holds rather than how
+    /// tall it is, so the list underneath never reflows. Sized to the taller resident
+    /// (the tab pill, `sectionHeader` text + `Spacing.xxs`), which the compact filter
+    /// capsule then centres within.
+    static let tasksHeaderRow: CGFloat = 32
+    /// The label column on a diagnostics label/value row (`ActivityDetailView`). Fixed so
+    /// dozens of stacked readings share one gutter and the values form a scannable column
+    /// — the whole point of that screen is comparing runs, which a ragged left edge defeats.
+    static let diagnosticLabelColumn: CGFloat = 116
 }
 
 extension View {

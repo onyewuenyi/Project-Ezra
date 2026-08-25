@@ -76,28 +76,40 @@ signing (needs a paid Apple Developer account), then set `cloudKitDatabase:` on 
 `ModelConfiguration`. Do that through the Xcode GUI — never by hand-editing
 `project.pbxproj` or entitlements.
 
-## Ownership: `ownerID == nil` is a deliberate, temporary sentinel
+## Ownership: every task is born owned
 
-Today "mine" means **`TaskItem.ownerID == nil`** (`isMine`), and that single rule drives
-Today's filter, the owner filter's `.me`, autonomy, and `hasHousehold`. The current user
-is therefore **not** a `FamilyMember` — making him one would give his tasks a non-nil
-owner (dropping them off Today) and would flip `hasHousehold` true even for a solo user.
+> **This section was reversed on 2026-08-11 and is now the opposite of what it once said.**
+> The old model treated `ownerID == nil` as a sentinel meaning "mine", so an unowned task
+> was the normal case. That is gone. The migration this section used to plan for has
+> already happened, without a schema change.
 
-This is an intentional short-term compatibility decision, **not** the end state. When
-CloudKit sharing lands, migrate to explicit ownership:
+**Every task is born owned**, and `OwnerProposer` (`AI/OwnerProposer.swift`) is the pure,
+deterministic ladder that does it: spoken name → graph adjacency (`childOf`/`duplicateOf`
+targets only — never blockers, which point the wrong way) → category affinity → **the
+capturer**. Because the last rung always answers, the ladder is **total**: there is no
+abstention, `applyOwnershipGate` and `ownerPending` are both retired, and the current user
+*is* a `FamilyMember`.
 
-```swift
-enum TaskOwner {
-    case me
-    case member(UUID)
-    case household   // shared/unassigned household work
-}
-```
+`ownerID == nil` therefore no longer means "mine". It means **unowned**, and only a human
+hand-back produces it. "Mine" is `isMine(currentUserID:)`.
 
-That makes ownership explicit, expresses shared household tasks naturally, and stops
-relying on `nil` as a special sentinel forever. Do it as a deliberate migration with the
-`isMine` call sites (Today filter, `TaskOwnerFilter`, `AutonomyPolicy`, `AppBrain
-.applyOwnershipGate`) updated together.
+Two rules keep the ladder honest:
+
+- **Load never selects an owner, only adjusts one** — it demotes the overloaded and breaks
+  ties; it cannot pick.
+- **`.defaultSelf` carries no reason and no ✦.** Defaulting to you is not an inference, and
+  dressing it as one would be worse than the abstention it replaced.
+
+`ownerOrigin` (`.human` / `.inferred`) is stored because the affinity rung's denominator
+counts **human-established ownership only** — otherwise rung 4's own output floods the
+signal and rung 3 becomes unreachable. `creatorID` (authorship) is a separate field from
+`ownerID` (who it is for), which is what lets the Tasks screen offer Assigned and Created
+as two independent readings of the same store.
+
+The gate that still matters is `HouseholdSync.isLive` (compile-time `false`): it gates the
+proposer's **inferred non-self rungs** and the Brief's ownership filter, so a task can
+never leave your briefing for someone with no device in the graph. `.spoken` is
+deliberately not gated.
 
 ## Avatars: one pipeline
 
