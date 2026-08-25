@@ -48,8 +48,13 @@ enum AdvisorState: Equatable {
     /// deliberate thought made visible, never a spinner and never a progress bar.
     ///
     /// A precomputed judgment is never `deliberate` — nobody is watching it, which is the
-    /// entire point of Challenge 9.
-    case loading(deliberate: Bool)
+    /// A judgment in flight. Renders as reserved rhythm at every rung — including a
+    /// deep read the user is present for. The page appears in its deterministic form,
+    /// space is reserved, and the reading settles in when it lands; latency is never
+    /// a product event, so there is no mark and no narration. (The associated
+    /// `deliberate:` flag and its ThinkingLine died with the shape-driven detail
+    /// pass: one loading treatment, invisible, everywhere.)
+    case loading
     /// One coherent interpretation — immutable for this fingerprint (the reveal gate).
     case revealed(ValidatedReading)
     /// The Advisor HAD an opinion; the human chose not to engage. Bound to the
@@ -318,7 +323,7 @@ final class TaskAdvisorStore: ObservableObject {
         // and the wait is real. Everything else keeps its invisible reserved rhythm.
         var entry = Entry(
             fingerprint: fingerprint,
-            state: .loading(deliberate: !speculative && rung == .cloud),
+            state: .loading,
             gate: entries[id]?.gate ?? AdvisorRevealGate())
         // A judgment nobody is waiting for is still bounded work, but the thing being
         // protected is different: presence-time work guards the user's patience,

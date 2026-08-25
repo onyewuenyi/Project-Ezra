@@ -233,7 +233,6 @@ enum TodayFixtures {
         // Light: 3 days → below the 5-sample floor → cold-starts to the static default.
         logDays(.light, completions: [2, 1, 2], startOffset: 15)
 
-
         // Authorship and a WorkIntent spread so My Tasks + the detail read correctly
         // (fixtures bypass the model's classification, so stamp a plausible intent per
         // task — decision/planning/action; the on-device classifier would refine it
@@ -255,6 +254,23 @@ enum TodayFixtures {
             }
         }
         photos.status = .doing
+
+        // A CONTAINER — a task already broken into steps, one of them done — so the
+        // detail's container spine (progress header, next-step pointer, tappable
+        // rows) is reachable from `-SeedTodayFixtures` without a tap. `splitInto` is
+        // the real seam, so the fixture exercises the same edges production writes.
+        let review = TaskItem(
+            title: "Vendor contract review", category: "Work", status: .todo,
+            confidence: 0.9, reasoning: "Broken into steps on capture.", ownerID: me,
+            effortMinutes: 90, createdAt: now.addingTimeInterval(-3 * 86_400), in: context)
+        review.creatorID = me
+        let steps = review.splitInto(
+            [
+                BreakdownStep(title: "Collect the revised terms", effortMinutes: 15),
+                BreakdownStep(title: "Compare pricing against last year", effortMinutes: 30),
+                BreakdownStep(title: "Send the signed copy back", effortMinutes: 15),
+            ], in: context)
+        steps.first?.complete(now: now.addingTimeInterval(-86_400))
 
         // Score every seeded task so the stack ranks by real attention (fixtures build
         // TaskItems directly, bypassing the commit-time stamp).

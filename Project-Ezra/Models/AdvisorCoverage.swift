@@ -97,6 +97,13 @@ enum AdvisorCoverage {
     /// A shortfall is not automatically a bug — a `.doing` task with no steps has
     /// nothing factual to add, and silence is the honest answer there. It is a number to
     /// look at when it moves.
+    ///
+    /// "Speaks" means the page states the fact SOMEWHERE with no model: the shape's
+    /// spine (a waiting page names its blockers, a container its steps, a deciding
+    /// page its obligation), the diagnosed-stall template, or the rung-0 floor.
+    /// Counting only the floor would have reported the spine-suppression rule ("the
+    /// floor never restates the spine") as a coverage regression, when it moved the
+    /// same fact to a better surface.
     static func floorCoverage(
         _ tasks: [TaskItem], now: Date = Date()
     ) -> (
@@ -108,9 +115,11 @@ enum AdvisorCoverage {
         where TaskCapabilities.advisorGateReason(for: task, among: tasks, now: now).isWorthy {
             worthy += 1
             let facts = TaskAdvisorFacts.make(task: task, among: tasks, now: now)
-            // A diagnosed stall is covered by the view's richer template, which owns its
-            // action links — so it counts as covered even though `make` returns nil.
-            if facts.diagnosis != nil || DeterministicReading.make(from: facts) != nil {
+            // A diagnosed stall is covered by the richer template; a non-action shape
+            // is covered by its spine. Both count even though `make` returns nil.
+            if facts.diagnosis != nil || TaskShape.of(facts) != .action
+                || DeterministicReading.make(from: facts) != nil
+            {
                 covered += 1
             }
         }

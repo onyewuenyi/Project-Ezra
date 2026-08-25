@@ -670,7 +670,7 @@ extension TaskItem {
             .map { rel in
                 Blocker(
                     id: rel.id, kind: rel.targetID != nil ? .task : .external,
-                    taskID: rel.targetID, note: rel.note)
+                    taskID: rel.targetID, note: rel.note, since: rel.createdAt)
             }
     }
 

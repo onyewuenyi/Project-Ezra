@@ -35,6 +35,12 @@ struct Blocker: Codable, Hashable, Identifiable {
     /// What we're waiting on, in the user's own words. Set iff `kind == .external`;
     /// nil is allowed and reads as "something else".
     var note: String?
+    /// When the wait began — the underlying edge's `createdAt`. Optional because the
+    /// factory verbs (tests, previews) have no edge to inherit it from; the derived
+    /// path always fills it. Powers the waiting spine's "since Nd", which is the
+    /// honest half of the spec's "who · what · since when" (the who arrives with
+    /// sync).
+    var since: Date? = nil
 
     static func task(_ id: UUID) -> Blocker {
         Blocker(kind: .task, taskID: id)

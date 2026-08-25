@@ -33,50 +33,75 @@ struct DeterministicReadingTests {
         DeterministicReading.make(from: TaskAdvisorFacts.make(task: task, among: tasks))
     }
 
-    @Test("A flagged decision speaks — the largest cohort the diagnosis could never reach")
-    func flaggedDecisionSpeaks() {
+    @Test("The floor never restates the spine: a bare flag is the obligation block's to state")
+    func flaggedAloneIsSilent() {
         let context = context()
         let task = TaskItem(title: "Pick a school for September", status: .todo, in: context)
         task.needsDecision = true
         task.isJudgmentCall = true
-
-        let reading = reading(task, among: [task])
-        #expect(reading?.observation.isEmpty == false)
-        #expect(reading?.move == .advise)  // rung 0 must never fabricate options
-        #expect(reading?.options.isEmpty == true)
+        // The obligation block renders whenever the flag is set — model or no model —
+        // so a floor sentence saying "this is flagged" was the block repeated in
+        // prose. Silence here is the correct reading.
+        #expect(reading(task, among: [task]) == nil)
     }
 
-    @Test("A blocked task names its blocker, and the move carries a real edge")
-    func blockedNamesTheBlocker() {
+    @Test("A flagged task with an ADDITIVE fact speaks to that fact, not the flag")
+    func flaggedWithAdditiveFactSpeaks() {
+        let context = context()
+        let task = TaskItem(title: "Pick a school for September", status: .todo, in: context)
+        task.needsDecision = true
+        task.dueDate = Calendar.current.date(byAdding: .day, value: -2, to: Date())
+
+        let reading = reading(task, among: [task])
+        #expect(reading?.move == .advise)
+        #expect(reading?.observation.contains("due") == true)
+        #expect(reading?.options.isEmpty == true)  // rung 0 must never fabricate options
+    }
+
+    @Test("A purely blocked task is silent — the waiting spine already names the wait")
+    func blockedAloneIsSilent() {
         let context = context()
         let blocker = TaskItem(title: "Send Maya the numbers", status: .todo, in: context)
         let task = TaskItem(title: "Sign the vendor contract", status: .todo, in: context)
         task.addTaskBlocker(blocker.uuid!, among: [task, blocker])
+        #expect(reading(task, among: [task, blocker]) == nil)
+    }
 
+    @Test("A FLAGGED blocked task still names its blocker — the deciding spine does not")
+    func blockedUnderAFlagSpeaks() {
+        let context = context()
+        let blocker = TaskItem(title: "Send Maya the numbers", status: .todo, in: context)
+        let task = TaskItem(title: "Sign the vendor contract", status: .todo, in: context)
+        task.addTaskBlocker(blocker.uuid!, among: [task, blocker])
+        task.needsDecision = true
+
+        // Shape is .deciding (the flag wins precedence), so the page's spine is the
+        // obligation block and the blocker fact is ADDITIVE — the floor states it.
         let reading = reading(task, among: [task, blocker])
         #expect(reading?.move == .openBlocker)
         #expect(reading?.observation.contains("Send Maya the numbers") == true)
     }
 
-    @Test("An external wait speaks — the blocker with no task to open")
-    func externalWaitSpeaks() {
+    @Test("An external wait reaches the facts and the prompt; the WAITING page renders it as the spine")
+    func externalWaitReachesTheFacts() {
         let context = context()
         let task = TaskItem(title: "Sign the lease", status: .todo, in: context)
         task.addExternalBlocker("the landlord to send the final copy", among: [task])
 
-        // `activeBlockerTasks` resolves `taskID`, so this blocker is invisible to
-        // `blockerTitles`. Before `externalWaits` the task read as blocked to the gate
-        // and as unblocked to every rung — including the prompt.
+        // The fact travels — prompt and evidence — even though the floor stays
+        // silent on the waiting page (the spine renders the wait, hourglass and all).
         let facts = TaskAdvisorFacts.make(task: task, among: [task])
         #expect(facts.blockerTitles.isEmpty)
         #expect(facts.externalWaits == ["the landlord to send the final copy"])
         #expect(facts.promptBlock.contains("WAITING ON: the landlord to send the final copy"))
+        #expect(DeterministicReading.make(from: facts) == nil)
 
-        let reading = DeterministicReading.make(from: facts)
-        #expect(reading?.observation.contains("the landlord") == true)
-        // NOT `.openBlocker`: there is no row to open, and the trust boundary would
-        // degrade the move anyway.
-        #expect(reading?.move == .advise)
+        // Under a flag the wait is additive again — and NOT `.openBlocker`, because
+        // there is no row to open.
+        task.needsDecision = true
+        let flagged = reading(task, among: [task])
+        #expect(flagged?.move == .advise)
+        #expect(flagged?.observation.contains("the landlord") == true)
     }
 
     @Test("Adding or clearing an external wait re-judges — it has no id to ride on")
@@ -98,6 +123,23 @@ struct DeterministicReadingTests {
         let reading = reading(task, among: [task])
         #expect(reading?.observation.isEmpty == false)
         #expect(reading?.move == .advise)
+    }
+
+    @Test("Axis 2 never becomes the floor's voice — planningIntent is silent, its peers speak")
+    func planningIntentNeverSpeaks() {
+        let context = context()
+        // `.planningIntent` derives from the internal workIntent classifier; voicing
+        // it would be axis 2 rendered as UI. Its peers are grounded in user-visible
+        // facts and keep their sentences.
+        let planning = TaskItem(title: "Sort the estate", status: .todo, in: context)
+        planning.workIntent = .planning
+        #expect(
+            BreakdownEligibility.evaluate(planning, among: [planning]) == .planningIntent)
+        #expect(reading(planning, among: [planning]) == nil)
+
+        let big = TaskItem(
+            title: "Repaint the hallway", status: .todo, effortMinutes: 120, in: context)
+        #expect(reading(big, among: [big])?.observation.isEmpty == false)
     }
 
     @Test("Rung 0 stays silent where it has nothing factual to say")
@@ -165,29 +207,32 @@ struct AdvisorFailureFloorTests {
     @Test("A thrown generation degrades to rung 0, not to a retry line")
     func failureFallsToTheFloor() async {
         let context = context()
-        let blocker = TaskItem(title: "Send Maya the numbers", status: .todo, in: context)
-        let task = TaskItem(title: "Sign the vendor contract", status: .todo, in: context)
-        task.addTaskBlocker(blocker.uuid!, among: [task, blocker])
+        // Overdue: a fact no spine states, so the floor speaks on every shape.
+        let task = TaskItem(title: "Renew the insurance", status: .todo, in: context)
+        task.dueDate = Calendar.current.date(byAdding: .day, value: -3, to: Date())
 
         let store = store(.failed(ModelResult<ValidatedReading>.noUsableOutput))
-        store.ensure(task: task, among: [task, blocker])
+        store.ensure(task: task, among: [task])
         await store.awaitPendingJudgment(for: task.uuid)
 
         guard case .fallback(let reading) = store.state(for: task) else {
             Issue.record("expected .fallback, got \(store.state(for: task))")
             return
         }
-        #expect(reading?.observation.contains("Send Maya the numbers") == true)
+        #expect(reading?.observation.contains("due") == true)
     }
 
     @Test("A timeout degrades the same way — running out of time is not a verdict")
     func timeoutFallsToTheFloor() async {
         let context = context()
-        let task = TaskItem(title: "Pick a school", status: .todo, in: context)
-        task.needsDecision = true
+        // A dependent is a fact no spine states, so the floor speaks on every shape.
+        let dependent = TaskItem(title: "Book the venue", status: .todo, in: context)
+        let task = TaskItem(
+            title: "Confirm the guest count", status: .todo, effortMinutes: 90, in: context)
+        dependent.addTaskBlocker(task.uuid!, among: [task, dependent])
 
         let store = store(.timedOut)
-        store.ensure(task: task, among: [task])
+        store.ensure(task: task, among: [task, dependent])
         await store.awaitPendingJudgment(for: task.uuid)
 
         if case .fallback = store.state(for: task) {
@@ -202,7 +247,8 @@ struct AdvisorFailureFloorTests {
     func failureWithoutAFloorStaysFailed() async {
         let context = context()
         // `.doing` with no steps, no blockers, no dependents, no flag: worthy by the
-        // gate, but rung 0 has no fact to state.
+        // gate, but rung 0 has no fact to state — and, post spine-suppression, so is
+        // a purely blocked task, whose fact the waiting spine renders instead.
         let task = TaskItem(title: "Tidy the garage", status: .todo, effortMinutes: 15, in: context)
         task.status = .doing
 

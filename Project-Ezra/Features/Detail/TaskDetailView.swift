@@ -64,12 +64,17 @@ struct TaskDetailView: View {
     @State private var kickoffWork: Task<Void, Never>?
     @State private var actionPulse = 0
     @State private var showAllActivity = false
+    /// "Why this is here" + Activity, collapsed behind one quiet toggle. Provenance
+    /// and history are inputs, not content the page must always show — every field
+    /// stays one tap away, and the glance shows what is consequential.
+    @State private var showDetails = false
     /// The Advisor's judgment cache — ambient, fingerprint-keyed, shared across pages.
     @ObservedObject private var advisorStore = TaskAdvisorStore.shared
-    /// A blocker opened from the Advisor's openBlocker move — a nested single-page
-    /// detail, because the pager's peer list is snapshotted and the blocker may not
-    /// be a peer.
-    @State private var openedBlocker: TaskItem?
+    /// A related task opened from this page — a blocker from the waiting spine or
+    /// the Advisor's openBlocker move, or a step from the container spine. A nested
+    /// single-page detail, because the pager's peer list is snapshotted and the
+    /// related task may not be a peer.
+    @State private var openedRelated: TaskItem?
     /// The in-flight re-classification, held so it can be cancelled. Unlike the card
     /// views this runs unprompted, so it is the one most likely to outlive the user's
     /// interest in this page.
@@ -97,18 +102,48 @@ struct TaskDetailView: View {
         )
     }
 
+    /// What kind of page this task needs — derived from facts, never stored, never
+    /// model-decided, and provably a function of the Advisor fingerprint's inputs,
+    /// so the layout can only change when the reading was going to change anyway.
+    private var shape: TaskShape { TaskShape.of(task, among: allTasks) }
+
+    /// Whether the Advisor section occupies any geometry at all. Hoisted out of
+    /// `AdvisorView` so a quiet task — the common case — has NO advisor slot in the
+    /// stack, instead of an empty view silently doubling the section gap.
+    private var advisorVisible: Bool {
+        AdvisorView.isVisible(
+            state: advisorStore.state(for: task),
+            flagged: task.needsDecision && !task.status.isResolved,
+            diagnosis: StallDetector.diagnose(task, among: allTasks))
+    }
+
     var body: some View {
         ScrollView {
+            // The shape picks the SPINE — the one thing most demanding attention
+            // renders directly under the title. Chrome stays constant across shapes
+            // (title, chips, description, the pinned CTA), so a shape change reads
+            // as a fact about the task, never as a transition effect. Slot indices
+            // stay fixed whether or not a slot renders: the stagger is positional.
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 titleSection.rise(0, appeared, reduceMotion)
-                advisorSection.rise(1, appeared, reduceMotion)
-                propertyCard.rise(2, appeared, reduceMotion)
-                descriptionSection.rise(3, appeared, reduceMotion)
-                whySection.rise(4, appeared, reduceMotion)
-                activitySection.rise(5, appeared, reduceMotion)
+                if shape == .waiting {
+                    blockerSpine.rise(1, appeared, reduceMotion)
+                }
+                if shape == .container {
+                    stepsSpine.rise(1, appeared, reduceMotion)
+                }
+                if advisorVisible {
+                    advisorSection.rise(2, appeared, reduceMotion)
+                }
+                propertyCard.rise(3, appeared, reduceMotion)
+                descriptionSection.rise(4, appeared, reduceMotion)
+                detailsSection.rise(5, appeared, reduceMotion)
             }
             .padding(Spacing.lg)
         }
+        // Hosts every related-task push from this page (spine rows, advisor rows) —
+        // attached to the scroll view, not to a section that may not be in the tree.
+        .taskDetailSheet($openedRelated)
         // The recommended action stays persistently available — a product decision,
         // not a layout preference: on exactly the busy tasks where guidance matters
         // (decision card + breakdown + unstick + timeline), the one accented control
@@ -203,7 +238,7 @@ struct TaskDetailView: View {
         // Resolving a blocker changes the BLOCKER's state, not this task's `updatedAt`,
         // so the hook above cannot see it — and this is exactly the "blocker cleared →
         // you're ready to continue" moment.
-        .onChange(of: openedBlocker == nil) { _, closed in
+        .onChange(of: openedRelated == nil) { _, closed in
             guard closed, isActive else { return }
             advisorStore.ensure(task: task, among: allTasks)
         }
@@ -298,10 +333,18 @@ struct TaskDetailView: View {
                     .datePickerStyle(.graphical)
                     .tint(Palette.accentFlat)
             }
-            ForEach(task.activeBlockers(among: allTasks)) { blocker in
-                blockerChipRow(blocker)
+            // When a spine owns these rows they render under the title instead —
+            // the same rows twice on one page teaches the user to read neither. A
+            // deciding page that ALSO has blockers or steps keeps them here, because
+            // its spine is the obligation.
+            if shape != .waiting {
+                ForEach(task.activeBlockers(among: allTasks)) { blocker in
+                    blockerChipRow(blocker)
+                }
             }
-            stepsSection
+            if shape != .container {
+                stepsSection
+            }
         }
         .padding(Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -540,6 +583,148 @@ struct TaskDetailView: View {
         .accessibilityLabel("Step: \(step.title), \(done ? "done" : "open")")
     }
 
+    // MARK: - The waiting spine (shape == .waiting)
+
+    /// The blocker IS the page. What this task waits on, directly under the title:
+    /// what · since when — tappable through to the blocking task, because the next
+    /// useful act on a waiting page usually happens on the other task. The absence
+    /// of a next move here is the message; no reading needs to say "you are blocked".
+    private var blockerSpine: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text("Waiting on")
+                .sectionHeaderStyle()
+            ForEach(task.activeBlockers(among: allTasks)) { blocker in
+                spineBlockerRow(blocker)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func spineBlockerRow(_ blocker: Blocker) -> some View {
+        let target = blocker.taskID.flatMap { id in allTasks.first { $0.uuid == id } }
+        let title = target?.title ?? blocker.note ?? "Something else"
+        HStack(spacing: Spacing.sm) {
+            Image(systemName: blocker.kind == .task ? "arrow.turn.down.right" : "hourglass")
+                .font(.glyphCaption())
+                .foregroundStyle(Palette.mutedText)
+            if let target {
+                Button {
+                    openedRelated = target
+                } label: {
+                    HStack(spacing: Spacing.xs) {
+                        Text(title)
+                            .font(.supporting)
+                            .foregroundStyle(Palette.primaryText)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.right")
+                            .font(.glyphCaption())
+                            .foregroundStyle(Palette.mutedText)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressableLink)
+                .accessibilityLabel("Open blocker: \(title)")
+            } else {
+                // An external wait has no task to open — the words are the whole
+                // fact, so no chevron promises a page that does not exist.
+                Text(title)
+                    .font(.supporting)
+                    .foregroundStyle(Palette.primaryText)
+                    .lineLimit(1)
+            }
+            if let label = sinceLabel(blocker.since) {
+                Text(label)
+                    .font(.chipLabel)
+                    .foregroundStyle(Palette.mutedText)
+            }
+            Spacer(minLength: Spacing.sm)
+            Button {
+                removeBlocker(blocker.id)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.glyphCaption())
+                    .foregroundStyle(Palette.mutedText)
+            }
+            .buttonStyle(.pressableIcon)
+            .accessibilityLabel("Stop waiting on \(title)")
+        }
+    }
+
+    /// "since 3d" — the wait's age from the edge's own clock. Nil for a same-day
+    /// wait: announcing "since today" adds urgency theatre to a fact nobody needs.
+    private func sinceLabel(_ since: Date?) -> String? {
+        guard let since else { return nil }
+        let days =
+            Calendar.current.dateComponents(
+                [.day], from: Calendar.current.startOfDay(for: since),
+                to: Calendar.current.startOfDay(for: Date())
+            ).day ?? 0
+        return days >= 1 ? "since \(days)d" : nil
+    }
+
+    // MARK: - The container spine (shape == .container)
+
+    /// The steps ARE the page: progress in the header, the next open step marked,
+    /// each row tappable into the step's own detail so the container and the pager
+    /// agree about what "next" means. Read-only beyond navigation — steps are real
+    /// rows on My Tasks, where every action already lives.
+    ///
+    /// Display order is stable (createdAt, then uuid) but NOT the model's proposed
+    /// sequence: `splitInto` stamps siblings with one shared `createdAt` and persists
+    /// no ordinal. When step order earns real product weight, the fix is an additive
+    /// `sortIndex` written by `splitInto` — never an inference from timestamps.
+    private var stepsSpine: some View {
+        let steps = task.children(among: allTasks)
+            .sorted {
+                ($0.createdAt, $0.uuid?.uuidString ?? "") < ($1.createdAt, $1.uuid?.uuidString ?? "")
+            }
+        let currentID = steps.first { !$0.status.isResolved }?.uuid
+        return VStack(alignment: .leading, spacing: Spacing.xs) {
+            if let progress = task.stepProgress(among: allTasks) {
+                Text(progress.label)
+                    .sectionHeaderStyle()
+            }
+            ForEach(steps) { step in
+                spineStepRow(step, isCurrent: step.uuid == currentID)
+            }
+        }
+    }
+
+    private func spineStepRow(_ step: TaskItem, isCurrent: Bool) -> some View {
+        let done = step.status.isResolved
+        return Button {
+            openedRelated = step
+        } label: {
+            HStack(spacing: Spacing.sm) {
+                StatusGlyphView(task: step, allTasks: allTasks, interactive: false)
+                Text(step.title)
+                    .font(.supporting)
+                    .foregroundStyle(Palette.primaryText)
+                    .strikethrough(done, color: Palette.mutedText)
+                    .lineLimit(1)
+                    .recessed(done)
+                if isCurrent {
+                    // The pointer, not a label: the next open step in a container is
+                    // the same "one concrete first move" the kickoff line renders.
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.glyphCaption())
+                        .foregroundStyle(Palette.accentFlat)
+                }
+                Spacer(minLength: Spacing.sm)
+                Image(systemName: "chevron.right")
+                    .font(.glyphCaption())
+                    .foregroundStyle(Palette.mutedText)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Step: \(step.title), \(done ? "done" : isCurrent ? "next" : "open")"
+        )
+        .accessibilityHint("Open this step")
+    }
+
     // MARK: - Advisor (the judgment layer)
 
     /// The one Advisor surface — replaced the decision / breakdown / unstick cards.
@@ -554,6 +739,7 @@ struct TaskDetailView: View {
             deferralCount: Int(task.deferralCount),
             diagnosis: StallDetector.diagnose(task, among: allTasks),
             blockers: task.activeBlockerTasks(among: allTasks),
+            blockersRenderedElsewhere: shape == .waiting,
             onDecide: { choice in advisorActed(.decide) { markDecided(choice: choice) } },
             // Escalating is a human act accepting the reading's suggestion — the
             // axis-3 flag, through the same seam Unstick's rung used.
@@ -570,15 +756,13 @@ struct TaskDetailView: View {
                 advisorActed(.createSteps) { accept(accepted, proposed: proposed) }
             },
             onOpenBlocker: { blocker in
-                advisorActed(.openBlocker) { openedBlocker = blocker }
+                advisorActed(.openBlocker) { openedRelated = blocker }
             },
             onDoItNow: { advisorActed(.advise) { applyStatus(.doing) } },
             onDefer: { advisorActed(.advise) { setDue(dayOffset: 7) } },
             onKill: { advisorActed(.advise) { applyStatus(.canceled) } },
-            onDismiss: { advisorStore.dismiss(taskID: task.uuid) },
-            onRetry: { advisorStore.retry(task: task, among: allTasks) }
+            onDismiss: { advisorStore.dismiss(taskID: task.uuid) }
         )
-        .taskDetailSheet($openedBlocker)
     }
 
     /// Every Advisor action funnels here: one acted record (with the lifecycle
@@ -725,12 +909,46 @@ struct TaskDetailView: View {
     /// The pinned action bar: solid surface (glass never carries primary text), a
     /// full-bleed top hairline, and the kickoff line riding under the button — the
     /// user's eyes are already there when it lands.
+    // MARK: - Details (provenance + history, one tap away)
+
+    /// "Why this is here" and Activity, collapsed by default behind one quiet row.
+    /// They are the page's receipts — essential to trust, rarely the reason the page
+    /// was opened — so they cost one tap instead of permanent scroll height.
+    /// Expanding is not an action and is never counted as one.
+    private var detailsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            Button {
+                Motion.withMotion(Motion.settle) { showDetails.toggle() }
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    Text("Details")
+                        .sectionHeaderStyle()
+                    Image(systemName: "chevron.down")
+                        .font(.glyphCaption())
+                        .foregroundStyle(Palette.mutedText)
+                        .rotationEffect(.degrees(showDetails ? 180 : 0))
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .minimumHitTarget()
+            .accessibilityLabel("Details")
+            .accessibilityHint(showDetails ? "Collapse" : "Expand provenance and activity")
+
+            if showDetails {
+                whySection.transition(.opacity)
+                activitySection.transition(.opacity)
+            }
+        }
+    }
+
     private func footer(_ action: RecommendedAction) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             Button {
                 performPrimary(action)
             } label: {
-                Text(action.title)
+                Text(ctaTitle(action))
                     .font(.ctaLabel)
                     .foregroundStyle(Palette.onAccent)
                     // Start doesn't dismiss — it relabels to "Mark done" under the tap,
@@ -767,6 +985,19 @@ struct TaskDetailView: View {
         .overlay(alignment: .top) {
             Rectangle().fill(Palette.border).frame(height: 0.5)
         }
+    }
+
+    /// The CTA's label on this page. A deliberate, narrow reversal of "the verb
+    /// never voices the type": on a DECIDING page, "Start" undersells what starting
+    /// means — the work is the choice — so `.start` reads "Decide". View-layer only:
+    /// `RecommendedAction` is untouched, `.resume` keeps its honest history, and
+    /// `.resolve` stays "Mark done" because it runs `completeAndResurface` and never
+    /// touches `needsDecision` — a "Mark decided" label there would report a decision
+    /// nothing recorded (`resolveDecision()` is the only clearer, and the obligation
+    /// block owns that control).
+    private func ctaTitle(_ action: RecommendedAction) -> String {
+        guard shape == .deciding, action == .start else { return action.title }
+        return "Decide"
     }
 
     private func performPrimary(_ action: RecommendedAction) {

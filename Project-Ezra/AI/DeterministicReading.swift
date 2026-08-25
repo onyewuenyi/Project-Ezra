@@ -52,7 +52,15 @@ enum DeterministicReading {
         guard !facts.status.isResolved else { return nil }
         guard facts.diagnosis == nil else { return nil }
 
-        guard let (move, observation) = readingBody(for: facts) else { return nil }
+        // **The floor never restates the spine.** The page's shape already renders
+        // its defining fact as the spine — the waiting page names its blockers, the
+        // deciding page leads with the obligation block, the container leads with its
+        // steps — so a reading repeating that fact is the same information twice on
+        // one screen. Rung 0 speaks only when it holds a fact the spine does not
+        // state; otherwise nil, and the spine IS the reading. Shape ⊆ fingerprint,
+        // so this suppression can never disagree with the cached judgment.
+        let spine = TaskShape.of(facts)
+        guard let (move, observation) = readingBody(for: facts, spine: spine) else { return nil }
         return ValidatedReading(
             move: move,
             observation: observation,
@@ -72,8 +80,10 @@ enum DeterministicReading {
     /// cannot author options or steps, and fabricating either to earn a button would be
     /// exactly the invention this file exists to prevent. `.openBlocker` is the one
     /// exception, because its payload is a real edge the graph already holds.
-    private static func readingBody(for facts: TaskAdvisorFacts) -> (AdvisorMove, String)? {
-        if let blocker = facts.blockerTitles.first {
+    private static func readingBody(
+        for facts: TaskAdvisorFacts, spine: TaskShape
+    ) -> (AdvisorMove, String)? {
+        if spine != .waiting, let blocker = facts.blockerTitles.first {
             let others = facts.blockerTitles.count - 1 + facts.externalWaits.count
             let tail = others > 0 ? " and \(others) other thing\(others == 1 ? "" : "s")" : ""
             return (.openBlocker, "This is waiting on “\(blocker)”\(tail).")
@@ -81,21 +91,23 @@ enum DeterministicReading {
         // An external wait has no task to open, so the move is `.advise` — offering
         // `.openBlocker` here would promise a row the view cannot render, and the trust
         // boundary would degrade it anyway.
-        if let wait = facts.externalWaits.first {
+        if spine != .waiting, let wait = facts.externalWaits.first {
             let others = facts.externalWaits.count - 1
             let tail = others > 0 ? " and \(others) other thing\(others == 1 ? "" : "s")" : ""
             return (.advise, "This is waiting on \(wait)\(tail).")
         }
-        if facts.needsDecision {
-            return (
-                .advise,
-                facts.isJudgmentCall
-                    ? "This is waiting on a call only you can make."
-                    : "This is flagged as needing a decision before it can move."
-            )
-        }
-        if let reason = facts.breakdownReason {
-            // `rationale` is already written as a sentence opener in the product's voice.
+        // No needsDecision arm, deliberately. The flag makes the shape `.deciding`
+        // by construction, and the obligation block — which renders whenever the
+        // flag is set, model or no model — already states it with its own controls.
+        // A floor sentence here was the block's content repeated in prose, which is
+        // exactly what "the floor never restates the spine" forbids.
+        // Breakdown-eligibility speaks only when its evidence is user-visible: a big
+        // estimate the user set, or a compound title in their own words.
+        // `.planningIntent` is EXCLUDED — it derives from `workIntent`, and voicing it
+        // ("this reads as planning") is axis 2 becoming accidental UI, which the task
+        // model forbids. The model path may still propose steps from it; rung 0 stays
+        // silent rather than narrate an internal classifier.
+        if let reason = facts.breakdownReason, reason != .planningIntent {
             return (.advise, "\(reason.rationale).")
         }
         if let days = facts.overdueDays {
@@ -108,11 +120,12 @@ enum DeterministicReading {
             let tail = others > 0 ? " and \(others) other thing\(others == 1 ? "" : "s")" : ""
             return (.advise, "Finishing this frees up “\(dependent)”\(tail).")
         }
-        if facts.status == .doing {
+        if spine != .container, facts.status == .doing {
             guard let label = facts.stepLabel else { return nil }
             return (.advise, "You're partway through this — \(label).")
         }
-        if facts.decisionShaped {
+        // Choice-shaped wording under an obligation block is the block restated.
+        if spine != .deciding, facts.decisionShaped {
             return (.advise, "This reads like a decision, not a doable step.")
         }
         return nil

@@ -22,8 +22,15 @@
 //     The Advisor recommends, the CTA executes — two gradient capsules on one screen
 //     is the UI contradicting that sentence.
 //
-//  Absent by design: spinners, progress, "analyzing…" copy, sparkles, robots, badges.
-//  The user experiences a conclusion arriving, never a machine working.
+//  Absent by design: spinners, progress, "analyzing…" copy, sparkles, robots,
+//  badges — and, since the shape-driven detail pass, the "ADVISOR" kicker and every
+//  error string. The reading sits in the task's own body rhythm with no label
+//  announcing that a model wrote it: the intelligence is the sentence being right,
+//  not the frame around it. A failed generation renders NOTHING (rung 0 already
+//  spoke where there was anything factual to say) — "That didn't finish. Try again."
+//  taught the user the Advisor can fail and offered a retry that often could not
+//  succeed. The re-judge loop (`updatedAt`, `isActive`, the blocker-sheet return)
+//  is the retry.
 //
 
 import SwiftUI
@@ -39,6 +46,11 @@ struct AdvisorView: View {
     let diagnosis: StallDiagnosis?
     /// Active blockers, for the openBlocker move's rows.
     let blockers: [TaskItem]
+    /// True when the page's WAITING spine already renders the blocker rows directly
+    /// under the title. The `openBlocker` reading then keeps its observation and
+    /// next move but drops its own rows — the same rows twice on one screen teaches
+    /// the user to read neither copy.
+    var blockersRenderedElsewhere = false
 
     let onDecide: (String?) -> Void
     let onEscalate: () -> Void
@@ -48,7 +60,6 @@ struct AdvisorView: View {
     let onDefer: () -> Void
     let onKill: () -> Void
     let onDismiss: () -> Void
-    let onRetry: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -60,10 +71,13 @@ struct AdvisorView: View {
     @State private var showEvidence = false
 
     var body: some View {
-        if showsReading || flagged {
+        if Self.isVisible(state: state, flagged: flagged, diagnosis: diagnosis) {
             VStack(alignment: .leading, spacing: Spacing.md) {
-                if showsReading { readingSection }
+                // The obligation leads: a standing human duty outranks an
+                // interpretation of it, and on a DECIDING page this block is the
+                // spine the rest of the reading hangs under.
                 if flagged { obligationBlock }
+                if showsReading { readingSection }
             }
             .animation(reduceMotion ? nil : Motion.settle, value: state)
             .onChange(of: state) { _, _ in
@@ -74,32 +88,47 @@ struct AdvisorView: View {
         }
     }
 
+    /// Whether this view will draw ANYTHING — exposed as a static so the detail page
+    /// can leave the section out of its layout entirely. Silence must have no
+    /// geometry: an empty view still holding a slot in the parent's `Spacing.lg`
+    /// stack reads as a mysterious double gap on exactly the tasks the Advisor is
+    /// quiet about — which is most of them, by design.
+    static func isVisible(
+        state: AdvisorState, flagged: Bool, diagnosis: StallDiagnosis?
+    ) -> Bool {
+        if flagged { return true }
+        switch state {
+        case .unevaluated, .quiet, .dismissed: return false
+        // A fallback with neither a diagnosis template nor a rung-0 reading has
+        // nothing to say, and renders as true silence.
+        case .fallback(let reading): return diagnosis != nil || reading != nil
+        case .loading, .revealed: return true
+        // A failure renders NOTHING. The floor already spoke wherever there was a
+        // fact to state; an error string would teach the user the Advisor can fail,
+        // and the re-judge loop retries without being asked.
+        case .failed: return false
+        }
+    }
+
     /// Silence occupies zero visual attention. `.unevaluated` (no judgment yet) and
     /// `.quiet` (a judgment OF silence) render identically here and mean opposite
     /// things — the distinction lives in the store, where it is load-bearing.
     private var showsReading: Bool {
         switch state {
-        case .unevaluated, .quiet, .dismissed: return false
-        // A fallback with neither a diagnosis template nor a rung-0 reading has nothing
-        // to say, and must render as SILENCE rather than as the word ADVISOR over an
-        // empty box. The kicker is drawn by `readingSection`, so this predicate is the
-        // only place that can prevent an orphaned label.
+        case .unevaluated, .quiet, .dismissed, .failed: return false
         case .fallback(let reading): return diagnosis != nil || reading != nil
-        case .loading, .revealed, .failed: return true
+        case .loading, .revealed: return true
         }
     }
 
     // MARK: - The reading (containerless — part of the task)
 
+    /// No kicker, no badge. The reading is part of the task; a label saying ADVISOR
+    /// was the last piece of AI chrome on this surface, and it drew an orphaned
+    /// heading over every degraded state besides.
     private var readingSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text("Advisor")
-                .metadataStyle()
-                .textCase(.uppercase)
-                .tracking(0.8)
-            stateContent
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        stateContent
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -108,30 +137,14 @@ struct AdvisorView: View {
         case .unevaluated, .quiet, .dismissed:
             EmptyView()
 
-        case .loading(let deliberate):
-            if deliberate {
-                // The bounded presence-time exception (Challenge 9). Deep reasoning on a
-                // hard question runs in seconds, and this is the one surface in the
-                // product with no cover for it — no orb, no Recap, just the user looking
-                // at the task. Hiding a wait that long is not calm, it is broken.
-                //
-                // So it is marked, not narrated: one thinking mark, "Thinking", gone on
-                // reveal or on silence. It is deliberately NOT a progress affordance and
-                // deliberately not per-activity ("analyzing…", "searching…"), which would
-                // be chain-of-thought theater — the user needs to know Ezra is working
-                // and that it will stop, nothing more.
-                //
-                // Most deep judgments never reach here at all: they precompute off the
-                // open-moment and arrive already cached. This is the exception's face.
-                ThinkingLine()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity)
-            } else {
-                // Reserved rhythm only. The kicker holds the space and the reading settles
-                // into it — no placeholder geometry, because even a hairline announces
-                // "working", and latency should never become a product event.
-                Color.clear.frame(height: Spacing.lg)
-            }
+        case .loading:
+            // Reserved rhythm only — for every rung, including a deep read the user
+            // is present for. The page renders in its deterministic form immediately,
+            // space is reserved, the reading settles into it when it lands, and
+            // nothing reflows. No mark, no narration: latency is never a product
+            // event, and async arrival with reserved space is the calm version of
+            // "working".
+            Color.clear.frame(height: Spacing.lg)
 
         case .revealed(let reading):
             readingContent(reading).transition(.opacity)
@@ -148,7 +161,9 @@ struct AdvisorView: View {
             }
 
         case .failed:
-            RetryLine(message: "That didn't finish.") { onRetry() }
+            // Nothing. `isVisible` already excluded this state; the arm exists so the
+            // switch stays exhaustive and honest about the vocabulary.
+            EmptyView()
         }
     }
 
@@ -162,16 +177,27 @@ struct AdvisorView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             // ── Understanding ──
+            // Secondary, plain, unframed: the intelligence is the sentence being
+            // right. Primary weight belongs to the task's own content and — inside a
+            // decide reading — to the options, which are the spine of that page.
             Text(reading.observation)
-                .font(.supporting)
-                .foregroundStyle(Palette.primaryText)
+                .supportingStyle()
                 .fixedSize(horizontal: false, vertical: true)
             if let guidance = reading.guidance {
                 Text(guidance)
                     .supportingStyle()
                     .fixedSize(horizontal: false, vertical: true)
             }
-            evidenceDisclosure(reading)
+            if reading.move == .decide {
+                // The what-matters lines: at most three FACTS, inline, because a
+                // person about to choose should not have to tap a disclosure to see
+                // what bears on the choice. Sourced from the deterministic evidence
+                // only — never model prose — so nothing here can be a guess wearing
+                // a fact's clothes.
+                whatMatters(reading)
+            } else {
+                evidenceDisclosure(reading)
+            }
 
             // ── Action ──
             if hasActionSide(reading) {
@@ -201,7 +227,10 @@ struct AdvisorView: View {
     private func hasActionSide(_ reading: ValidatedReading) -> Bool {
         if reading.nextMove != nil { return true }
         switch reading.move {
-        case .decide, .createSteps, .openBlocker: return true
+        case .decide, .createSteps: return true
+        // When the waiting spine owns the rows, an openBlocker reading with no next
+        // move has nothing below the rule — and a rule over nothing is a lie.
+        case .openBlocker: return !blockersRenderedElsewhere
         case .advise, .nothing: return false
         }
     }
@@ -213,6 +242,27 @@ struct AdvisorView: View {
                 .font(.controlLabel)
                 .foregroundStyle(Palette.mutedText)
                 .buttonStyle(.pressableLink)
+        }
+    }
+
+    /// The deciding page's context: up to three evidence lines, inline. The same
+    /// vocabulary "Why this?" reveals elsewhere — deterministic fact lines, the model
+    /// contributing nothing — surfaced without a tap because they bear on a choice
+    /// the user is about to make.
+    @ViewBuilder
+    private func whatMatters(_ reading: ValidatedReading) -> some View {
+        if !reading.evidence.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(reading.evidence.prefix(3), id: \.self) { line in
+                    HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                        Text("•")
+                        Text(line)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.chipLabel)
+                    .foregroundStyle(Palette.secondaryText)
+                }
+            }
         }
     }
 
@@ -265,9 +315,11 @@ struct AdvisorView: View {
             stepsBody(reading.steps)
 
         case .openBlocker:
-            VStack(alignment: .leading, spacing: Spacing.xs) {
-                ForEach(blockers) { blocker in
-                    blockerRow(blocker)
+            if !blockersRenderedElsewhere {
+                VStack(alignment: .leading, spacing: Spacing.xs) {
+                    ForEach(blockers) { blocker in
+                        blockerRow(blocker)
+                    }
                 }
             }
         }
