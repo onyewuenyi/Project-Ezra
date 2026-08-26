@@ -172,6 +172,40 @@ struct DeterministicReadingTests {
         #expect(reading(task, among: [task]) == nil)
     }
 
+    @Test("Only the arm that names a task cites it — and a citation is a declared edge")
+    func citationsBelongToTheDependentsArm() {
+        let context = context()
+        // The dependents arm cites what it names, capped.
+        let task = TaskItem(title: "Confirm the guest count", status: .todo, in: context)
+        let dependent = TaskItem(title: "Book the venue", status: .todo, in: context)
+        dependent.addTaskBlocker(task.uuid!, among: [task, dependent])
+        let cited = reading(task, among: [task, dependent])
+        #expect(cited?.citedTaskIDs == [dependent.uuid!])
+
+        // An arm that speaks about something else cites nothing — a citation row
+        // under an unrelated observation would be a non sequitur with a chevron.
+        let overdue = TaskItem(title: "Renew the insurance", status: .todo, in: context)
+        overdue.dueDate = Calendar.current.date(byAdding: .day, value: -3, to: Date())
+        #expect(reading(overdue, among: [overdue])?.citedTaskIDs.isEmpty == true)
+    }
+
+    @Test("What bears on the choice never restates the flag — the block owns that line")
+    func decisionContextExcludesTheFlag() {
+        let context = context()
+        let task = TaskItem(title: "Pick a school", status: .todo, in: context)
+        task.needsDecision = true
+        task.isUrgent = true
+        task.dueDate = Calendar.current.date(byAdding: .day, value: -2, to: Date())
+
+        let facts = TaskAdvisorFacts.make(task: task, among: [task])
+        let lines = facts.decisionContextLines
+        #expect(!lines.isEmpty)
+        #expect(lines.count <= 3)
+        #expect(!lines.contains(TaskAdvisorFacts.decisionFlagEvidence))
+        // The full evidence still carries the flag line — "Why this?" elsewhere keeps it.
+        #expect(facts.userVisibleEvidence.contains(TaskAdvisorFacts.decisionFlagEvidence))
+    }
+
     @Test("Every reading carries its evidence, bound to the facts it was built from")
     func evidenceTravelsWithTheReading() {
         let context = context()

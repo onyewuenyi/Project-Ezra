@@ -324,4 +324,24 @@ struct BreakdownSplitTests {
         #expect(digests.count >= 2)
     }
 
+    @Test("nextOpenStep is the one 'what's next' — breakdown order, resolved skipped")
+    func nextOpenStepFollowsTheBreakdown() {
+        let context = context()
+        let parent = TaskItem(title: "Ship the release", status: .todo, in: context)
+        let created = parent.splitInto(
+            [
+                BreakdownStep(title: "Write the notes", effortMinutes: 15),
+                BreakdownStep(title: "Cut the build", effortMinutes: 15),
+                BreakdownStep(title: "Announce it", effortMinutes: 15),
+            ], in: context)
+        let all = [parent] + created
+
+        #expect(parent.nextOpenStep(among: all)?.title == "Write the notes")
+        created[0].complete()
+        #expect(parent.nextOpenStep(among: all)?.title == "Cut the build")
+        created[1].complete()
+        created[2].complete()
+        #expect(parent.nextOpenStep(among: all) == nil)
+    }
+
 }

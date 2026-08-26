@@ -53,6 +53,10 @@ struct TaskAdvisorFacts: Sendable, Equatable {
     /// The Advisor was blind to exactly the blocker the user cannot see as a row.
     var externalWaits: [String] = []
     var dependentTitles: [String]
+    /// The dependents' ids, aligned with `dependentTitles` — what lets a reading that
+    /// cites freed-up work render it as a tappable reference instead of prose.
+    /// Derived, and deliberately NOT in the fingerprint (titles aren't either).
+    var dependentIDs: [UUID] = []
     var childIDs: [UUID]
     var openStepTitles: [String]
     var stepLabel: String?
@@ -107,6 +111,7 @@ struct TaskAdvisorFacts: Sendable, Equatable {
             blockerIDs: blockers.compactMap(\.uuid).sorted { $0.uuidString < $1.uuidString },
             externalWaits: waits,
             dependentTitles: task.dependents(among: tasks).map(\.title),
+            dependentIDs: task.dependents(among: tasks).compactMap(\.uuid),
             childIDs: children.compactMap(\.uuid).sorted { $0.uuidString < $1.uuidString },
             openStepTitles: task.openSteps(among: tasks).map(\.title),
             stepLabel: task.stepProgress(among: tasks)?.label,
@@ -206,6 +211,20 @@ struct TaskAdvisorFacts: Sendable, Equatable {
     /// is exactly what keeps this a receipt rather than a narrative about the user.
     /// Deliberately excludes `workIntent` and every INTERNAL prompt line — axis 2 is
     /// system-owned, and internal reasoning signals must not become accidental UI.
+    /// The one evidence line that IS the deciding page's spine — named so the
+    /// what-matters surfaces can exclude it without matching prose. The obligation
+    /// block states the flag with its own controls; evidence repeating it under that
+    /// block is the same fact twice, which the floor rule already forbids for
+    /// observations.
+    static let decisionFlagEvidence = "It's flagged as needing a decision"
+
+    /// What bears on the choice, for the DECIDING page: the evidence minus the flag
+    /// line, capped at three. Model-free — the spec's what-matters lines exist
+    /// whether or not any reading landed.
+    var decisionContextLines: [String] {
+        Array(userVisibleEvidence.filter { $0 != Self.decisionFlagEvidence }.prefix(3))
+    }
+
     var userVisibleEvidence: [String] {
         var lines: [String] = []
         if deferralCount > 0 {
@@ -221,7 +240,7 @@ struct TaskAdvisorFacts: Sendable, Equatable {
         if diagnosis != nil, deferralCount == 0, quietDays > 0 {
             lines.append("No progress on it in \(quietDays) days")
         }
-        if needsDecision { lines.append("It's flagged as needing a decision") }
+        if needsDecision { lines.append(Self.decisionFlagEvidence) }
         if isUrgent { lines.append("You marked it urgent") }
         if !dependentTitles.isEmpty {
             lines.append("Other work waits on it: " + dependentTitles.joined(separator: ", "))

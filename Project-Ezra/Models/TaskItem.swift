@@ -791,6 +791,13 @@ extension TaskItem {
             }
     }
 
+    /// The next open step, in breakdown order — THE answer to "what's next inside
+    /// this container", derived once so the container spine's pointer and the CTA
+    /// bar's kickoff line can never disagree. Nil when there are no open steps.
+    func nextOpenStep(among tasks: [TaskItem]) -> TaskItem? {
+        children(among: tasks).first { !$0.status.isResolved }
+    }
+
     /// The Blocking flag, derived: true when any other unresolved task's blocker
     /// list points at this one. Never stored — storing both directions would let
     /// them drift; compute it at read time instead. Internal: manifests only as a

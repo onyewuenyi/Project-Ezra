@@ -110,6 +110,33 @@ struct TaskDetailView: View {
     /// Whether the Advisor section occupies any geometry at all. Hoisted out of
     /// `AdvisorView` so a quiet task — the common case — has NO advisor slot in the
     /// stack, instead of an empty view silently doubling the section gap.
+    /// The tasks the current reading cites, resolved against the live set. A cited
+    /// id that no longer resolves renders nothing — a dead reference must not become
+    /// a dead row.
+    private var citedTasks: [TaskItem] {
+        let ids: [UUID]
+        switch advisorStore.state(for: task) {
+        case .revealed(let reading): ids = reading.citedTaskIDs
+        case .fallback(let reading): ids = reading?.citedTaskIDs ?? []
+        default: ids = []
+        }
+        guard !ids.isEmpty else { return [] }
+        return ids.compactMap { id in allTasks.first { $0.uuid == id } }
+    }
+
+    /// What bears on the choice, for the obligation block — only on the deciding
+    /// page, and only when no decide reading below is already showing its own
+    /// what-matters lines (the same fact twice in two boxes is worse than either).
+    private var obligationContextLines: [String] {
+        guard shape == .deciding else { return [] }
+        if case .revealed(let reading) = advisorStore.state(for: task),
+            reading.move == .decide, !reading.evidence.isEmpty
+        {
+            return []
+        }
+        return TaskAdvisorFacts.make(task: task, among: allTasks).decisionContextLines
+    }
+
     private var advisorVisible: Bool {
         AdvisorView.isVisible(
             state: advisorStore.state(for: task),
@@ -280,6 +307,37 @@ struct TaskDetailView: View {
                 .textInputAutocapitalization(.sentences)
                 .focused($focusedField, equals: .title)
             provenanceLine
+            parentLine
+        }
+    }
+
+    /// The graph's upward direction. A step's page shows what it belongs to, the way
+    /// the container's page shows its steps — down, sideways (blockers) and up are
+    /// the three ways out of a task, and this was the missing one. Same quiet caption
+    /// register as provenance; tappable because the whole point is going there.
+    @ViewBuilder private var parentLine: some View {
+        if let parentID = task.parentTaskID,
+            let parent = allTasks.first(where: { $0.uuid == parentID })
+        {
+            Button {
+                openedRelated = parent
+            } label: {
+                HStack(spacing: Spacing.xxs) {
+                    Image(systemName: "arrow.turn.left.up")
+                        .font(.glyphCaption())
+                    Text("Part of “\(parent.title)”")
+                        .font(.chipLabel)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.right")
+                        .font(.glyphCaption())
+                }
+                .foregroundStyle(Palette.secondaryText)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressableLink)
+            .minimumHitTarget()
+            .accessibilityLabel("Part of \(parent.title)")
+            .accessibilityHint("Open the containing task")
         }
     }
 
@@ -677,7 +735,7 @@ struct TaskDetailView: View {
         // proposed sequence, stamped by `splitInto`), then createdAt + uuid for
         // pre-`sortIndex` stores.
         let steps = task.children(among: allTasks)
-        let currentID = steps.first { !$0.status.isResolved }?.uuid
+        let currentID = task.nextOpenStep(among: allTasks)?.uuid
         return VStack(alignment: .leading, spacing: Spacing.xs) {
             if let progress = task.stepProgress(among: allTasks) {
                 Text(progress.label)
@@ -710,6 +768,13 @@ struct TaskDetailView: View {
                         .foregroundStyle(Palette.accentFlat)
                 }
                 Spacer(minLength: Spacing.sm)
+                // Sizing at a glance, matching the proposal rows the steps came from.
+                if !done, let label = TaskItem.effortLabel(step.effortMinutes) {
+                    Text("~\(label)")
+                        .font(.chipLabel)
+                        .foregroundStyle(Palette.mutedText)
+                        .monospacedDigit()
+                }
                 Image(systemName: "chevron.right")
                     .font(.glyphCaption())
                     .foregroundStyle(Palette.mutedText)
@@ -739,6 +804,8 @@ struct TaskDetailView: View {
             diagnosis: StallDetector.diagnose(task, among: allTasks),
             blockers: task.activeBlockerTasks(among: allTasks),
             blockersRenderedElsewhere: shape == .waiting,
+            citedTasks: citedTasks,
+            contextLines: obligationContextLines,
             onDecide: { choice in advisorActed(.decide) { markDecided(choice: choice) } },
             // Escalating is a human act accepting the reading's suggestion — the
             // axis-3 flag, through the same seam Unstick's rung used.
@@ -760,7 +827,10 @@ struct TaskDetailView: View {
             onDoItNow: { advisorActed(.advise) { applyStatus(.doing) } },
             onDefer: { advisorActed(.advise) { setDue(dayOffset: 7) } },
             onKill: { advisorActed(.advise) { applyStatus(.canceled) } },
-            onDismiss: { advisorStore.dismiss(taskID: task.uuid) }
+            onDismiss: { advisorStore.dismiss(taskID: task.uuid) },
+            onOpenCited: { cited in
+                advisorActed(.advise) { openedRelated = cited }
+            }
         )
     }
 
@@ -801,6 +871,29 @@ struct TaskDetailView: View {
         // was a moment ago — see `reclassifyWorkIntent`.
         reclassifyWorkIntent()
         context.saveChanges()
+        // The same pill a resolution gets. An AI-authored structural act with no
+        // in-place receipt made the page reshape FEEL unilateral — the steps appeared,
+        // the reading vanished, and the way back lived two screens away in Activity.
+        // Undo routes through `ChangeLogUndo.revert` (the split entry's own arm), so
+        // there is exactly one revert path and this pill cannot drift from it.
+        let count = steps.count
+        let taskUUID = task.uuid
+        let undoContext = context
+        notice = UndoNotice(
+            message: "Split into \(count) step\(count == 1 ? "" : "s")"
+        ) {
+            let request = NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry")
+            request.predicate = NSPredicate(
+                format: "action == %@ AND taskUUID == %@ AND undone == NO",
+                "split", (taskUUID ?? UUID()) as CVarArg)
+            request.sortDescriptors = [
+                NSSortDescriptor(keyPath: \ChangeLogEntry.timestamp, ascending: false)
+            ]
+            request.fetchLimit = 1
+            guard let entry = try? undoContext.fetch(request).first else { return }
+            ChangeLogUndo.revert(entry, in: undoContext)
+            undoContext.saveChanges()
+        }
     }
 
     private func markDecided(choice: String? = nil) {
@@ -1022,6 +1115,21 @@ struct TaskDetailView: View {
     /// button already did its job, and an absent line is not an error to manage.
     private func fetchKickoff() {
         kickoffWork?.cancel()
+        // A deciding task gets NO kickoff line: the options are the move, and a
+        // generated "first step" under a Decide button is the model answering a
+        // question nobody asked. Silence is the honest fallback the kickoff always had.
+        guard !task.needsDecision else {
+            kickoffStep = nil
+            return
+        }
+        // A container's first move is ALREADY STORED — the next open step, in the
+        // model's own breakdown order. Rung 0 beats a generation wherever the answer
+        // exists as a fact: instant, free, and it can never contradict the spine's
+        // pointer because `nextOpenStep` is the one derivation both read.
+        if let next = task.nextOpenStep(among: allTasks) {
+            Motion.withMotion(Motion.settle) { kickoffStep = next.title }
+            return
+        }
         let facts = KickoffFacts(task: task)
         kickoffWork = Task {
             if case .success(let step) = await KickoffService().firstStep(facts),

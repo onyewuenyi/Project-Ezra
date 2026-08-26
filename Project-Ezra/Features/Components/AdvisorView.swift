@@ -51,6 +51,14 @@ struct AdvisorView: View {
     /// next move but drops its own rows — the same rows twice on one screen teaches
     /// the user to read neither copy.
     var blockersRenderedElsewhere = false
+    /// Tasks the current reading cites (resolved by the page from
+    /// `reading.citedTaskIDs`) — rendered as tappable references. Cross-task
+    /// NAVIGATION: these are declared edges, never discoveries.
+    var citedTasks: [TaskItem] = []
+    /// What bears on the choice, for the obligation block — the page passes the
+    /// facts' `decisionContextLines` when no reading is carrying them, so the
+    /// deciding body has its what-matters lines with or without a model.
+    var contextLines: [String] = []
 
     let onDecide: (String?) -> Void
     let onEscalate: () -> Void
@@ -60,6 +68,8 @@ struct AdvisorView: View {
     let onDefer: () -> Void
     let onKill: () -> Void
     let onDismiss: () -> Void
+    /// Open a cited task — same nested detail the blocker rows use.
+    var onOpenCited: (TaskItem) -> Void = { _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -200,7 +210,7 @@ struct AdvisorView: View {
             }
 
             // ── Action ──
-            if hasActionSide(reading) {
+            if hasActionSide(reading) || !citedTasks.isEmpty {
                 Rectangle()
                     .fill(Palette.border)
                     .frame(height: 0.5)
@@ -217,6 +227,12 @@ struct AdvisorView: View {
                     }
                 }
                 moveBody(reading)
+                // The citations: tasks the observation NAMES, as places to go. The
+                // upward-bent arrow is "this frees up" — the reverse of the blocker
+                // rows' downward bend, because the edge points the other way.
+                ForEach(citedTasks) { cited in
+                    citedRow(cited)
+                }
             }
             if dismissable { dismissRow }
         }
@@ -242,6 +258,7 @@ struct AdvisorView: View {
                 .font(.controlLabel)
                 .foregroundStyle(Palette.mutedText)
                 .buttonStyle(.pressableLink)
+                .minimumHitTarget()
         }
     }
 
@@ -251,9 +268,12 @@ struct AdvisorView: View {
     /// the user is about to make.
     @ViewBuilder
     private func whatMatters(_ reading: ValidatedReading) -> some View {
-        if !reading.evidence.isEmpty {
+        // The flag line is the deciding page's SPINE — the obligation block above is
+        // already stating it with controls attached, so the evidence never repeats it.
+        let lines = reading.evidence.filter { $0 != TaskAdvisorFacts.decisionFlagEvidence }
+        if !lines.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                ForEach(reading.evidence.prefix(3), id: \.self) { line in
+                ForEach(lines.prefix(3), id: \.self) { line in
                     HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
                         Text("•")
                         Text(line)
@@ -280,6 +300,7 @@ struct AdvisorView: View {
                         .foregroundStyle(Palette.mutedText)
                 }
                 .buttonStyle(.pressableLink)
+                .minimumHitTarget()
                 if showEvidence {
                     // The facts the reading was made from, in the user's own terms —
                     // never the model's reasoning, and never a sentence it wrote.
@@ -468,6 +489,29 @@ struct AdvisorView: View {
         .accessibilityLabel("Open blocker: \(blocker.title)")
     }
 
+    private func citedRow(_ task: TaskItem) -> some View {
+        Button {
+            onOpenCited(task)
+        } label: {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "arrow.turn.up.right")
+                    .font(.glyphCaption())
+                    .foregroundStyle(Palette.mutedText)
+                Text(task.title)
+                    .font(.controlLabel)
+                    .foregroundStyle(Palette.primaryText)
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.xs)
+                Image(systemName: "chevron.right")
+                    .font(.glyphCaption())
+                    .foregroundStyle(Palette.mutedText)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open task this frees up: \(task.title)")
+    }
+
     // MARK: - Off-device fallback (an execution path, not a judgment)
 
     /// Deterministic template parity: the stall headline and the moves that work
@@ -527,13 +571,35 @@ struct AdvisorView: View {
                     .font(.sectionHeader)
                     .foregroundStyle(Palette.primaryText)
             }
+            // The non-judgment copy changed when capture stopped flagging low
+            // confidence (needsDecision is isJudgmentCall alone at commit): a flag
+            // without the judgment bit now means someone PINNED this — the user, or
+            // the Advisor's escalation they accepted. "Ezra wasn't confident enough"
+            // described a provenance that no longer produces flags, and misdescribed
+            // the one that does.
             Text(
                 isJudgmentCall
                     ? "This is a values call only you can make — Ezra won't decide it for you."
-                    : "Ezra wasn't confident enough to file this cleanly. Take a look and set it straight."
+                    : "Pinned as a decision to make. It holds the top until you call it."
             )
             .supportingStyle()
             .fixedSize(horizontal: false, vertical: true)
+
+            // What bears on the choice — deterministic fact lines, present with or
+            // without a model, absent when a decide reading below already shows them.
+            if !contextLines.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(contextLines, id: \.self) { line in
+                        HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                            Text("•")
+                            Text(line)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.chipLabel)
+                        .foregroundStyle(Palette.secondaryText)
+                    }
+                }
+            }
 
             // When the reading is already offering options, deciding happens THERE and
             // this demotes to the escape hatch. Either way it is never a full-width

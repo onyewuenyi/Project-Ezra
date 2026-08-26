@@ -151,6 +151,14 @@ struct ValidatedReading: Sendable, Equatable {
     let recommendation: AdvisorRecommendation?
     /// Non-empty only for `.createSteps` — already `BreakdownStep`s, ready for `splitInto`.
     let steps: [BreakdownStep]
+    /// Tasks this reading cites as REFERENCES — today, the dependents a rung-0
+    /// dependents observation names, rendered as tappable rows rather than prose.
+    /// **Deterministic-only, like `evidence`:** `validated(against:)` never populates
+    /// it, so the model cannot cite a task the graph does not hold — a citation is a
+    /// declared edge or it is nothing. (This is cross-task NAVIGATION, not cross-task
+    /// reasoning: it presents relationships the user already declared.)
+    var citedTaskIDs: [UUID] = []
+
     /// The deterministic facts this reading was made from, in the user's terms — what
     /// "Why this?" reveals. **Bound to the reading, never recomputed later**, so the
     /// evidence can't drift from the reading that used it. The model contributes

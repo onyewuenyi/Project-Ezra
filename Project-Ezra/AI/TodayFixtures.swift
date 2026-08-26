@@ -271,6 +271,9 @@ enum TodayFixtures {
                 BreakdownStep(title: "Send the signed copy back", effortMinutes: 15),
             ], in: context)
         steps.first?.complete(now: now.addingTimeInterval(-86_400))
+        // In flight, so the pinned CTA carries the deterministic kickoff line (the
+        // next open step, straight from rung 0) without needing a tap to Start.
+        review.status = .doing
 
         // Score every seeded task so the stack ranks by real attention (fixtures build
         // TaskItems directly, bypassing the commit-time stamp).
