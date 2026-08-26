@@ -290,7 +290,14 @@ struct AdvisorView: View {
 
     @ViewBuilder
     private func evidenceDisclosure(_ reading: ValidatedReading) -> some View {
-        if !reading.evidence.isEmpty {
+        // On a flagged page the obligation block above already states the flag with
+        // controls attached — the last route by which evidence could restate the
+        // spine was this disclosure.
+        let evidence =
+            flagged
+            ? reading.evidence.filter { $0 != TaskAdvisorFacts.decisionFlagEvidence }
+            : reading.evidence
+        if !evidence.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Button {
                     Motion.withMotion(Motion.settle) { showEvidence.toggle() }
@@ -305,7 +312,7 @@ struct AdvisorView: View {
                     // The facts the reading was made from, in the user's own terms —
                     // never the model's reasoning, and never a sentence it wrote.
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(reading.evidence, id: \.self) { line in
+                        ForEach(evidence, id: \.self) { line in
                             HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
                                 Text("•")
                                 Text(line)

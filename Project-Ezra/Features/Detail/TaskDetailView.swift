@@ -68,6 +68,11 @@ struct TaskDetailView: View {
     /// and history are inputs, not content the page must always show — every field
     /// stays one tap away, and the glance shows what is consequential.
     @State private var showDetails = false
+    /// The Mark-decided prompt, for the paths where no option carries the outcome.
+    /// The confirm IS the clearing tap — cancel leaves the flag set, because the
+    /// user just said they are not done deciding after all.
+    @State private var showDecisionPrompt = false
+    @State private var decisionChoice = ""
     /// The Advisor's judgment cache — ambient, fingerprint-keyed, shared across pages.
     @ObservedObject private var advisorStore = TaskAdvisorStore.shared
     /// A related task opened from this page — a blocker from the waiting spine or
@@ -268,6 +273,9 @@ struct TaskDetailView: View {
         .onChange(of: openedRelated == nil) { _, closed in
             guard closed, isActive else { return }
             advisorStore.ensure(task: task, among: allTasks)
+            // A step or blocker just resolved (or didn't) on its own page — the
+            // container's next step may have moved with it.
+            refreshContainerKickoff()
         }
         .onDisappear {
             // Backstop for a dismiss mid-edit (focus never formally left the field). The
@@ -283,6 +291,16 @@ struct TaskDetailView: View {
             // The detail was dismissed outright (not just swiped past), so nothing is
             // waiting on a classification either.
             classifyWork?.cancel()
+        }
+        .alert("Mark decided", isPresented: $showDecisionPrompt) {
+            TextField("What did you decide? (optional)", text: $decisionChoice)
+            Button("Mark decided") {
+                let trimmed = decisionChoice.trimmingCharacters(in: .whitespacesAndNewlines)
+                advisorActed(.decide) { markDecided(choice: trimmed.isEmpty ? nil : trimmed) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The outcome goes on the record — notes and the activity trail.")
         }
         .alert("New person", isPresented: $showAddPerson) {
             TextField("Name", text: $newPersonName)
@@ -589,6 +607,13 @@ struct TaskDetailView: View {
                 .font(.supporting)
                 .foregroundStyle(Palette.primaryText)
                 .lineLimit(1)
+            // The wait's age, everywhere a wait renders — the spine taught the
+            // vocabulary; the card keeps it.
+            if let label = sinceLabel(blocker.since) {
+                Text(label)
+                    .font(.chipLabel)
+                    .foregroundStyle(Palette.mutedText)
+            }
             Spacer(minLength: Spacing.sm)
             Button {
                 removeBlocker(blocker.id)
@@ -662,9 +687,17 @@ struct TaskDetailView: View {
         let target = blocker.taskID.flatMap { id in allTasks.first { $0.uuid == id } }
         let title = target?.title ?? blocker.note ?? "Something else"
         HStack(spacing: Spacing.sm) {
-            Image(systemName: blocker.kind == .task ? "arrow.turn.down.right" : "hourglass")
-                .font(.glyphCaption())
-                .foregroundStyle(Palette.mutedText)
+            // The blocker's own lifecycle, not a generic wait glyph: "already in
+            // motion" and "not started" are different chases, and the fact was one
+            // lookup away the whole time. External waits keep the hourglass — they
+            // have no lifecycle to show.
+            if let target {
+                StatusGlyphView(task: target, allTasks: allTasks, interactive: false)
+            } else {
+                Image(systemName: "hourglass")
+                    .font(.glyphCaption())
+                    .foregroundStyle(Palette.mutedText)
+            }
             if let target {
                 Button {
                     openedRelated = target
@@ -738,8 +771,11 @@ struct TaskDetailView: View {
         let currentID = task.nextOpenStep(among: allTasks)?.uuid
         return VStack(alignment: .leading, spacing: Spacing.xs) {
             if let progress = task.stepProgress(among: allTasks) {
+                // The count moves IN PLACE when a step resolves from the row below —
+                // progress reads as motion in the number, not a redraw.
                 Text(progress.label)
                     .sectionHeaderStyle()
+                    .contentTransition(.numericText())
             }
             ForEach(steps) { step in
                 spineStepRow(step, isCurrent: step.uuid == currentID)
@@ -749,44 +785,61 @@ struct TaskDetailView: View {
 
     private func spineStepRow(_ step: TaskItem, isCurrent: Bool) -> some View {
         let done = step.status.isResolved
-        return Button {
-            openedRelated = step
-        } label: {
-            HStack(spacing: Spacing.sm) {
-                StatusGlyphView(task: step, allTasks: allTasks, interactive: false)
-                Text(step.title)
-                    .font(.supporting)
-                    .foregroundStyle(Palette.primaryText)
-                    .strikethrough(done, color: Palette.mutedText)
-                    .lineLimit(1)
-                    .recessed(done)
-                if isCurrent {
-                    // The pointer, not a label: the next open step in a container is
-                    // the same "one concrete first move" the kickoff line renders.
-                    Image(systemName: "arrow.turn.down.right")
+        // The glyph sits OUTSIDE the navigation button: it is the list's one-tap
+        // fast path, composed into the container's cockpit — complete a step without
+        // leaving the umbrella, and the progress header, pointer and kickoff line all
+        // move because they are derivations of the same fact. `onPick` mirrors the
+        // glyph's own seam (`setStatus`) plus this page's re-judge hooks, which key on
+        // THIS task's clock and cannot see a child's.
+        return HStack(spacing: Spacing.sm) {
+            StatusGlyphView(
+                task: step, allTasks: allTasks,
+                onPick: { state in
+                    actionPulse += 1
+                    Motion.withMotion(Motion.decide) { step.setStatus(state, in: context) }
+                    context.saveChanges()
+                    advisorStore.ensure(task: task, among: allTasks)
+                    refreshContainerKickoff()
+                }
+            )
+            Button {
+                openedRelated = step
+            } label: {
+                HStack(spacing: Spacing.sm) {
+                    Text(step.title)
+                        .font(.supporting)
+                        .foregroundStyle(Palette.primaryText)
+                        .strikethrough(done, color: Palette.mutedText)
+                        .lineLimit(1)
+                        .recessed(done)
+                    if isCurrent {
+                        // The pointer, not a label: the next open step in a container is
+                        // the same "one concrete first move" the kickoff line renders.
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.glyphCaption())
+                            .foregroundStyle(Palette.accentFlat)
+                    }
+                    Spacer(minLength: Spacing.sm)
+                    // Sizing at a glance, matching the proposal rows the steps came from.
+                    if !done, let label = TaskItem.effortLabel(step.effortMinutes) {
+                        Text("~\(label)")
+                            .font(.chipLabel)
+                            .foregroundStyle(Palette.mutedText)
+                            .monospacedDigit()
+                    }
+                    Image(systemName: "chevron.right")
                         .font(.glyphCaption())
-                        .foregroundStyle(Palette.accentFlat)
-                }
-                Spacer(minLength: Spacing.sm)
-                // Sizing at a glance, matching the proposal rows the steps came from.
-                if !done, let label = TaskItem.effortLabel(step.effortMinutes) {
-                    Text("~\(label)")
-                        .font(.chipLabel)
                         .foregroundStyle(Palette.mutedText)
-                        .monospacedDigit()
                 }
-                Image(systemName: "chevron.right")
-                    .font(.glyphCaption())
-                    .foregroundStyle(Palette.mutedText)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "Step: \(step.title), \(done ? "done" : isCurrent ? "next" : "open")"
+            )
+            .accessibilityHint("Open this step")
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "Step: \(step.title), \(done ? "done" : isCurrent ? "next" : "open")"
-        )
-        .accessibilityHint("Open this step")
     }
 
     // MARK: - Advisor (the judgment layer)
@@ -806,7 +859,20 @@ struct TaskDetailView: View {
             blockersRenderedElsewhere: shape == .waiting,
             citedTasks: citedTasks,
             contextLines: obligationContextLines,
-            onDecide: { choice in advisorActed(.decide) { markDecided(choice: choice) } },
+            onDecide: { choice in
+                if let choice {
+                    advisorActed(.decide) { markDecided(choice: choice) }
+                } else {
+                    // No option carried the outcome — ask for it, optionally. A
+                    // decision is the product's crown primitive, and "decided" with
+                    // no record of WHAT was the difference between a trail and a
+                    // checkbox. One extra tap, field skippable, and the outcome
+                    // lands in the notes, the entry and the undo encoding through
+                    // the one seam that writes them.
+                    decisionChoice = ""
+                    showDecisionPrompt = true
+                }
+            },
             // Escalating is a human act accepting the reading's suggestion — the
             // axis-3 flag, through the same seam Unstick's rung used.
             onEscalate: {
@@ -1113,6 +1179,19 @@ struct TaskDetailView: View {
 
     /// Ask for the one concrete first move. Any non-success renders nothing — the
     /// button already did its job, and an absent line is not an error to manage.
+    /// Keep a container's kickoff line true to the CURRENT next step. Steps resolve
+    /// from the spine's glyph or from their own nested page — and a child's clock
+    /// never bumps the parent's, so the hooks that re-judge the Advisor could not
+    /// refresh the bar. Deterministic, so recomputing on every signal costs nothing;
+    /// non-containers deliberately keep their fetched line (regenerating a model line
+    /// on every edit would be churn wearing a freshness costume).
+    private func refreshContainerKickoff() {
+        guard task.stepProgress(among: allTasks) != nil else { return }
+        Motion.withMotion(Motion.settle) {
+            kickoffStep = task.nextOpenStep(among: allTasks)?.title
+        }
+    }
+
     private func fetchKickoff() {
         kickoffWork?.cancel()
         // A deciding task gets NO kickoff line: the options are the move, and a
