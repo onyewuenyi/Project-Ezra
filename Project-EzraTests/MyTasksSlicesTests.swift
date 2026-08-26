@@ -236,4 +236,33 @@ struct MyTasksSlicesTests {
         #expect(TaskDetailPeers.flatten([MyTasksSection]()).isEmpty)
         #expect(TaskDetailPeers.flatten([TaskLaneEntry]()).isEmpty)
     }
+    @Test("The ledger caps inline; the filter — its documented isolation path — uncaps it")
+    func resolvedSectionsCapInline() {
+        let context = TestStore.makeContext()
+        let me = UserProfile.currentMemberID(in: context)
+        for n in 0..<8 {
+            let task = TaskItem(title: "Done \(n)", status: .todo, ownerID: me, in: context)
+            task.complete()
+        }
+        for n in 0..<7 {
+            _ = TaskItem(title: "Open \(n)", status: .todo, ownerID: me, in: context)
+        }
+        let tasks = TaskItem.fetchAll(in: context)
+
+        let sections = MyTasksSlices.assigned(tasks: tasks, currentUserID: me)
+        let done = sections.first { $0.status == .done }
+        let todo = sections.first { $0.status == .todo }
+        #expect(done?.entries.count == MyTasksSlices.resolvedInlineCap)
+        #expect(done?.hiddenCount == 8 - MyTasksSlices.resolvedInlineCap)
+        // The live pipeline is NEVER capped — the cap exists for the graveyard, and a
+        // capped pipeline would hide work the ranking put there on purpose.
+        #expect(todo?.entries.count == 7)
+        #expect(todo?.hiddenCount == 0)
+
+        // Picking Done from the filter is precisely "show me the ledger".
+        let filtered = MyTasksSlices.assigned(tasks: tasks, currentUserID: me, status: .done)
+        #expect(filtered.first { $0.status == .done }?.entries.count == 8)
+        #expect(filtered.first { $0.status == .done }?.hiddenCount == 0)
+    }
+
 }

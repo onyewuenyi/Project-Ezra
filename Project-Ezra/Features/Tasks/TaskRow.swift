@@ -52,6 +52,20 @@ struct TaskRow: View {
 
     private var isBlocked: Bool { blockerSummary != nil }
 
+    /// The row's compact due vocabulary: "3d over" (overdue token) · "Today" ·
+    /// a weekday inside the week ("Fri") · a short date beyond it ("Sep 12").
+    private var dueLabel: (text: String, isOverdue: Bool)? {
+        guard !task.status.isResolved, let due = task.dueDate,
+            let days = TaskItem.daysUntil(due, now: Date())
+        else { return nil }
+        if days < 0 { return ("\(-days)d over", true) }
+        if days == 0 { return ("Today", false) }
+        if days < 7 {
+            return (due.formatted(.dateTime.weekday(.abbreviated)), false)
+        }
+        return (due.formatted(.dateTime.month(.abbreviated).day()), false)
+    }
+
     var body: some View {
         HStack(spacing: Spacing.sm) {
             // The user's attention Signal surfaces as a leading mark here (the record
@@ -59,7 +73,7 @@ struct TaskRow: View {
             // driven by the computed attention score via TaskRanking, never a badge. A
             // blocked row recesses uniformly, so the mark and status glyph dim with the
             // title rather than reading half-disabled.
-            SignalMarker(task: task)
+            SignalMarker(task: task, reservesSpace: true)
                 .recessed(isBlocked)
 
             StatusGlyphView(
@@ -80,6 +94,19 @@ struct TaskRow: View {
             if let stepProgress { StepProgressIndicator(progress: stepProgress) }
 
             Spacer(minLength: Spacing.xs)
+
+            // WHEN, because position cannot carry it: ranking explains which row
+            // outranks which, but two neighbours — one due today, one undated — read
+            // identically without this. Only a real date earns the ink (undated shows
+            // nothing), only live work (a resolved row is a record; its due is over),
+            // and overdue wears the one token that means exactly that.
+            if let due = dueLabel {
+                Text(due.text)
+                    .font(.chipLabel)
+                    .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
+                    .monospacedDigit()
+                    .recessed(isBlocked)
+            }
 
             trailingAvatar
         }

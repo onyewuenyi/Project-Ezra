@@ -37,10 +37,30 @@ struct SignalMarker: View {
     var needsDecision: Bool = false
     /// Unscaled base glyph size; scales with Dynamic Type via `unit`.
     var size: CGFloat = 14
+    /// Hold the column even when there is nothing to show. The record surface sets
+    /// this: with zero footprint, marked rows pushed their glyph and title right and
+    /// the list's left edge went ragged — the mark stopped being a mark and became a
+    /// layout event. A reserved column costs one glyph-width of leading space and
+    /// buys every glyph and every title landing on the same two lines.
+    var reservesSpace = false
 
     @ScaledMetric(relativeTo: .body) private var unit: CGFloat = 1
 
+    /// A rendered SF symbol is wider than its point size, so the reserved column is
+    /// sized to the GLYPH's box and both paths share it — alignment by construction,
+    /// not by matching two hand-tuned constants.
+    private var columnWidth: CGFloat { size * unit * 1.3 }
+
     var body: some View {
+        if reservesSpace {
+            ZStack { markGlyph }
+                .frame(width: columnWidth, height: columnWidth)
+        } else {
+            markGlyph
+        }
+    }
+
+    @ViewBuilder private var markGlyph: some View {
         if needsDecision {
             Image(systemName: "hand.raised.fill")
                 .foregroundStyle(Palette.decisionAccent)
@@ -59,11 +79,11 @@ extension SignalMarker {
     /// Convenience for the common case of reading straight off a task. A RESOLVED task
     /// never wears the decision flag — it is a record, and the flag is about what still
     /// needs you.
-    init(task: TaskItem, size: CGFloat = 14) {
+    init(task: TaskItem, size: CGFloat = 14, reservesSpace: Bool = false) {
         self.init(
             isUrgent: task.isUrgent,
             needsDecision: task.needsDecision && !task.status.isResolved,
-            size: size)
+            size: size, reservesSpace: reservesSpace)
     }
 }
 

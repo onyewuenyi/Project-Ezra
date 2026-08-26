@@ -139,6 +139,10 @@ struct AssignedSectionsView: View {
     let allTasks: [TaskItem]
     let othersRoster: [FamilyMember]
     let searchIsActive: Bool
+    /// "Show all N" on a capped ledger section — flips the STATUS FILTER to that
+    /// section, the documented isolation path, rather than growing a second
+    /// expansion mechanism the filter would then fight.
+    var onShowAll: (TaskStatus) -> Void = { _ in }
     @Binding var selectedTask: TaskItem?
     @Binding var notice: UndoNotice?
     @Environment(\.openCapture) private var openCapture
@@ -167,6 +171,22 @@ struct AssignedSectionsView: View {
                                 TaskLaneEntryView(
                                     entry: entry, allTasks: allTasks, othersRoster: othersRoster,
                                     selectedTask: $selectedTask, notice: $notice)
+                            }
+                            if section.hiddenCount > 0 {
+                                Button {
+                                    onShowAll(section.status)
+                                } label: {
+                                    Text(
+                                        "Show all \(section.entries.count + section.hiddenCount)"
+                                    )
+                                    .font(.controlLabel)
+                                    .foregroundStyle(Palette.mutedText)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.pressableLink)
+                                .minimumHitTarget()
+                                .accessibilityHint(
+                                    "Filter to \(section.status.label) to see every entry")
                             }
                         }
                     }

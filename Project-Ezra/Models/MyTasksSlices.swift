@@ -99,6 +99,10 @@ enum MyTasksHeader {
 struct MyTasksSection: Identifiable {
     let status: TaskStatus
     let entries: [TaskLaneEntry]
+    /// Resolved rows held back by the inline cap — the ledger stays reachable (a
+    /// "Show all N" row flips the status filter, the documented isolation path)
+    /// without the graveyard outgrowing the pipeline it sits under.
+    var hiddenCount: Int = 0
 
     var id: String { status.rawValue }
 }
@@ -107,6 +111,14 @@ enum MyTasksSlices {
     /// The canonical section order — live pipeline first (In Progress → Todo), then
     /// the resolution ledger (Done → Canceled).
     static let sectionOrder: [TaskStatus] = [.doing, .todo, .done, .canceled]
+
+    /// How many resolved rows a LEDGER section shows inline before deferring to the
+    /// status filter. The live pipeline is never capped — this exists because Done
+    /// grows monotonically on a daily-use store, and a list that is mostly graveyard
+    /// under a short pipeline is the exact "437 things" failure the product exists
+    /// to prevent. Five keeps "what did I just finish?" answerable at a glance;
+    /// everything older is one tap away, not gone.
+    static let resolvedInlineCap = 5
 
     /// The filter-menu predicate: an optional status filter and an optional category
     /// filter. `nil` means "All" for either axis. It is also how the Done/Canceled
@@ -126,15 +138,25 @@ enum MyTasksSlices {
     /// top, because `TaskRanking.stackOrder` forces it.
     static func assigned(
         tasks: [TaskItem], currentUserID: UUID?,
-        status: TaskStatus? = nil, category: String? = nil
+        status statusFilter: TaskStatus? = nil, category: String? = nil
     ) -> [MyTasksSection] {
         let scoped = tasks.filter {
-            $0.isMine(currentUserID: currentUserID) && applyFilters($0, status: status, category: category)
+            $0.isMine(currentUserID: currentUserID)
+                && applyFilters($0, status: statusFilter, category: category)
         }
         let entries = laneEntries(from: scoped, allTasks: tasks)
         let grouped = Dictionary(grouping: entries) { $0.anchor.status }
         return sectionOrder.compactMap { status in
             guard let items = grouped[status], !items.isEmpty else { return nil }
+            // The ledger caps INLINE only, and only when no status filter is narrowing
+            // the view — picking Done from the filter is precisely "show me the
+            // ledger", and capping there would fight the user's explicit ask.
+            if status.isResolved, statusFilter == nil, items.count > resolvedInlineCap {
+                return MyTasksSection(
+                    status: status,
+                    entries: Array(items.prefix(resolvedInlineCap)),
+                    hiddenCount: items.count - resolvedInlineCap)
+            }
             return MyTasksSection(status: status, entries: items)
         }
     }

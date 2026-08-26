@@ -110,6 +110,9 @@ struct TasksHomeView: View {
                         AssignedSectionsView(
                             sections: sections, allTasks: tasks, othersRoster: othersRoster,
                             searchIsActive: filtersActive,
+                            onShowAll: { status in
+                                Motion.withMotion(Motion.settle) { statusFilter = status }
+                            },
                             selectedTask: $selectedTask, notice: $notice)
                     case .created(let entries):
                         CreatedFlatView(
