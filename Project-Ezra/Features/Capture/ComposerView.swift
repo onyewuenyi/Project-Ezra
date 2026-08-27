@@ -232,6 +232,13 @@ struct ComposerView: View {
             // catches the space between them.
             .contentShape(Rectangle())
             .onTapGesture { focused = false }
+            // The canvas's controls are an INSET, not stack members: content is laid
+            // out above the bar by construction, so a keyboard transition can never
+            // slide the buttons through it — and the bar (solid background) rides
+            // above the keyboard, keeping Ramble reachable mid-typing.
+            .safeAreaInset(edge: .bottom) {
+                if phase == .capture { captureBar }
+            }
             // Success notification — capture committed is a capstone moment.
             .sensoryFeedback(.success, trigger: committed)
             // The reveal is the product's promise being kept, and it was the one moment
@@ -770,16 +777,17 @@ struct ComposerView: View {
 
     // MARK: - The four surfaces
 
-    /// CAPTURE — a thought canvas, not a task field. The AI is entirely absent here.
+    /// CAPTURE — the typed canvas, the deliberate escape hatch. The AI is entirely
+    /// absent here.
     ///
-    /// **The canvas owns the screen and voice leads.** It used to be a 120–280pt bordered
-    /// box inside an already-padded screen, under a raised keyboard, with "Speak instead"
-    /// as a secondary pill at the same weight as "Add a photo" — so the product called
-    /// Ramble opened with a keyboard and made you route around its primary affordance to
-    /// use it as named. Now the field takes all the vertical space it can (`.infinity`,
-    /// no container of its own — see `composerField`), nothing is focused on arrival, and
-    /// on an empty canvas the mic is the full-width primary action. Typing is one tap
-    /// away and the whole canvas is that tap.
+    /// The layout is two regions with different jobs: CONTENT (title, subtitle, the
+    /// field) lives here, and the CONTROLS live in `captureBar`, pinned below as a
+    /// safe-area inset. They used to share one stack, and every keyboard transition
+    /// relaid the stack out — the button cluster tracked the keyboard faster than the
+    /// field resized, so the buttons visibly slid through the content mid-transition.
+    /// As an inset, the content is always laid out ABOVE the bar and nothing can cross
+    /// anything; the bar also rides above the keyboard, so Ramble stays one tap away
+    /// while typing instead of hiding under it.
     @ViewBuilder private var captureSurface: some View {
         Text("What's on your mind?")
             .screenTitleStyle()
@@ -791,22 +799,35 @@ struct ComposerView: View {
         composerField
             // Generous, but BOUNDED. `maxHeight: .infinity` here hangs layout: the
             // field's ZStack holds a TextEditor (itself scrollable and greedy) and,
-            // with no fixed ceiling and no Spacer left in the stack to absorb the
-            // slack, the pass doesn't settle — the composer never presents. A tall
-            // ceiling gets the whole point of the change (the canvas, not a box)
-            // without asking the layout system to resolve a cycle.
+            // with no fixed ceiling, the pass doesn't settle — the composer never
+            // presents. A tall ceiling gets the canvas feel without asking the layout
+            // system to resolve a cycle; the Spacer below absorbs the slack on tall
+            // screens so the field never stretches to fill awkwardly.
             .frame(minHeight: 200, maxHeight: 460)
             .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
 
-        dictationHint
-            .animation(Motion.fade, value: speech.state)
+        Spacer(minLength: 0)
+    }
 
-        VStack(spacing: Spacing.sm) {
+    /// The canvas's control bar — the design system's pinned-CTA pattern (solid
+    /// surface, safe-area inset, rides the keyboard). One structure, top to bottom:
+    /// the mic hint when there is one (beside the control it explains, not floating
+    /// mid-canvas), the primary Ramble CTA once there are words, and the compact
+    /// input-mode row. Two capsules of one size, one row — the stacked, mismatched
+    /// pills read as loose parts.
+    private var captureBar: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            dictationHint
+                .animation(Motion.fade, value: speech.state)
             // Ramble appears only once there is something to ramble about. A disabled
-            // primary button on an empty canvas is a dead affordance occupying the spot
-            // the live one should own.
+            // primary button on an empty canvas is a dead affordance occupying the
+            // spot the live one should own.
             if canSubmit { rambleButton }
-            micRow
+            HStack(spacing: Spacing.sm) {
+                micButton
+                imageButton
+                Spacer(minLength: 0)
+            }
         }
         // Deliberately NOT animated. The empty and non-empty states are different
         // CONTAINERS (a stacked primary vs. a compact row), and asking SwiftUI to
@@ -814,16 +835,21 @@ struct ComposerView: View {
         // overlapping capsules and doubled labels for the length of the animation. The
         // swap happens on the first keystroke, where instant is also simply correct.
         .animation(nil, value: canSubmit)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Spacing.lg)
+        .padding(.top, Spacing.sm)
+        .padding(.bottom, Spacing.xs)
+        .background(Palette.background)
     }
 
-    /// The submit affordance — the deliberate handoff.
-    ///
-    /// **Solid, not the gradient — and that is the point.** Ramble and "Create N tasks"
-    /// were the identical gradient capsule at the identical size, for "interpret this for
-    /// me" and "commit this to my life". Spending the app's highest-signal treatment
-    /// twice in one flow flattens both, and the arc should BUILD: a request, then a
-    /// payoff. The ✦ carries the AI signal here without the gradient, which is reserved
-    /// for the moment the tasks become real.
+    /// The submit affordance — the deliberate handoff, wearing the design system's
+    /// primary-CTA treatment: the accent gradient on a full-height capsule, exactly
+    /// like Create and the pinned detail CTA. (An `accentFlat` variant shipped briefly
+    /// on the "don't spend the gradient twice in one flow" argument; the owner read it
+    /// as off-system — 2026-08-27 — and the rule stands: one primary-CTA treatment,
+    /// everywhere a primary CTA appears. The arc's build comes from the reveal's
+    /// pacing, not from withholding the house style.) Rendered only when there is
+    /// something to ramble about, so it never needs a disabled state.
     private var rambleButton: some View {
         Button {
             submit()
@@ -832,20 +858,12 @@ struct ComposerView: View {
                 Image(systemName: "sparkle")
                 Text("Ramble").font(.ctaLabel)
             }
-            .foregroundStyle(
-                canSubmit ? AnyShapeStyle(Palette.onAccent) : AnyShapeStyle(Palette.mutedText)
-            )
+            .foregroundStyle(Palette.onAccent)
             .frame(maxWidth: .infinity)
             .frame(height: 52)
-            .background(
-                canSubmit
-                    ? AnyShapeStyle(Palette.accentFlat)
-                    : AnyShapeStyle(Palette.secondarySurface),
-                in: Capsule()
-            )
+            .background(Palette.accentGradient, in: Capsule())
         }
         .buttonStyle(.pressableProminent)
-        .disabled(!canSubmit)
         .accessibilityLabel("Ramble — turn what you said into tasks")
     }
 
@@ -882,7 +900,16 @@ struct ComposerView: View {
                     // orb's view identity survives the tenure swap.
                     .contentShape(Circle())
                     .onTapGesture {
-                        if phase == .listening { finishListening() }
+                        guard phase == .listening else { return }
+                        // Listening: the tap is "done — make sense of it". Any other
+                        // speech state (a hung warm-up, a mic that never arrived):
+                        // the tap is an exit, because an orb that swallows taps over
+                        // a dead mic is a locked door.
+                        if speech.state == .listening {
+                            finishListening()
+                        } else {
+                            typeInstead()
+                        }
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityAddTraits(.isButton)
@@ -1224,20 +1251,22 @@ struct ComposerView: View {
 
     private var composerField: some View {
         ZStack(alignment: .topLeading) {
-            // **No container at rest.** The words sit on the ground, the way they do in a
-            // notes app — a bordered box that says "short entry here" was contradicting
-            // the copy above it, which promises somewhere to unload everything. The
-            // surface returns only when the field is LIVE (mic hot, or the model reading),
-            // where it means "this is happening now" rather than "type in the box".
+            // **A quiet container, always.** The bare-ground field was designed for a
+            // canvas that led the screen; now the canvas is the deliberate typing
+            // landing, and on device the borderless version read as unfinished — a
+            // cursor floating over muted example text with no affordance saying
+            // "words go here". Rest state is the calmest possible box (surface +
+            // hairline); the accent border and glow remain reserved for the one live
+            // moment (the model reading), so the upgrade still means something.
             RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
-                .fill(fieldIsLive ? AnyShapeStyle(Palette.primarySurface) : AnyShapeStyle(.clear))
+                .fill(Palette.primarySurface)
                 .overlay {
                     RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
                         .strokeBorder(
                             fieldIsLive
                                 ? AnyShapeStyle(Palette.accentGradient)
-                                : AnyShapeStyle(.clear),
-                            lineWidth: fieldIsLive ? 1.5 : 0
+                                : AnyShapeStyle(Palette.border),
+                            lineWidth: fieldIsLive ? 1.5 : 1
                         )
                 }
                 // Soft glow while the model is thinking. (The mic is never hot on the
@@ -1254,12 +1283,15 @@ struct ComposerView: View {
                 )
                 .foregroundStyle(Palette.mutedText)
                 .font(.bodyInput)
-                // Aligned to the HEADING, not inset from a box that no longer exists.
-                // `TextEditor` carries its own ~5pt leading text inset, so the nudge here
-                // is what makes the placeholder and the typed words share one left edge
-                // with "What's on your mind?".
-                .padding(.horizontal, Spacing.xs)
-                .padding(.vertical, Spacing.xs)
+                // EXACTLY the insertion point's origin: the editor below is padded by
+                // `Spacing.sm`, and `TextEditor`'s own text container adds ~5pt of
+                // lead and ~8pt of top inset. The placeholder must sit where the
+                // first typed glyph will land, so the cursor blinks BEFORE it — the
+                // native pattern. Misaligned, the cursor draws ON the first glyph,
+                // which reads as a rendering bug (it was, on the first device run).
+                .padding(.leading, Spacing.sm + 5)
+                .padding(.top, Spacing.sm + 8)
+                .padding(.trailing, Spacing.sm + 5)
                 .allowsHitTesting(false)
             }
 
@@ -1268,7 +1300,7 @@ struct ComposerView: View {
                 .font(.bodyInput)
                 .foregroundStyle(Palette.primaryText)
                 .scrollContentBackground(.hidden)
-                .padding(Spacing.xs)
+                .padding(Spacing.sm)
                 // The field is the typed escape hatch and it was unlabeled —
                 // VoiceOver read only the (long, example-laden) placeholder.
                 .accessibilityLabel("What's on your mind")
@@ -1282,32 +1314,6 @@ struct ComposerView: View {
     private var fieldIsLive: Bool { brain.isProcessing }
 
     // MARK: - Dictation
-
-    /// The mic leads on an empty canvas and steps aside once there are words.
-    ///
-    /// Voice is the flagship input and was rendered as a secondary pill of exactly the
-    /// same weight as "Add a photo". On an empty canvas it now takes the primary slot at
-    /// full width; the moment there is text, Ramble takes that slot and the mic returns
-    /// to the compact row beside the photo picker — by then the user has already chosen
-    /// their input and the mic is a way to add to it, not the way in.
-    @ViewBuilder private var micRow: some View {
-        if canSubmit {
-            // There are words now: the user has chosen their input, Ramble owns the
-            // primary slot, and these are ways to ADD to what's there.
-            HStack(spacing: Spacing.sm) {
-                micButton
-                imageButton
-                Spacer(minLength: 0)
-            }
-        } else {
-            // Empty canvas: speaking is the way in, at full width, with the photo path
-            // beneath it as the genuinely tertiary option it is.
-            VStack(spacing: Spacing.sm) {
-                micButton
-                imageButton
-            }
-        }
-    }
 
     /// Capture by photo — the third input mode. Library-only in V1 (`PhotosPicker`
     /// is out-of-process, so no privacy prompt); the live camera is the recorded
@@ -1390,31 +1396,25 @@ struct ComposerView: View {
     }
 
     private var micButton: some View {
-        // Primary on an empty canvas: full width, CTA height, and it says "Speak" rather
-        // than "Speak instead" — "instead" framed the product's flagship input as the
-        // alternative to the keyboard it was sitting under. (The active states are gone:
-        // the mic never runs while the canvas is showing — Speak returns to the orb.)
-        // A mic that CANNOT lead demotes to the compact form: a disabled primary on an
-        // empty canvas is a dead affordance occupying the spot the live one should own,
-        // and on the no-voice canvas the live one is the keyboard, already up.
-        let prominent = !canSubmit && micUsable
-        return Button {
+        // Always the compact form: the way INTO voice is the orb the sheet opens on —
+        // reaching this canvas means the user chose typing (or the mic can't lead),
+        // so a full-width Speak here would argue with the landing they picked. It
+        // matches `imageButton` exactly; the old stacked, mismatched pair read as
+        // loose parts. (The active states are gone: the mic never runs while the
+        // canvas is showing — Speak returns to the orb.)
+        Button {
             let base = text.trimmingCharacters(in: .whitespacesAndNewlines)
             beginListening(from: base.isEmpty ? "" : base + " ")
         } label: {
-            // The label keys off the CANVAS (empty → "Speak"), not off prominence: a
-            // demoted-but-dead mic on an empty canvas still shouldn't say "instead"
-            // when there is nothing yet to do instead OF.
+            // "Instead" only once there is something to do instead OF.
             Label(canSubmit ? "Speak instead" : "Speak", systemImage: "mic.fill")
-                .font(prominent ? .ctaLabel : .controlLabel)
+                .font(.controlLabel)
                 .foregroundStyle(micUsable ? Palette.primaryText : Palette.mutedText)
                 .padding(.horizontal, Spacing.md)
-                .frame(maxWidth: prominent ? .infinity : nil)
-                .frame(height: prominent ? 52 : 40)
+                .frame(height: 40)
                 .background(Palette.secondarySurface, in: Capsule())
                 // Visual capsule stays 40pt; the TOUCHABLE region meets the HIG
-                // minimum — this is the flagship input mode's primary control,
-                // tapped at arm's length while multitasking.
+                // minimum — this is tapped at arm's length while multitasking.
                 .frame(minHeight: LayoutMetrics.hitTarget)
                 .contentShape(Rectangle())
         }
@@ -1476,6 +1476,19 @@ struct ComposerView: View {
             guard phase == .listening, speech.state == .preparing else { return }
             Motion.withMotion(Motion.fade) { showPreparingLabel = true }
         }
+        // The warm-up watchdog. `.preparing` can legitimately run long (the first-run
+        // speech-model download) — the label above reassures — but it can also hang
+        // forever (seen on the simulator: the transcriber's locale query never
+        // returned), which would strand the user on a silent orb with a dead mic: no
+        // transcript ever arrives, so the silence finish never arms. Past the
+        // deadline, stopping the service drives `.idle`, and the lifecycle rule does
+        // what it does for every non-user drop: settle to the canvas with the
+        // keyboard up. Generous on purpose — a slow download must not be cut off.
+        Task {
+            try? await Task.sleep(for: .seconds(Self.preparingWatchdogSeconds))
+            guard phase == .listening, speech.state == .preparing else { return }
+            speech.stop()
+        }
         Task { await speech.start() }
     }
 
@@ -1535,6 +1548,9 @@ struct ComposerView: View {
     /// "Getting the mic ready…" appears only past this — the same progressive
     /// disclosure as the 8s reassurance line.
     private static let preparingLabelAfterSeconds: TimeInterval = 2
+
+    /// A warm-up still `.preparing` past this is treated as a drop, not a download.
+    private static let preparingWatchdogSeconds: TimeInterval = 30
 
     /// Arm (or re-arm) the silence finish. ONE cancellable handle, cancel-and-replace
     /// per transcript delta — the old shape spawned an uncancelled sleeping Task per
