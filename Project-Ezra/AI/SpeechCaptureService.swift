@@ -33,8 +33,8 @@ final class SpeechCaptureService {
     /// The in-flight hypothesis, replaced as the model refines it.
     private(set) var volatileText = ""
     /// Live mic level for the listening UI. A separate observable ON PURPOSE — it
-    /// updates at buffer cadence, and only the leaf waveform view should re-render
-    /// at that rate (see `AudioLevelMonitor`).
+    /// updates at buffer cadence, and only the leaf view that renders it (the
+    /// listening orb) should re-render at that rate (see `AudioLevelMonitor`).
     let audioLevel = AudioLevelMonitor()
 
     /// The full editable transcript so far (settled + in-flight).
@@ -47,6 +47,28 @@ final class SpeechCaptureService {
     private var transcriber: SpeechTranscriber?
     private var inputBuilder: AsyncStream<AnalyzerInput>.Continuation?
     private var recognizerTask: Task<Void, Never>?
+    private var interruptionObserver: NSObjectProtocol?
+
+    init() {
+        // A phone call or Siri kills the audio engine while `state` stays
+        // `.listening` — the surface would keep listening to a dead tap forever
+        // (the silence finish only arms on transcript deltas, and a dead tap
+        // produces none). Fold the interruption into an ordinary stop; the
+        // composer's lifecycle rule treats any non-user-initiated drop as
+        // "settle to the canvas with the words so far".
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard
+                let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                AVAudioSession.InterruptionType(rawValue: raw) == .began
+            else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.isActive else { return }
+                self.stop()
+            }
+        }
+    }
 
     // MARK: - Control
 
@@ -64,10 +86,13 @@ final class SpeechCaptureService {
         volatileText = ""
         audioLevel.reset()
 
+        // `.preparing` BEFORE the permission await: on first run the system prompt
+        // suspends this function mid-await, and a surface keyed on the state would
+        // otherwise say "Listening" over a mic that is not running yet.
+        state = .preparing
         let granted = await requestMicPermission()
         guard granted else { state = .denied; return }
 
-        state = .preparing
         do {
             try await beginTranscribing()
             state = .listening

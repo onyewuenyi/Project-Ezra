@@ -8,14 +8,14 @@
 //
 //  Deliberately its OWN `@Observable`, separate from the speech service: the level
 //  moves at buffer cadence (~12/s at the tap's 4096-frame buffers) and only the leaf
-//  waveform view should re-render at that rate. Folding it into the service's
-//  observable state would invalidate every observer of `state`/`transcript` — the
-//  whole composer — per buffer.
+//  view that renders it — the listening `RambleOrb` — should re-render at that rate.
+//  Folding it into the service's observable state would invalidate every observer of
+//  `state`/`transcript` — the whole composer — per buffer.
 //
 //  The math is pure and static (`normalizedLevel`, `smoothed`) so the envelope is
 //  unit-testable without an audio session: RMS → dBFS → a 0…1 display range, then a
-//  fast-attack / slow-decay envelope — bars leap when speech starts and fall away
-//  gracefully, instead of flickering at raw RMS.
+//  fast-attack / slow-decay envelope — the orb swells when speech starts and drains
+//  away gracefully, instead of flickering at raw RMS.
 //
 
 import AVFoundation

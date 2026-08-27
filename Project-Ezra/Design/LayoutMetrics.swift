@@ -27,10 +27,6 @@ enum LayoutMetrics {
     /// (a landscape phone), so the orb never collapses to a dot.
     static let rambleOrbScreenFraction: CGFloat = 0.85
     static let rambleOrbMin: CGFloat = 120
-    /// The voice hero control's diameter — the composer's listening-state stop button,
-    /// the one control operated mid-thought at arm's length. Deliberately larger than
-    /// `hitTarget`: it is the surface's focal point, not merely reachable.
-    static let voiceHero: CGFloat = 64
     /// The My Tasks header row's fixed height. Its controls come and go with the
     /// household roster — the ownership tabs appear the moment a second member exists —
     /// and pinning the row makes that a change in WHAT the header holds rather than how

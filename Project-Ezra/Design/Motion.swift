@@ -140,6 +140,28 @@ enum Motion {
     /// far past it and unaffected.
     static let orbMinimumDwellSeconds: Double = 1.1
 
+    /// The turbulence the orb HOLDS while listening — attentive, alive, and going nowhere.
+    ///
+    /// Listening has no 14-second burn-down: the gather is the THINKING gesture (a wait
+    /// condensing toward an answer), and running it while someone is still speaking would
+    /// read as the system finishing with them. This is also the value `thinkingUnsettled`
+    /// decays FROM at the listening → thinking swap — restarting the gather at 1.0 would
+    /// step turbulence UP at the exact beat the orb should read as settling.
+    static let orbListeningUnsettledFloor: Double = 0.6
+
+    /// How much of itself the orb may swell at full voice — the ceiling on the energy-driven
+    /// scale term, layered ON TOP of the breath. Presence, not a meter: much lower would be
+    /// invisible beside the ±3–4% breath; much higher starts tracking syllables.
+    static let orbLevelSwellMax: Double = 0.09
+
+    /// Half-life of the orb's glide toward the microphone level, in seconds.
+    ///
+    /// The monitor updates at buffer cadence (~12/s); the orb draws at 30fps — this is what
+    /// turns those steps into a glide. Short enough that speech onset is felt, long enough
+    /// that the surface never flickers with the waveform. THE anti-VU-meter number: tune it
+    /// (with the soft-knee energy curve) against the reception test, never toward zero.
+    static let orbLevelSmoothingHalfLife: Double = 0.12
+
     // MARK: - Reduce-motion helpers (imperative sites)
 
     // Declarative `.animation(_:value:)` sites keep the house `@Environment(

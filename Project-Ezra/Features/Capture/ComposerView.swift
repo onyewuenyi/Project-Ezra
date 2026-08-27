@@ -2,17 +2,27 @@
 //  ComposerView.swift
 //  Project-Ezra
 //
-//  RAMBLE — the core loop, and the product's wow moment. It is NOT an interactive task
-//  parser; it is a fast path from messy thought to trusted structure:
+//  RAMBLE — the core loop, and the product's wow moment. Opening capture is opening a
+//  listening intelligence, not filling a form:
 //
-//      CAPTURE → (submit) → UNDERSTANDING → REVEAL/CONFIRM → CREATE
+//      LISTENING → (silence) → UNDERSTANDING → REVEAL/CONFIRM → CREATE
+//                ↘ CAPTURE — the typed escape hatch (Type instead / no mic) → (submit) ↗
 //
-//  The hard invariant, which every decision here serves: **at no point before
-//  confirmation may the user see an intermediate AI interpretation presented as truth.**
-//  During capture the AI is entirely absent — no parse, no cards, no counts, no
-//  classification — because the user owns the conversation while they are still having
-//  it. Submit is a deliberate handoff ("got it, I'll take it from here"); the input
-//  collapses into one orb; and the reveal presents ONE interpretation.
+//  **The governing invariant for the voice surface:** the orb never asks the user to
+//  understand the system; it only reflects that the system is present and receiving
+//  them — the reveal is where the system proves understanding. While listening the orb
+//  shows RECEPTION (the microphone level as presence), never interpretation: no live
+//  transcript, no counts, no cards — a deliberate 2026-08-27 reversal of the two-tone
+//  listening transcript. Silence after words is treated as the user's likely completion
+//  signal and finishes the capture itself; the system never finishes an EMPTY one.
+//
+//  The older, deeper invariant is untouched and every decision here still serves it:
+//  **at no point before confirmation may the user see an intermediate AI interpretation
+//  presented as truth.** While listening and on the typed canvas the AI is entirely
+//  absent — no parse, no cards, no counts, no classification — because the user owns
+//  the conversation while they are still having it. Submit is a deliberate handoff
+//  ("got it, I'll take it from here"); the input collapses into one orb; and the reveal
+//  presents ONE interpretation.
 //
 //  Structure — how many tasks, in what order — is decided ONCE, at submit, and never
 //  changes under the user. Who decides it is a single observation: if the user drew the
@@ -27,6 +37,7 @@
 //  answer is excellent: the fix was not to render intermediate states faster but to stop
 //  rendering them.
 //
+import AVFAudio
 import CoreData
 import PhotosUI
 import SwiftUI
@@ -90,9 +101,13 @@ struct ComposerView: View {
         refreshRosterCaches()  // the one in-session mutation path
     }
 
-    /// Where in the arc we are. Nothing is parsed in `.capture`; nothing but the orb
-    /// shows in `.understanding`; `.confirm` renders one interpretation.
-    @State private var phase: RamblePhase = .capture
+    /// Where in the arc we are. The mic owns `.listening` and nothing is interpreted
+    /// there; nothing is parsed in `.capture`; nothing but the orb shows in
+    /// `.understanding`; `.confirm` renders one interpretation. The INITIAL phase is
+    /// decided in `init` (`initialPhase`), before the first body pass, so the right
+    /// surface renders on the very first frame — an entry-time `onAppear` check flashed
+    /// whichever surface it was about to leave.
+    @State private var phase: RamblePhase
     /// When submit happened — the clock for the performance contract.
     @State private var submittedAt: Date?
     /// Which route produced the cards on screen ("local"/"cloud").
@@ -154,20 +169,40 @@ struct ComposerView: View {
     /// field do we know an empty `drafts` means "the engine found nothing here" rather than
     /// Whether the last completed parse returned any candidates at all, before the
     /// session's removals filtered them. The honest input to `foundNothing`.
-    /// When the silence auto-stop will fire — rescheduled on every transcript delta,
-    /// nil outside dictation. The hero bar renders its last stretch as a draining ring.
+    /// When the silence finish will fire — rescheduled on every transcript delta, nil
+    /// outside dictation. The orb surface renders its last stretch as quiet microcopy;
+    /// the PRIMARY finishing signal is the orb itself calming as the level drains.
     @State private var silenceDeadline: Date?
-    /// The small mic capsule and the listening hero share this morph.
-    @Namespace private var voiceMorph
-    /// The one object the whole arc transforms through: field → orb → composition.
+    /// The one object the whole arc transforms through: orb ↔ field → orb → composition.
     @Namespace private var rambleMorph
     static let rambleMorphID = "ramble"
     /// Set when the orb has been holding long enough that silence would read as stuck.
     @State private var showReassurance = false
+    /// "Getting the mic ready…" — shown only when the warm-up runs LONG. The label's
+    /// absence is the point: `.preparing` should be a barely perceptible beat, and
+    /// announcing states is what makes the orb feel less magical.
+    @State private var showPreparingLabel = false
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var focused: Bool
 
     init(resuming: Capture? = nil) {
         self.resuming = resuming
+        _phase = State(initialValue: Self.initialPhase(resuming: resuming))
+    }
+
+    /// The first phase, decided synchronously before the first body pass so neither
+    /// surface ever flashes for a frame: fresh + mic permitted → the sheet opens INTO
+    /// listening; a resumed capture lands on the canvas with its words; a denied mic
+    /// falls through to typing immediately (Settings stays secondary, beside the field).
+    static func initialPhase(resuming: Capture?) -> RamblePhase {
+        guard resuming == nil else { return .capture }
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-HoldListening") || args.contains("-DriveListeningLevel") {
+            return .listening
+        }
+        #endif
+        return AVAudioApplication.shared.recordPermission == .denied ? .capture : .listening
     }
 
     var body: some View {
@@ -177,7 +212,12 @@ struct ComposerView: View {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 switch phase {
                 case .capture: captureSurface
-                case .understanding: understandingSurface
+                // ONE branch for both orb tenures, deliberately: a second `case` calling
+                // the same builder would be a second `ConditionalContent` arm — the orb's
+                // `@State` clock resets at the listening → thinking swap, the mesh
+                // re-phases, and matchedGeometry animates a spurious orb→orb morph. The
+                // swap must be a parameter change, never an identity change.
+                case .listening, .understanding: orbSurface
                 case .confirm: confirmSurface
                 case .created(let count): createdSurface(count)
                 }
@@ -210,9 +250,12 @@ struct ComposerView: View {
                     // capture resumes later untouched — so "Close" is honest and Discard
                     // no longer sits in the spot the thumb goes to by habit.
                     switch phase {
-                    case .capture where text.isEmpty:
+                    case .capture where text.isEmpty, .listening where text.isEmpty:
                         Button("Cancel") { dismiss() }
-                    case .capture:
+                    case .capture, .listening:
+                        // The transcript mirrors into `text` live even though the orb
+                        // surface never shows it, so this label upgrades honestly the
+                        // moment there are words to keep — and leaving parks them.
                         Button("Close") { dismiss() }
                     case .understanding, .confirm:
                         Button("Back") { backToCapture() }
@@ -229,15 +272,21 @@ struct ComposerView: View {
                 }
             }
             .onAppear {
-                // Deliberately NOT focused. Opening a canvas whose instruction is "dump it
-                // all here" by slamming up a keyboard makes the typed path the only one
-                // that feels intended, on the surface whose flagship input is speech. The
-                // whole canvas is a tap target for the keyboard when it's wanted; a
-                // RESUMED capture is the exception, because there the user is returning to
-                // words already in progress.
-                focused = resuming != nil
                 refreshRosterCaches()
                 restoreIfResuming()
+                if phase == .listening {
+                    // Fresh open, mic permitted (decided in `init`): the sheet opens
+                    // INTO listening. Opening capture is opening a listening
+                    // intelligence, and the keyboard never appears uninvited.
+                    beginListening(from: "")
+                } else {
+                    // The canvas is now always a DELIBERATE landing — a resumed capture
+                    // (returning to words in progress) or the mic-denied fallthrough
+                    // (typing immediately available) — so the keyboard comes up. The old
+                    // "never focus a fresh canvas" rule moved up a level: the fresh
+                    // entry is the orb.
+                    focused = true
+                }
                 // Verification seam: a resumed capture from `-OpenCapture` submits itself
                 // so the understanding/reveal phases are screenshot-reachable headlessly
                 // (synthetic taps are blocked on this host). `-NoSubmit` stays on the
@@ -277,7 +326,9 @@ struct ComposerView: View {
                     Motion.withMotion(Motion.fade) { showReassurance = true }
                 }
             }
-            // Live transcript flows into the field: base text + everything heard so far.
+            // The live transcript flows into `text`: base + everything heard so far.
+            // INVISIBLE while the orb listens — reception, never interpretation — but
+            // always carried: park, the toolbar label, and the finish's fold all read it.
             .onChange(of: speech.transcript) { _, transcript in
                 // Only write when the value actually moves: starting the mic resets
                 // the transcript to empty, which used to re-assign the same text
@@ -285,8 +336,12 @@ struct ComposerView: View {
                 // single word had been spoken.
                 let next = dictationBase + transcript
                 if next != text { text = next }
-                if !transcript.isEmpty { usedDictation = true }
-                scheduleSilenceStop()
+                guard Self.shouldArmSilence(transcript: transcript) else { return }
+                usedDictation = true
+                // Armed ONLY here, on words — the system never finishes an empty
+                // capture (an open mic over silence just stays present), and once
+                // speech has occurred, silence is the user's likely completion signal.
+                scheduleSilenceFinish()
             }
             // Nothing happens here on purpose. During capture the user owns the
             // conversation and the AI stays quiet: no parse, no cards, no counts, no
@@ -301,21 +356,59 @@ struct ComposerView: View {
                 }
             }
             .onChange(of: speech.state) { _, state in
-                if state == .listening { scheduleSilenceStop() } else { silenceDeadline = nil }
                 // Voice and keyboard are one channel at a time: focus drops while the
-                // mic is live (a retained keyboard could still type into the field the
-                // transcript is about to rewrite) and returns when dictation ends, so
-                // the hand-off back to typing is seamless.
-                if speech.isActive {
-                    focused = false
-                } else if state == .idle {
+                // mic is live. The old implicit return (`.idle` → focused) is GONE —
+                // every keyboard raise is now a deliberate decision at a named entry
+                // into `.capture`, because an automatic flip is how the voice surface
+                // would keep summoning the keyboard it exists to replace.
+                if speech.isActive { focused = false }
+                // The lifecycle invariant — ONE rule for every failure: while the orb
+                // is listening, any non-user-initiated drop of speech activity (an
+                // interruption's stop, a denial, an engine failure, the simulator's
+                // missing transcriber) settles to the canvas with the words heard so
+                // far. Never a submit: a capture is only ever interpreted by an act the
+                // user witnessed — their silence after words, or their tap. The
+                // user-initiated finishes move `phase` before this observer runs, so
+                // the guard makes them no-ops here.
+                guard phase == .listening else { return }
+                switch state {
+                case .idle, .denied, .unavailable:
+                    parse.silenceTask?.cancel()
+                    parse.silenceTask = nil
+                    silenceDeadline = nil
+                    foldTranscript()
+                    Motion.withMotion(Motion.settle) { phase = .capture }
                     focused = true
+                case .preparing, .listening:
+                    break
                 }
             }
+            .onChange(of: scenePhase) { _, newScene in
+                // Backgrounded mid-listening: stop, fold, settle — and never submit. A
+                // suspended silence task must not fire a model call the user didn't
+                // witness when the app comes back. `phase` moves first so the state
+                // observer above treats the stop as already handled.
+                guard newScene == .background, phase == .listening else { return }
+                parse.silenceTask?.cancel()
+                parse.silenceTask = nil
+                silenceDeadline = nil
+                phase = .capture
+                speech.stop()
+                foldTranscript()
+            }
             .onDisappear {
+                let midListening = phase == .listening && speech.isActive
                 speech.stop()
                 parse.silenceTask?.cancel()
+                silenceDeadline = nil
                 parse.parseTask?.cancel()
+                parse.levelDriveTask?.cancel()
+                // Dismissed mid-listening: the `.onChange` transcript copy may never
+                // deliver during teardown, so fold explicitly — the park below must
+                // hold every word that was heard, and resume lands them VISIBLY in
+                // `.capture`, so the invisible transcript is always seen before it is
+                // ever interpreted.
+                if midListening { foldTranscript() }
                 // The backstop that makes this whole phase worth having: a swipe-down,
                 // a phone call, anything that tears the sheet down mid-thought leaves
                 // the raw text and every edited draft on disk.
@@ -344,14 +437,35 @@ struct ComposerView: View {
 
     /// Which stage of the arc is on screen. The whole point of the phase machine is the
     /// hard invariant: **at no point before confirmation may the user see an intermediate
-    /// AI interpretation presented as truth.** During `.capture` nothing is parsed at all;
+    /// AI interpretation presented as truth.** During `.listening` the mic owns the
+    /// screen and nothing is interpreted; during `.capture` nothing is parsed at all;
     /// during `.understanding` nothing is shown but the orb; `.confirm` renders one
     /// interpretation whose STRUCTURE never changes again.
     enum RamblePhase: Equatable {
+        case listening
         case capture
         case understanding
         case confirm
         case created(Int)
+    }
+
+    /// What finishing the listening tenure does with what it heard. Pure, so the finish
+    /// decision is testable without a mic.
+    enum FinishAction: Equatable {
+        case toCanvas
+        case submit
+    }
+
+    /// The system never finishes an empty capture: silence only becomes a completion
+    /// signal once speech has occurred, so the timer arms on words and never on state.
+    static func shouldArmSilence(transcript: String) -> Bool {
+        !transcript.isEmpty
+    }
+
+    /// "Said nothing, finished anyway" gets the canvas, not a "Nothing actionable"
+    /// reveal — that reveal answers a question about words, and there were none.
+    static func finishAction(trimmed: String) -> FinishAction {
+        trimmed.isEmpty ? .toCanvas : .submit
     }
 
     /// How long the ✓ receipt holds before the sheet closes.
@@ -371,7 +485,11 @@ struct ComposerView: View {
     /// (see `CaptureRoute`), not a claim that simple captures don't deserve intelligence —
     /// it is here because a model result that lands after the reveal is refused anyway, so
     /// spending the battery to generate one would buy nothing.
-    private func submit() {
+    ///
+    /// `fromVoice` is a PARAMETER, never derived from `usedDictation` — that flag is
+    /// sticky for the session (dictate → Type instead → edit → Ramble would wrongly buy
+    /// the thinking beat on a typed submit). Only `finishListening` passes true.
+    private func submit(fromVoice: Bool = false) {
         let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !captured.isEmpty else { return }
         focused = false
@@ -418,9 +536,35 @@ struct ComposerView: View {
             // is an assumption.
             ModelMetrics.shared.recordProvisionalPass(latencyMs: localMs)
             lastRun = run
-            interpretation.propose(local)
-            reveal()
-            parkIfUnfinished(force: true)
+            if fromVoice {
+                // A spoken capture earns the thinking beat even on the deterministic
+                // route: the voice surface IS the orb, and cards flashing up the frame
+                // after silence reads as "it didn't actually listen". Same-branch phase
+                // change — only the status word animates; the orb decays from its
+                // listening floor. The dwell runs inside `parse.parseTask`, so Back and
+                // Discard cancel it exactly like the cloud arm's parse.
+                understandingSince = .now
+                Motion.withMotion(Motion.heroSettle) { phase = .understanding }
+                parkIfUnfinished(force: true)
+                parse.parseTask?.cancel()
+                parse.parseTask = Task {
+                    await holdOrbToMinimumDwell()
+                    guard !Task.isCancelled else { return }
+                    parse.parseTask = nil
+                    if interpretation.propose(local) {
+                        reveal()
+                    } else {
+                        ModelMetrics.shared.recordRefusedProposal()
+                    }
+                    parkIfUnfinished(force: true)
+                }
+            } else {
+                // Typed structure reveals instantly — byte-identical to the pre-voice
+                // arc: the user drew the boundaries, and a beat here would be theatre.
+                interpretation.propose(local)
+                reveal()
+                parkIfUnfinished(force: true)
+            }
         case .cloud:
             // The orb holds the screen and the result is the reveal. Nothing here may
             // tell the user which rung is thinking — a "thinking in the cloud" state
@@ -662,7 +806,7 @@ struct ComposerView: View {
             // primary button on an empty canvas is a dead affordance occupying the spot
             // the live one should own.
             if canSubmit { rambleButton }
-            voiceOrMicRow
+            micRow
         }
         // Deliberately NOT animated. The empty and non-empty states are different
         // CONTAINERS (a stacked primary vs. a compact row), and asking SwiftUI to
@@ -709,10 +853,13 @@ struct ComposerView: View {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !readingImage
     }
 
-    /// UNDERSTANDING — one calm object. No spinner, no progress, no counts, no
-    /// candidate titles: the engine may revise its interpretation arbitrarily behind
-    /// this and the screen must not move.
-    @ViewBuilder private var understandingSurface: some View {
+    /// LISTENING / UNDERSTANDING — one calm object, two tenures. The orb owns the
+    /// screen; everything else is supporting cast, and the generous emptiness around it
+    /// is what makes it feel important. No spinner, no progress, no counts, no candidate
+    /// titles, no live transcript: while listening the orb shows RECEPTION (the mic
+    /// level as presence), and while understanding the engine may revise its
+    /// interpretation arbitrarily behind it — the screen must not move either way.
+    @ViewBuilder private var orbSurface: some View {
         // The orb is sized from the surface, not from itself: "owns the screen" is a
         // relationship to the device, not a number of points. `GeometryReader` gives a
         // CONCRETE size to work from — `maxHeight: .infinity` on this screen previously hung
@@ -724,22 +871,113 @@ struct ComposerView: View {
             )
             VStack(spacing: Spacing.lg) {
                 Spacer(minLength: 0)
-                RambleOrb(diameter: orbSize)
+                RambleOrb(diameter: orbSize, mode: orbMode)
                     .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
-                Text("Making sense of it")
-                    .font(.sectionHeader)
-                    .foregroundStyle(Palette.primaryText)
-                if showReassurance {
-                    Text("Still working — that was a big one.")
-                        .metadataStyle()
-                        .transition(.opacity)
-                }
+                    // Tappable, never button-shaped: no chrome, no press style — an
+                    // object that happens to finish the capture when touched. The
+                    // affordance is deliberately unexplained on screen (silence is the
+                    // primary finish; the tap is explicit control for those who find
+                    // it), but VoiceOver users are told, because for them it IS the
+                    // primary control. Every modifier below is unconditional so the
+                    // orb's view identity survives the tenure swap.
+                    .contentShape(Circle())
+                    .onTapGesture {
+                        if phase == .listening { finishListening() }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Done — make sense of it")
+                    .accessibilityHint("Dictation also finishes on its own after a pause")
+                    .accessibilityAction(.escape) {
+                        if phase == .listening { typeInstead() }
+                    }
+                    .accessibilityHidden(phase != .listening)
+                statusWord
+                auxLine
                 Spacer(minLength: 0)
+                if phase == .listening {
+                    typeInsteadButton.transition(.opacity)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Making sense of what you wrote")
+    }
+
+    /// Listening feeds the mic level in; every other tenure is the thinking gesture.
+    /// This mode is the ONLY thing that changes at the silence swap — the orb keeps its
+    /// view identity (one `switch` branch), so the contraction is a decay from the
+    /// listening floor, never a re-mount.
+    private var orbMode: RambleOrb.Mode {
+        phase == .listening ? .listening(speech.audioLevel) : .thinking
+    }
+
+    /// The status word is supporting cast: a plain in-place crossfade, no movement, no
+    /// scale — never an animated headline competing with the orb. The space keeps the
+    /// line's height reserved while `.preparing` stays unlabeled.
+    private var statusWord: some View {
+        Text(statusText.isEmpty ? " " : statusText)
+            .font(.sectionHeader)
+            .foregroundStyle(Palette.primaryText)
+            .contentTransition(.opacity)
+            .animation(Motion.fade, value: statusText)
+    }
+
+    private var statusText: String {
+        switch phase {
+        case .understanding: return "Making sense of it"
+        case .listening where speech.state == .preparing:
+            // A barely perceptible beat: no label unless the warm-up runs long —
+            // announcing states is what makes the orb feel less magical.
+            return showPreparingLabel ? "Getting the mic ready…" : ""
+        case .listening: return "Listening"
+        default: return ""
+        }
+    }
+
+    /// One auxiliary slot under the status word — reassurance in both tenures, always
+    /// the metadata register, never the primary signal.
+    @ViewBuilder private var auxLine: some View {
+        if phase == .listening {
+            listeningCountdown
+        } else if showReassurance {
+            Text("Still working — that was a big one.")
+                .metadataStyle()
+                .transition(.opacity)
+        }
+    }
+
+    /// The silence window's visible tail. Muted microcopy only — the PRIMARY finishing
+    /// signal is the orb itself calming as the level envelope drains; a ring or a
+    /// countdown from the start would put a timer on thinking out loud, which is the
+    /// opposite of a ramble.
+    @ViewBuilder private var listeningCountdown: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
+            let remaining = silenceDeadline.map { $0.timeIntervalSince(timeline.date) } ?? 0
+            Text("Finishing up — keep talking to continue.")
+                .metadataStyle()
+                .opacity(remaining > 0 && remaining <= Self.countdownVisibleSeconds ? 1 : 0)
+                .animation(Motion.fade, value: remaining <= Self.countdownVisibleSeconds)
+        }
+        .frame(height: Spacing.md)
+    }
+
+    /// The microcopy appears only for the tail of the silence window.
+    static let countdownVisibleSeconds: TimeInterval = 2
+
+    /// The deliberately boring escape hatch: plain muted text, no chrome, under all
+    /// that presence — subordinate by design, never hidden.
+    private var typeInsteadButton: some View {
+        Button {
+            typeInstead()
+        } label: {
+            Text("Type instead")
+                .font(.controlLabel)
+                .foregroundStyle(Palette.mutedText)
+                .frame(minHeight: LayoutMetrics.hitTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressableLink)
+        .accessibilityHint("Put the keyboard up — anything you said comes along")
     }
 
     /// REVEAL / CONFIRM — the answer, as one composition. Tasks own the viewport.
@@ -838,22 +1076,6 @@ struct ComposerView: View {
         Spacer(minLength: 0)
     }
 
-    /// The voice hero / mic row, unchanged in behavior — capture keeps both input modes.
-    @ViewBuilder private var voiceOrMicRow: some View {
-        if speech.isActive {
-            VoiceHeroBar(
-                monitor: speech.audioLevel,
-                silenceDeadline: silenceDeadline,
-                silenceWindow: Self.silenceStopSeconds,
-                onStop: { toggleDictation() }
-            )
-            .matchedGeometryEffect(id: "voice", in: voiceMorph)
-        } else {
-            micRow
-                .matchedGeometryEffect(id: "voice", in: voiceMorph)
-        }
-    }
-
     /// Speak the settled interpretation, once, at the reveal.
     ///
     /// **The arrival is the whole emotional beat of the arc**, and it was silent to a
@@ -949,6 +1171,9 @@ struct ComposerView: View {
 
     private func discard() {
         speech.stop()
+        parse.silenceTask?.cancel()
+        parse.silenceTask = nil
+        silenceDeadline = nil
         parse.parseTask?.cancel()
         parse.parseTask = nil
         // Discard is the one destructive path — the photo goes with the thought.
@@ -1015,15 +1240,15 @@ struct ComposerView: View {
                             lineWidth: fieldIsLive ? 1.5 : 0
                         )
                 }
-                // Soft glow while the model is thinking — and while the mic is hot:
-                // the field is where the words land, so it participates in listening.
+                // Soft glow while the model is thinking. (The mic is never hot on the
+                // canvas any more — listening owns its own surface, the orb.)
                 .shadow(
                     color: fieldIsLive ? Palette.accentGlow : .clear,
                     radius: fieldIsLive ? 16 : 0
                 )
                 .animation(Motion.glowPulse.repeatWhileTrue(fieldIsLive), value: fieldIsLive)
 
-            if text.isEmpty && !speech.isActive {
+            if text.isEmpty {
                 Text(
                     "Renew passport, book dentist, figure out if I should quit the side project, call mom…"
                 )
@@ -1038,50 +1263,23 @@ struct ComposerView: View {
                 .allowsHitTesting(false)
             }
 
-            if speech.isActive {
-                // The live transcript, honest about what's settled: finalized words in
-                // primary, the in-flight hypothesis in muted — the field is already
-                // non-interactive while the mic owns it, so a read-only surface swap
-                // loses nothing and gains the two-tone truth. Same font and padding
-                // tokens as the editor so the crossfade holds its geometry.
-                ScrollView {
-                    Text(listeningTranscript)
-                        .font(.bodyInput)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 5)
-                }
-                .defaultScrollAnchor(.bottom)
-                .padding(Spacing.md)
-                .accessibilityLabel("Live transcript")
-            } else {
-                TextEditor(text: $text)
-                    .focused($focused)
-                    .font(.bodyInput)
-                    .foregroundStyle(Palette.primaryText)
-                    .scrollContentBackground(.hidden)
-                    .padding(Spacing.xs)
-                    // The field is the product's front door and it was unlabeled —
-                    // VoiceOver read only the (long, example-laden) placeholder.
-                    .accessibilityLabel("What's on your mind")
-                    .accessibilityHint(
-                        "Type or dictate anything. Tasks take shape below as you go.")
-            }
+            TextEditor(text: $text)
+                .focused($focused)
+                .font(.bodyInput)
+                .foregroundStyle(Palette.primaryText)
+                .scrollContentBackground(.hidden)
+                .padding(Spacing.xs)
+                // The field is the typed escape hatch and it was unlabeled —
+                // VoiceOver read only the (long, example-laden) placeholder.
+                .accessibilityLabel("What's on your mind")
+                .accessibilityHint("Type anything. It becomes tasks when you Ramble.")
         }
-        .animation(Motion.fade, value: speech.isActive)
     }
 
-    /// The field participates in both live states: the model reading, or the mic hot.
-    private var fieldIsLive: Bool { brain.isProcessing || speech.state == .listening }
-
-    /// Settled words (typed base + finalized speech) in primary; the in-flight
-    /// hypothesis in muted — visually honest about what may still be revised.
-    private var listeningTranscript: AttributedString {
-        var settled = AttributedString(dictationBase + speech.finalizedText)
-        settled.foregroundColor = Palette.primaryText
-        var volatile = AttributedString(speech.volatileText)
-        volatile.foregroundColor = Palette.mutedText
-        return settled + volatile
-    }
+    /// The field glows while the model reads. (The speech term is gone: the mic never
+    /// runs while the canvas is showing, which is what made deleting the two-tone
+    /// transcript safe.)
+    private var fieldIsLive: Bool { brain.isProcessing }
 
     // MARK: - Dictation
 
@@ -1192,24 +1390,28 @@ struct ComposerView: View {
     }
 
     private var micButton: some View {
-        let listening = speech.state == .listening
-        let active = speech.isActive
         // Primary on an empty canvas: full width, CTA height, and it says "Speak" rather
         // than "Speak instead" — "instead" framed the product's flagship input as the
-        // alternative to the keyboard it was sitting under.
-        let prominent = !canSubmit && !active
+        // alternative to the keyboard it was sitting under. (The active states are gone:
+        // the mic never runs while the canvas is showing — Speak returns to the orb.)
+        // A mic that CANNOT lead demotes to the compact form: a disabled primary on an
+        // empty canvas is a dead affordance occupying the spot the live one should own,
+        // and on the no-voice canvas the live one is the keyboard, already up.
+        let prominent = !canSubmit && micUsable
         return Button {
-            toggleDictation()
+            let base = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            beginListening(from: base.isEmpty ? "" : base + " ")
         } label: {
-            Label(active ? "Listening…" : (prominent ? "Speak" : "Speak instead"), systemImage: "mic.fill")
+            // The label keys off the CANVAS (empty → "Speak"), not off prominence: a
+            // demoted-but-dead mic on an empty canvas still shouldn't say "instead"
+            // when there is nothing yet to do instead OF.
+            Label(canSubmit ? "Speak instead" : "Speak", systemImage: "mic.fill")
                 .font(prominent ? .ctaLabel : .controlLabel)
-                .foregroundStyle(micTint)
+                .foregroundStyle(micUsable ? Palette.primaryText : Palette.mutedText)
                 .padding(.horizontal, Spacing.md)
                 .frame(maxWidth: prominent ? .infinity : nil)
                 .frame(height: prominent ? 52 : 40)
-                .background(active ? Palette.accentSoft : Palette.secondarySurface, in: Capsule())
-                .shadow(color: active ? Palette.accentGlow : .clear, radius: active ? 12 : 0)
-                .symbolEffect(.variableColor, options: .repeating, isActive: listening && !reduceMotion)
+                .background(Palette.secondarySurface, in: Capsule())
                 // Visual capsule stays 40pt; the TOUCHABLE region meets the HIG
                 // minimum — this is the flagship input mode's primary control,
                 // tapped at arm's length while multitasking.
@@ -1217,36 +1419,28 @@ struct ComposerView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
-        .animation(Motion.glowPulse.repeatWhileTrue(active), value: speech.state)
-        .disabled(isMicDisabled)
-        .accessibilityLabel(active ? "Stop dictation" : "Dictate")
+        .disabled(!micUsable)
+        .accessibilityLabel("Dictate")
     }
 
-    private var micTint: Color {
-        switch speech.state {
-        case .listening, .preparing: return Palette.accentFlat
-        case .unavailable: return Palette.mutedText
-        default: return Palette.primaryText
-        }
+    /// Whether Speak can lead anywhere. Denied is knowable BEFORE any attempt
+    /// (`AVAudioApplication`), so the canvas can disable the button and show the
+    /// Settings hint at entry rather than mounting an orb that bounces straight back.
+    private var micUsable: Bool {
+        if case .unavailable = speech.state { return false }
+        if speech.state == .denied { return false }
+        return AVAudioApplication.shared.recordPermission != .denied
     }
 
-    private var isMicDisabled: Bool {
-        if case .unavailable = speech.state { return true }
-        return false
-    }
-
+    /// Why the mic can't lead, when it can't — denied (Settings SECONDARY; typing is
+    /// already available right here) or unavailable. The listening states themselves
+    /// live on the orb surface now; the canvas never hosts a hot mic.
     @ViewBuilder private var dictationHint: some View {
-        switch speech.state {
-        case .preparing:
-            Text("Getting the mic ready…")
+        if case .unavailable(let message) = speech.state {
+            Text(message)
                 .metadataStyle()
                 .transition(.opacity)
-        case .listening:
-            Text("Listening — pause to finish, or tap stop to edit by hand.")
-                .font(.metadata)
-                .foregroundStyle(Palette.accentFlat)
-                .transition(.opacity)
-        case .denied:
+        } else if !micUsable {
             HStack(spacing: Spacing.xs) {
                 Text("Microphone access is off.")
                     .metadataStyle()
@@ -1256,47 +1450,132 @@ struct ComposerView: View {
                     .buttonStyle(.pressableLink)
             }
             .transition(.opacity)
-        case .unavailable(let message):
-            Text(message)
-                .metadataStyle()
-                .transition(.opacity)
-        default:
-            EmptyView()
         }
     }
 
-    private func toggleDictation() {
-        if speech.isActive {
-            parse.silenceTask?.cancel()
-            speech.stop()
-        } else {
-            // Append live transcript after existing text, with a separating space.
-            let base = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            dictationBase = base.isEmpty ? "" : base + " "
-            Task { await speech.start() }
+    // MARK: - Listening
+
+    /// Open the mic INTO the orb. `base` is what the transcript appends after — empty
+    /// on the fresh open, the canvas's words plus a separating space when Speak
+    /// re-enters from typing (the field → orb morph comes free from the matched pair).
+    private func beginListening(from base: String) {
+        dictationBase = base
+        focused = false
+        showPreparingLabel = false
+        Motion.withMotion(Motion.settle) { phase = .listening }
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-DriveListeningLevel") {
+            driveCannedLevel()
+            return
+        }
+        if args.contains("-HoldListening") { return }
+        #endif
+        Task {
+            try? await Task.sleep(for: .seconds(Self.preparingLabelAfterSeconds))
+            guard phase == .listening, speech.state == .preparing else { return }
+            Motion.withMotion(Motion.fade) { showPreparingLabel = true }
+        }
+        Task { await speech.start() }
+    }
+
+    /// The escape hatch's action, and the orb's accessibility escape: keep whatever was
+    /// said, put the keyboard up.
+    private func typeInstead() {
+        parse.silenceTask?.cancel()
+        parse.silenceTask = nil
+        silenceDeadline = nil
+        speech.stop()
+        foldTranscript()
+        Motion.withMotion(Motion.settle) { phase = .capture }
+        focused = true
+    }
+
+    /// Silence's completion signal, and the orb tap's. Idempotent by construction: the
+    /// timer and a tap can land on the same beat, and the second caller finds the mic
+    /// already stopped and bails on the guard.
+    private func finishListening() {
+        guard phase == .listening, speech.state == .listening else { return }
+        // Cancel FIRST: the tap/timer race must not double-finish, and a submit below
+        // must not leave a live timer behind the understanding beat.
+        parse.silenceTask?.cancel()
+        parse.silenceTask = nil
+        silenceDeadline = nil
+        speech.stop()
+        foldTranscript()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch Self.finishAction(trimmed: trimmed) {
+        case .toCanvas:
+            Motion.withMotion(Motion.settle) { phase = .capture }
+            focused = true
+        case .submit:
+            submit(fromVoice: true)
         }
     }
 
-    /// How long a transcript silence runs before dictation stops itself. Generous on
-    /// purpose: the product's core scenario is a RAMBLE — an overloaded person thinking
-    /// out loud — and thinking pauses routinely pass 2.5s, which is where the old
-    /// window sat; it cut people off mid-thought and the tail of the ramble was gone.
+    /// Pull what the mic heard into `text` explicitly. The live `.onChange` mirror
+    /// usually keeps them equal, but a delta arriving during teardown may never
+    /// deliver — and everything downstream (park, submit, the toolbar label) reads
+    /// `text`. Callers gate on the listening tenure, so a stale transcript from an
+    /// earlier dictation can never overwrite typed edits.
+    private func foldTranscript() {
+        guard !speech.transcript.isEmpty else { return }
+        let folded = dictationBase + speech.transcript
+        if folded != text { text = folded }
+    }
+
+    /// How long a transcript silence runs before the capture finishes itself. Generous
+    /// on purpose: the product's core scenario is a RAMBLE — an overloaded person
+    /// thinking out loud — and thinking pauses routinely pass 2.5s, which is where the
+    /// old window sat; it cut people off mid-thought and the tail of the ramble was
+    /// gone. A DELIBERATE fixed five seconds: deterministic and understandable beats
+    /// adaptive — make it energy-aware only if real usage shows cut-offs.
     private static let silenceStopSeconds: Double = 5
 
-    /// Auto-stop after a stretch of no new transcript, so the user doesn't have to.
-    /// ONE cancellable handle, cancel-and-replace per delta — the old shape spawned an
-    /// uncancelled sleeping Task per transcript tick, unbounded by design. The
-    /// deadline is published so the hero bar can make the last stretch VISIBLE —
-    /// the silent cut-off was the old design's worst dictation sin.
-    private func scheduleSilenceStop() {
+    /// "Getting the mic ready…" appears only past this — the same progressive
+    /// disclosure as the 8s reassurance line.
+    private static let preparingLabelAfterSeconds: TimeInterval = 2
+
+    /// Arm (or re-arm) the silence finish. ONE cancellable handle, cancel-and-replace
+    /// per transcript delta — the old shape spawned an uncancelled sleeping Task per
+    /// tick, unbounded by design. The deadline is published so the orb surface can show
+    /// the window's visible tail as quiet microcopy.
+    private func scheduleSilenceFinish() {
         parse.silenceTask?.cancel()
         silenceDeadline = Date().addingTimeInterval(Self.silenceStopSeconds)
         parse.silenceTask = Task {
             try? await Task.sleep(for: .seconds(Self.silenceStopSeconds))
-            guard !Task.isCancelled, speech.state == .listening else { return }
-            speech.stop()
+            guard !Task.isCancelled, phase == .listening, speech.state == .listening
+            else { return }
+            finishListening()
         }
     }
+
+    #if DEBUG
+    /// `-DriveListeningLevel`: feed the level monitor a canned reception-test envelope
+    /// (silence → whisper → conversational → emphatic → pause) at buffer cadence, so
+    /// the audio-reactive orb is verifiable headlessly — a screen recording of this run
+    /// is the reception test's input. Implies the `-HoldListening` hold (no real mic).
+    private func driveCannedLevel() {
+        parse.levelDriveTask?.cancel()
+        parse.levelDriveTask = Task {
+            let envelope: [Double] = [
+                0, 0, 0, 0.02, 0.03, 0.02, 0,
+                0.10, 0.14, 0.12, 0.16, 0.11, 0.13,
+                0.30, 0.42, 0.38, 0.45, 0.35, 0.40,
+                0.62, 0.75, 0.68, 0.80, 0.70, 0.66,
+                0.20, 0.08, 0.02, 0, 0, 0, 0,
+            ]
+            while !Task.isCancelled {
+                for raw in envelope {
+                    guard !Task.isCancelled else { return }
+                    speech.audioLevel.ingest(rawLevel: raw)
+                    try? await Task.sleep(for: .milliseconds(85))
+                }
+            }
+        }
+    }
+    #endif
 
     private func openSettings() {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
@@ -1316,9 +1595,11 @@ final class LiveParseState {
     var cachedRules: [LearnedRule]?
     /// The last park write, so the durable row is updated rather than duplicated.
     var lastParkAt: Date?
-    /// The single silence-timeout in flight; cancelled and replaced on every
-    /// transcript delta, cancelled outright on stop/disappear.
+    /// The single silence-finish in flight; cancelled and replaced on every
+    /// transcript delta, cancelled outright on finish/escape/disappear.
     var silenceTask: Task<Void, Never>?
+    /// DEBUG `-DriveListeningLevel` only: the canned-envelope feeder.
+    var levelDriveTask: Task<Void, Never>?
 }
 
 #Preview {

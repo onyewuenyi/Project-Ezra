@@ -56,7 +56,10 @@ Append to the `simctl launch` line:
 - `-SeedSampleData` — populate real tasks via the AI engine and skip onboarding (the sim uses the heuristic engine; Foundation Models isn't available there).
 - `-SeedFlowFixtures` — populate deterministic fixture data covering every core user flow except onboarding (Daily Brief, Needs Decision Resolution, Weekly Retro, Dependency Chain Resurfacing), bypassing the AI engine so results are exact and identical every run. See `docs/mock-data-user-flows.md` for what each fixture produces.
 - `-InitialTab N` — start on tab N: `0` Brief, `1` Tasks. (The Inbox and Household tabs were cut in the v2 collapse; the Activity screen is reachable with `-OpenActivity`.)
-- `-OpenCapture ["text"]` — present the capture composer at launch; with a text argument it parks + resumes that text, driving the live parse loop so the results are screenshot-observable.
+- `-OpenCapture ["text"]` — present the capture composer at launch; with a text argument it parks + resumes that text and auto-submits (add `-NoSubmit` to hold the canvas). A BARE `-OpenCapture` lands on the listening orb — or the typed canvas wherever the mic can't lead, which on the sim (no SpeechTranscriber) proves the degrade chain for free.
+- `-HoldListening` — hold the Ramble arc on the Listening beat without starting the mic, so the listening surface is screenshot-reachable. Pair with a bare `-OpenCapture`.
+- `-DriveListeningLevel` — `-HoldListening` plus a canned reception-test envelope (silence → whisper → conversational → emphatic → pause) fed to the level monitor: record video of this run to judge the audio-reactive orb with no microphone.
+- `-HoldUnderstanding` — hold the arc on the thinking orb instead of parsing. Pair with `-OpenCapture "text"`.
 
 Example — land on the seeded Tasks surface:
 ```bash
