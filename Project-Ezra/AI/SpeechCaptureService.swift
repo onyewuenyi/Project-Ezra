@@ -98,11 +98,21 @@ final class SpeechCaptureService {
             state = .listening
         } catch {
             teardownAudio()
+            // The calm copy is for the user; the REAL error must never be discarded —
+            // this catch swallowed an AVFoundation NSError on the first device run and
+            // the only symptom was the generic sentence, which diagnoses nothing.
+            #if DEBUG
+            print("SpeechCapture: \(setupStage) failed — \(error)")
+            #endif
             let message =
                 (error as? LocalizedError)?.errorDescription ?? "Voice capture isn't available here."
             state = .unavailable(message)
         }
     }
+
+    /// Which `beginTranscribing` stage was in flight when a throw escaped — DEBUG
+    /// diagnosis only, never user-facing.
+    private var setupStage = "start"
 
     func stop() {
         teardownAudio()
@@ -129,6 +139,7 @@ final class SpeechCaptureService {
 
     private func beginTranscribing() async throws {
         let locale = Locale.current
+        setupStage = "transcriber"
         let transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
@@ -137,8 +148,10 @@ final class SpeechCaptureService {
         )
         self.transcriber = transcriber
 
+        setupStage = "assets"
         try await ensureModel(for: transcriber, locale: locale)
 
+        setupStage = "analyzer"
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         self.analyzer = analyzer
 
@@ -164,13 +177,22 @@ final class SpeechCaptureService {
             }
         }
 
+        setupStage = "analyzer-start"
         try await analyzer.start(inputSequence: inputSequence)
 
         // Audio session is activated only for the duration of listening.
+        // `.playAndRecord` + `.spokenAudio` is the pairing Apple's SpeechAnalyzer
+        // sample ships. `.record` + `.spokenAudio` was the first version here, and it
+        // is the sim-vs-hardware trap in miniature: `.spokenAudio` is a playback-family
+        // mode, the simulator's stub session accepted the pairing, and the first real
+        // device run threw out of `setCategory` — surfacing as the generic
+        // "isn't available here" because the NSError matched no typed arm.
+        setupStage = "audio-session"
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .spokenAudio)
+        try session.setCategory(.playAndRecord, mode: .spokenAudio)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
+        setupStage = "engine"
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
         let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat)
