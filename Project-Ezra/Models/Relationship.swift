@@ -33,6 +33,7 @@
 //
 
 import Foundation
+import OSLog
 
 struct Relationship: Codable, Hashable, Identifiable {
     enum Kind: String, Codable { case blocks, parent, related }
@@ -116,10 +117,19 @@ struct Relationship: Codable, Hashable, Identifiable {
         return nil
     }
 
+    /// One logger for this invariant — same rationale as
+    /// `NSManagedObjectContext.saveChanges()`: a violation must leave a trace in
+    /// every build, including the Release the device runs. `assertionFailure`
+    /// alone left the check DEBUG-only, so a bug that slipped a malformed edge
+    /// (a self-blocker, a duplicate) past the mutation choke point in Release
+    /// persisted `relationshipsData` silently — no crash, no log, nothing to
+    /// find later.
+    private static let log = Logger(subsystem: "com.projectezra.app", category: "relationships")
+
     static func validate(_ relationships: [Relationship], owner: UUID? = nil) {
-        if let violation = firstViolation(in: relationships, owner: owner) {
-            assertionFailure("Relationship invariant violated: \(violation)")
-        }
+        guard let violation = firstViolation(in: relationships, owner: owner) else { return }
+        log.error("Relationship invariant violated: \(violation, privacy: .public)")
+        assertionFailure("Relationship invariant violated: \(violation)")
     }
 }
 

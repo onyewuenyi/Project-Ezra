@@ -29,6 +29,16 @@ struct OnboardingView: View {
     @State private var foundNothing = false
     @FocusState private var focused: Bool
     @FocusState private var nameFocused: Bool
+    /// Set when `brain.commit`'s own save reports a dropped write — this is the
+    /// very first save a new install performs, with no back edge and no skip, so
+    /// silently proceeding to `onComplete()` would land a brand-new co-parent on
+    /// an empty app with their first ten tasks gone.
+    @State private var showSaveFailedAlert = false
+    /// Guards "Manage these for me" against a double-tap calling `brain.commit`
+    /// twice on the same drafts — each call mints a fresh `TaskItem` per draft, so
+    /// a second firing would duplicate the whole onboarding set, not just fail to
+    /// save it.
+    @State private var isCommitting = false
 
     private let sample = """
         renew my passport
@@ -57,6 +67,11 @@ struct OnboardingView: View {
         .sensoryFeedback(.success, trigger: phase == .result)
         .preferredColorScheme(.dark)
         .task { jumpToResultIfRequested() }
+        .alert("Couldn't save", isPresented: $showSaveFailedAlert) {
+            Button("Try Again") { retrySave() }
+        } message: {
+            Text("Your tasks didn't save. Check your storage and try again.")
+        }
     }
 
     /// `-OnboardingResult` jumps straight to the reveal with the sample dump parsed.
@@ -339,6 +354,7 @@ struct OnboardingView: View {
                         )
                 }
                 .buttonStyle(.pressableProminent)
+                .disabled(isCommitting)
             }
             .padding(Spacing.lg)
         }
@@ -451,12 +467,34 @@ struct OnboardingView: View {
     }
 
     private func commit() {
+        guard !isCommitting else { return }
+        isCommitting = true
         brain.commit(drafts, rawCapture: text, into: context)
         // The onboarding reveal ("here.s your mess, sorted") doubles as the
         // Confirm-Creation glance — the user saw the set and tapped through, and
         // `commit` is what brings the tasks into existence.
-        context.saveChanges()
+        finishCommit()
+    }
+
+    /// `commit` already saves internally — see `AppBrain.commit`. This checks
+    /// that save's own outcome (`saveFailed`) rather than proceeding regardless,
+    /// since this screen has no back edge: a dropped save here would otherwise
+    /// hand a brand-new user an empty app with no sign their tasks never landed.
+    private func finishCommit() {
+        guard brain.lastCommitSummary?.saveFailed != true else {
+            showSaveFailedAlert = true
+            return
+        }
         onComplete()
+    }
+
+    /// "Try Again" on the save-failed alert. `context.saveChanges()` never rolls
+    /// back on failure, so the drafts committed above are still pending — this
+    /// just asks the store to try the same write again.
+    private func retrySave() {
+        let saved = context.saveChanges()
+        brain.lastCommitSummary?.saveFailed = !saved
+        finishCommit()
     }
 }
 

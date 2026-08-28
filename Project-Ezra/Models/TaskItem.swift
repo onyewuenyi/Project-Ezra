@@ -655,19 +655,20 @@ final class TaskItem: NSManagedObject {
 // MARK: - Dependency graph (references, N blockers, cycle-safe)
 
 extension TaskItem {
-    /// The full graph-edge list. Reads decode the versioned blob; writes re-encode it
-    /// (DEBUG-validating the invariants). **Forbidden to assign outside `Models/`** —
-    /// every write must funnel through a `TaskMutations` helper (the mutation choke
-    /// point, the same law as the `status` setter).
+    /// The full graph-edge list. Reads decode the versioned blob; writes re-encode it,
+    /// validating the invariants in every build (`Relationship.validate` logs in
+    /// Release and additionally asserts in Debug — a violation must leave a trace
+    /// wherever it happens, not only on a developer's machine). **Forbidden to
+    /// assign outside `Models/`** — every write must funnel through a
+    /// `TaskMutations` helper (the mutation choke point, the same law as the
+    /// `status` setter).
     var relationships: [Relationship] {
         get {
             guard let relationshipsData else { return [] }
             return RelationshipStore.decode(relationshipsData)
         }
         set {
-            #if DEBUG
             Relationship.validate(newValue, owner: uuid)
-            #endif
             relationshipsData = RelationshipStore.encode(newValue)
         }
     }

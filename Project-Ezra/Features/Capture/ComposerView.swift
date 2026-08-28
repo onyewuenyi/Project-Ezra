@@ -165,6 +165,21 @@ struct ComposerView: View {
     /// than starting a second parked row for the same thought.
     private let resuming: Capture?
     @State private var showDiscardConfirm = false
+    /// Set when `brain.commit`'s own save reported a dropped write. The created
+    /// `TaskItem`s stay pending in the context either way (`saveChanges` never
+    /// rolls back), so "Try Again" is a real retry, not just an apology.
+    @State private var showSaveFailedAlert = false
+    @State private var pendingCreatedCount = 0
+    /// True from a failed commit until a retry succeeds. Disables "Create" —
+    /// `finishCommit`'s failure path leaves the just-committed `TaskItem`s
+    /// pending, unsaved, in `context`; a second tap would call `brain.commit`
+    /// again on the same drafts and insert a duplicate set alongside them.
+    @State private var commitPendingRetry = false
+    /// Set when a picked photo fails to load/decode — the one stage in
+    /// `ingestPhoto` with no fallback (a failed OCR still shows the thumbnail; this
+    /// is "nothing happened at all," which otherwise looks identical to a tap that
+    /// didn't register).
+    @State private var showPhotoImportFailedAlert = false
     /// The text the last COMPLETED parse ran against. Only when this matches what's in the
     /// field do we know an empty `drafts` means "the engine found nothing here" rather than
     /// Whether the last completed parse returned any candidates at all, before the
@@ -428,6 +443,19 @@ struct ComposerView: View {
                 Button("Keep it", role: .cancel) {}
             } message: {
                 Text("The text and everything parsed from it will be deleted.")
+            }
+            .alert("Couldn't save", isPresented: $showSaveFailedAlert) {
+                Button("Try Again") { retrySave() }
+                Button("Keep Editing", role: .cancel) {}
+            } message: {
+                Text(
+                    "Your tasks didn't save. Check your storage and try again — nothing you typed is lost."
+                )
+            }
+            .alert("Couldn't read that photo", isPresented: $showPhotoImportFailedAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Try picking it again, or type what it said instead.")
             }
         }
         .presentationDetents([.large])
@@ -1062,7 +1090,18 @@ struct ComposerView: View {
                     .background(Palette.accentGradient, in: Capsule())
             }
             .buttonStyle(.pressableProminent)
-            .disabled(interpretation.drafts.isEmpty)
+            .disabled(interpretation.drafts.isEmpty || hasBlankTitledDraft || commitPendingRetry)
+
+            // The one thing a card can't be missing — the title binding has no
+            // trim/empty guard (a user can select-all-delete it), so this is what
+            // stops a blank, hard-to-find row from ever reaching the store, rather
+            // than a guard buried in `createTasks()` that would silently drop the
+            // card the user is looking at.
+            if hasBlankTitledDraft {
+                Text("Give every task a title before creating.")
+                    .font(.supporting)
+                    .foregroundStyle(Palette.mutedText)
+            }
 
             // "Add another" was three plausible meanings and none of them right: it
             // adds nothing, it returns to the canvas with your words and drafts intact
@@ -1084,6 +1123,16 @@ struct ComposerView: View {
     private var createTitle: String {
         interpretation.drafts.count == 1
             ? "Create 1 task" : "Create \(interpretation.drafts.count) tasks"
+    }
+
+    /// `ConfirmCreationCard.titleBinding` has no trim/empty guard, so a card can
+    /// reach here with a blank title (select-all-delete). Blocking Create — rather
+    /// than silently excluding the card at commit — keeps every card the user sees
+    /// accounted for in what gets created.
+    private var hasBlankTitledDraft: Bool {
+        interpretation.drafts.contains {
+            $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     /// DONE — a short, satisfying receipt, then back to whatever the user was doing.
@@ -1223,11 +1272,29 @@ struct ComposerView: View {
         parse.parseTask?.cancel()
         parse.parseTask = nil
         let count = interpretation.drafts.count
-        committed += 1
         brain.commit(
             interpretation.drafts, rawCapture: text, source: captureSource,
             imageRef: capturedImageRef,
             parked: parked, telemetry: lastRun, into: context)
+        finishCommit(count: count)
+    }
+
+    /// Shared by the initial commit and a retried save. `context.saveChanges()`
+    /// deliberately never rolls back on failure — the created `TaskItem`s stay
+    /// pending in the context either way — so a failed commit isn't lost, only
+    /// unconfirmed: this checks `brain.lastCommitSummary`, and either plays the
+    /// real receipt or asks before the composer claims success it can't back up.
+    private func finishCommit(count: Int) {
+        guard brain.lastCommitSummary?.saveFailed != true else {
+            pendingCreatedCount = count
+            commitPendingRetry = true
+            showSaveFailedAlert = true
+            return
+        }
+        commitPendingRetry = false
+        // Success notification moved here (from the point of calling `commit`) so a
+        // dropped save never plays the success haptic right before the failure alert.
+        committed += 1
         // Clearing is REQUIRED, not tidiness: `.onDisappear` runs `parkIfUnfinished`,
         // and it keys off `drafts`/`text` — leaving them populated would park a phantom
         // duplicate of the capture just committed.
@@ -1245,6 +1312,15 @@ struct ComposerView: View {
             try? await Task.sleep(for: .seconds(Self.createdReceiptSeconds))
             dismiss()
         }
+    }
+
+    /// "Try Again" on the save-failed alert. The composer's own state (drafts,
+    /// text, the parked capture) was never cleared on failure, so this is a plain
+    /// retry of the same write rather than a re-parse or a second commit.
+    private func retrySave() {
+        let saved = context.saveChanges()
+        brain.lastCommitSummary?.saveFailed = !saved
+        finishCommit(count: pendingCreatedCount)
     }
 
     // MARK: - Field
@@ -1353,7 +1429,10 @@ struct ComposerView: View {
         defer { readingImage = false }
         guard let data = try? await item.loadTransferable(type: Data.self),
             let image = UIImage(data: data), let cgImage = image.cgImage
-        else { return }
+        else {
+            showPhotoImportFailedAlert = true
+            return
+        }
         if let previous = capturedImageRef { CaptureImageStore.delete(previous) }
         capturedImageRef = CaptureImageStore.save(data)
         capturedThumb = image
