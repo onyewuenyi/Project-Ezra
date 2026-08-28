@@ -7,9 +7,9 @@
 //  never inside the model; person references stay as names on the draft —
 //  `AppBrain.resolveOwners` is the roster half, since it needs the NSManagedObjectContext.
 //
-//  Every resolved draft proposes `.inbox`: creation always gets the one-tap
-//  Confirm-Creation glance, regardless of confidence (always-confirm). Confidence
-//  is recorded for quality review — it no longer routes anything at capture time.
+//  Drafts carry no lifecycle status — a draft is not a TaskItem. TaskItem is born
+//  `.todo` at AppBrain.commit, which is the single Confirm-Creation boundary.
+//  Confidence is recorded for quality review; it routes nothing at capture time.
 //
 
 import Foundation

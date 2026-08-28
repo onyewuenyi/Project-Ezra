@@ -96,14 +96,13 @@ enum Palette {
     // Attention hues — split out of `warning` so a single row never shows the same
     // color for three unrelated meanings (the Urgent mark, the In-Progress status
     // glyph, and an Overdue marker previously all rendered `warning`). One meaning,
-    // one token. The 6-state status vocabulary keeps amber for In-Progress; the two
-    // cross-axis meanings move off amber.
+    // one token.
     /// The user's Urgent priority signal (`SignalMarker`, the detail toggle, the
     /// confirm-card pill). Red — the hottest attention mark, distinct from status.
     static let priorityUrgent = Color(hex: "EF4444")
-    /// The `.inProgress` status-glyph tint. Amber — unchanged; the status vocabulary
-    /// stays Linear-authentic (half-filled amber). Tokenized so it's semantically
-    /// separate from Urgent/Overdue even though it shares amber's value.
+    /// The `.doing` status-glyph tint. Amber — Linear-authentic half-filled amber.
+    /// Tokenized so it's semantically separate from Urgent/Overdue even though it
+    /// shares amber's value.
     static let statusInProgress = Color(hex: "F59E0B")
     /// The overdue / past-due time-risk marker (Today rows, task cards). Orange —
     /// distinct from both Urgent-red and the amber status glyph.

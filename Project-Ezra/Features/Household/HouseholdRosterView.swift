@@ -9,8 +9,8 @@
 //  deliberately have no UI yet, because the best settings screens are almost empty.
 //
 //  Removing someone is a soft-delete, so a task they once owned keeps its
-//  attribution. Presented as a pushed destination inside HouseholdView's stack, so
-//  it carries no NavigationStack of its own.
+//  attribution. Reached from the Tasks "…" menu; carries no NavigationStack of
+//  its own (the presenting sheet owns navigation).
 //
 
 import PhotosUI

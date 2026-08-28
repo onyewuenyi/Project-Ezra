@@ -16,19 +16,18 @@ import CoreData
 import UIKit
 
 enum SampleFlowFixtures {
-    /// Populates the Today Recap/Docket, Needs Decision, stale/rotting work, and
-    /// Dependency Chain Resurfacing data in one call. Triage Inbox is exercised
-    /// live (type into the Composer) rather than seeded — see the doc. Onboarding
-    /// is bypassed by the caller, not seeded here.
+    /// Populates the Today Recap, Needs Decision, stale/rotting work, and
+    /// Dependency Chain Resurfacing data in one call. Capture is exercised live
+    /// (type into the Composer) rather than seeded. Onboarding is bypassed by
+    /// the caller, not seeded here.
     static func seed(into context: NSManagedObjectContext) {
         let now = Date()
         let day: TimeInterval = 24 * 3600
 
         // MARK: Flow 1 — Daily Brief
-        // BriefView takes the top 3 actionable (Ready/In Progress, unblocked, mine)
-        // tasks by (soonest due, then confidence desc); the rest count toward
-        // "heldCount". Four silent-filed Ready tasks here means at least one is always
-        // held back, so the footnote has something to report.
+        // The advisor selects and orders the day's actions from the candidate set;
+        // TaskRanking provides the cap. Four confirmed .todo tasks here means at
+        // least one is always held back, so the footnote has something to report.
         let dryCleaning = TaskItem(
             title: "Pick up dry cleaning", category: "Errands", status: .todo, confidence: 0.9,
             reasoning: "Filed under Errands from the wording.",
@@ -41,10 +40,9 @@ enum SampleFlowFixtures {
             title: "Renew car registration", category: "Car", status: .todo, confidence: 0.82,
             reasoning: "Filed under Car from the wording.",
             dueDate: now.addingTimeInterval(5 * day), createdAt: now, in: context)
-        // Confidence 0.7 is the suggest band (0.5..<0.8), so the AI didn't file it
-        // silently — it enters the Suggested lane awaiting the user's yes, where its
-        // card shows an "AI suggestion — Accept" affordance. High priority also
-        // demonstrates focusOrder once it's accepted: rank beats a sooner due date.
+        // All tasks are born confirmed at the single Confirm-Creation boundary.
+        // Confidence 0.7 is recorded for quality review; it no longer routes to a
+        // separate lane. Rank beats a sooner due date when urgent.
         let birthdayGift = TaskItem(
             title: "Buy birthday gift for Sam", category: "Personal", status: .todo,
             confidence: 0.7,
@@ -58,7 +56,7 @@ enum SampleFlowFixtures {
             context.insert(task)
             logSilentFiling(task, into: context)
         }
-        context.insert(birthdayGift)  // suggest tier — no trail entry until the user accepts it
+        context.insert(birthdayGift)
 
         // MARK: Flow 8 — Metadata (owner / priority / effort)
         // Overdue + urgent tops the daily brief (focusOrder puts overdue first);
