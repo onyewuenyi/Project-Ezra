@@ -64,6 +64,19 @@ struct TaskDetailView: View {
     @State private var kickoffWork: Task<Void, Never>?
     @State private var actionPulse = 0
     @State private var showAllActivity = false
+    /// Guards the primary CTA against a double-tap firing `performPrimary` twice
+    /// before the page reacts to the first one — `completeAndResurface` and its
+    /// siblings insert a ChangeLogEntry unconditionally on every call, so a second
+    /// firing produces a duplicate Activity row rather than a duplicate task.
+    @State private var isPerformingPrimary = false
+    /// Set when `context.saveChanges()` reports a dropped write after the primary
+    /// action — the button already animated success, so this is the one honest
+    /// way left to tell the user the mutation didn't actually land.
+    @State private var showSaveFailedAlert = false
+    /// The action and its resurfaced dependents, held across a failed save so
+    /// "Try Again" can finish the same action rather than re-running the mutation.
+    @State private var pendingPrimaryAction: RecommendedAction?
+    @State private var pendingUnblocked: [TaskItem] = []
     /// "Why this is here" + Activity, collapsed behind one quiet toggle. Provenance
     /// and history are inputs, not content the page must always show — every field
     /// stays one tap away, and the glance shows what is consequential.
@@ -308,6 +321,18 @@ struct TaskDetailView: View {
             Button("Cancel", role: .cancel) { newPersonName = "" }
         } message: {
             Text("Who is this task for?")
+        }
+        .alert("Couldn't save", isPresented: $showSaveFailedAlert) {
+            Button("Try Again") { retryPrimarySave() }
+            // Deliberately does NOT re-enable the primary button: the mutation is
+            // still pending on `task` (never rolled back), so a fresh tap would
+            // re-run `performRecommendedAction` and double-insert its ChangeLogEntry
+            // on top of the one already pending — exactly the duplicate this guard
+            // exists to prevent. "Try Again" is the only retry path from here; the
+            // page's own teardown save is the backstop if the user navigates away.
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your change didn't save. Check your storage and try again.")
         }
     }
 
@@ -1119,6 +1144,7 @@ struct TaskDetailView: View {
                     .background(Palette.accentGradient, in: Capsule())
             }
             .buttonStyle(.pressableProminent)
+            .disabled(isPerformingPrimary)
 
             // The kickoff line: the one concrete first move, under the button that just
             // relabeled — the moment of commitment is when activation energy is highest.
@@ -1159,12 +1185,33 @@ struct TaskDetailView: View {
     }
 
     private func performPrimary(_ action: RecommendedAction) {
+        // A dismissing action leaves this true deliberately — the page is going
+        // away, so there's no later tap to re-enable it for. A non-dismissing
+        // action (Start, Unblock, claim) resets it once the mutation lands, since
+        // the same button stays live and legitimately tappable again.
+        guard !isPerformingPrimary else { return }
+        isPerformingPrimary = true
         actionPulse += 1
         var unblocked: [TaskItem] = []
         Motion.withMotion(Motion.decide) {
             unblocked = task.performRecommendedAction(action, among: allTasks, in: context)
         }
-        context.saveChanges()
+        // A failed save must NOT proceed to `onResolved()` — that dismisses (or
+        // pages past) this task as if the resolution landed, and the alert would
+        // never be seen. `performRecommendedAction`'s mutation stays pending on
+        // `task` regardless (`saveChanges` never rolls back), so the retry below
+        // only needs to ask the store to save again, never to redo the mutation.
+        guard context.saveChanges() else {
+            pendingPrimaryAction = action
+            pendingUnblocked = unblocked
+            showSaveFailedAlert = true
+            return
+        }
+        finishPrimary(action, unblocked: unblocked)
+    }
+
+    /// The post-save half of `performPrimary`, shared with a successful retry.
+    private func finishPrimary(_ action: RecommendedAction, unblocked: [TaskItem]) {
         // The Start tap is the strongest "doing this now" signal in the app — the
         // moment the kickoff line earns its fetch. Deterministic trigger, model
         // content, silent fallback.
@@ -1174,7 +1221,18 @@ struct TaskDetailView: View {
         if action.dismissesDetail {
             offerUndo(verb: "Completed", unblocked: unblocked)
             onResolved()
+        } else {
+            isPerformingPrimary = false
         }
+    }
+
+    /// "Try Again" on the save-failed alert.
+    private func retryPrimarySave() {
+        guard let action = pendingPrimaryAction, context.saveChanges() else {
+            showSaveFailedAlert = true
+            return
+        }
+        finishPrimary(action, unblocked: pendingUnblocked)
     }
 
     /// Ask for the one concrete first move. Any non-success renders nothing — the

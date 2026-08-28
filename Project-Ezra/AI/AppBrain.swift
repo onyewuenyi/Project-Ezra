@@ -845,7 +845,11 @@ final class AppBrain {
         capture.parsedTaskIDs = created.compactMap(\.uuid) + mergeTargets.compactMap(\.uuid)
         stampAttention(creating, created: created, mergeTargets: mergeTargets, all: all, in: context)
 
-        context.saveChanges()
+        // The confirm boundary's own save. Its result decides whether the Create
+        // moment's receipt is honest — see `CommitSummary.saveFailed`: a dropped
+        // save here means the drafts are gone on next launch even though the
+        // composer already showed "N tasks added".
+        let saved = context.saveChanges()
         if !created.isEmpty { metrics.recordFirstPayoffIfNeeded() }
         // The confirm tap's own wall clock — the other half of "instant capture", and
         // the number that decides whether the remaining commit-path work (the
@@ -857,6 +861,7 @@ final class AppBrain {
             telemetry: telemetry, capture: capture, drafts: drafts, created: created,
             mergeTargets: mergeTargets, commitMs: commitMs, in: context)
         lastCommitSummary = CommitSummary(
+            saveFailed: !saved,
             created: created.count, mergedTitles: mergeTargets.map(\.title))
         return created
     }
@@ -1280,6 +1285,12 @@ final class AppBrain {
 /// one moment that most needs a receipt had none — a capture that silently produced
 /// nothing looked identical to one that produced five tasks.
 struct CommitSummary: Equatable {
+    /// True when the confirm boundary's own `context.saveChanges()` reported a
+    /// dropped write — the drafts became `TaskItem`s in memory but the store never
+    /// actually persisted them. The receipt ("N tasks added") is otherwise honest
+    /// by construction; this is what lets a caller tell the difference before it
+    /// shows the user a success it can't back up.
+    var saveFailed: Bool = false
     var created: Int
     var mergedTitles: [String]
 
