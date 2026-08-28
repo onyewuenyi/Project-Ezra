@@ -12,8 +12,8 @@
 //  a Linear-style long-press context menu (Done · Status · Urgent · Cancel) —
 //  the system lift-and-pop, no custom gesture.
 //
-//  The leading glyph is the six-state `StatusGlyphView` menu, so complete/cancel/
-//  re-stage is one tap from the row. The trailing avatar answers "whose is this?":
+//  The leading glyph is the four-state `StatusGlyphView` menu (.todo · .doing ·
+//  .done · .canceled), so complete/cancel/re-stage is one tap from the row. The trailing avatar answers "whose is this?":
 //  a person's avatar when it's someone else's, a dashed unassigned ring when it's
 //  shared/unowned, and nothing at all when it's mine.
 //
