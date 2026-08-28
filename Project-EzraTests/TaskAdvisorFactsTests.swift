@@ -141,6 +141,17 @@ struct TaskAdvisorFactsTests {
         #expect(facts.promptBlock.contains("Set aside 7 times in a row"))
     }
 
+    @Test("Future due date renders in the prompt block via precomputed daysUntilDue")
+    func futureDueDateInPromptBlock() {
+        let context = context()
+        let now = Date()
+        let task = TaskItem(title: "File taxes", status: .todo, in: context)
+        task.dueDate = now.addingTimeInterval(3 * 86_400)
+        let facts = TaskAdvisorFacts.make(task: task, among: [task], now: now)
+        #expect(facts.daysUntilDue == 3)
+        #expect(facts.promptBlock.contains("DUE: in 3 days"))
+    }
+
     @Test("workIntent rides the prompt as an INTERNAL line, never a user-facing fact")
     func workIntentIsInternal() {
         let context = context()
