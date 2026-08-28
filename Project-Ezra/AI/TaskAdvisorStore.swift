@@ -18,6 +18,12 @@
 //  harmless because nothing here outlives the launch.
 //
 
+// NOT a dead import: this store is `ObservableObject` with `@Published` (it was never
+// migrated to Observation), and both are Combine members — SwiftUI's re-export lets the
+// names resolve, but MemberImportVisibility requires the defining module for the
+// property-wrapper machinery. A dead-code audit removed this once (59621fb) and broke
+// the build; migrate the store to @Observable before touching this line again.
+import Combine
 import Foundation
 import SwiftUI
 
