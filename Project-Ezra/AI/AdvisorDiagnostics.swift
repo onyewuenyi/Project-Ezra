@@ -199,7 +199,7 @@ enum AdvisorDiagnostics {
             for _ in 0..<repeats {
                 let started = Date()
                 let outcome = await service.read(facts, rung: rung)
-                times.append(Int(Date().timeIntervalSince(started) * 1000))
+                let elapsed = Int(Date().timeIntervalSince(started) * 1000)
 
                 switch outcome {
                 case .success(let reading):
@@ -213,6 +213,7 @@ enum AdvisorDiagnostics {
                     if agreed { agreedCount += 1 }
                     moves.append(reading.move.rawValue + (abstained ? "" : "*"))
                     if observation.isEmpty { observation = reading.observation }
+                    times.append(elapsed)
                 case .unavailable:
                     // NOT a judgment — no model means nothing was judged, and counting
                     // it as disagreement made every model-less simulator run read as
@@ -223,12 +224,14 @@ enum AdvisorDiagnostics {
                 case .timedOut:
                     failure = "timed out — the salvage tripwire"
                     moves.append("timeout")
+                    times.append(elapsed)
                 case .cancelled:
                     failure = "cancelled"
                     skippedRuns += 1
                 case .failed(let label):
                     failure = "failed (\(label))"
                     moves.append("error")
+                    times.append(elapsed)
                 }
             }
             // A fixture none of whose runs produced a judgment is SKIPPED, not
