@@ -50,15 +50,17 @@ struct DataBoundary: Equatable {
                 never: "Your corrections and your history never leave this device.")
         }
         return DataBoundary(
-            // Rewritten 2026-08-22, and the rewrite is the honest half of a routing
-            // change. This used to read "…long, unstructured thoughts, mostly", which
-            // was true while a lexicon kept short single sentences local. Routing now
-            // keeps local exactly what the user punctuated themselves, so "mostly" had
-            // become a comfortable word for "usually not" — the everyday one-liner does
-            // go out. Say the common case first and name the exception precisely.
+            // Rewritten 2026-08-29, the honest half of the device-first routing change
+            // (its 08-22 predecessor said the reverse: only typed lists stayed local).
+            // Now every capture is read on the device first, and the raw words travel
+            // only when that instant read shows evidence it fell short — a big dump,
+            // one draft against many boundary signals, an unresolved time phrase,
+            // dropped content. Say the common case first and name the exception in the
+            // user's terms, never the mechanism's.
             capture:
-                "When you write a list, Ezra reads it here on your device. Anything else — "
-                + "a sentence, a paragraph, a brain dump — is understood in the cloud.",
+                "Ezra reads everything you capture here on your device first. Your words "
+                + "go to the cloud only when that quick reading doesn't look good enough — "
+                + "usually a big brain dump that needs a deeper read.",
             // The asymmetry that makes the first sentence acceptable: capture parsing
             // genuinely needs the verbatim words (there is no snapshot-shaped version of a
             // brain dump); judgment does not, and never gets them.

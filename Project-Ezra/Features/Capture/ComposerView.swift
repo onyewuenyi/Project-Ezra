@@ -199,6 +199,22 @@ struct ComposerView: View {
     @State private var showPreparingLabel = false
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var focused: Bool
+    /// Drives the listening surface's photo control. A bare `PhotosPicker` gives no
+    /// hook before it presents, and the mic must not stay hot behind it — so the
+    /// picker is presented imperatively, after the voice tenure has been ended.
+    @State private var showPhotoPicker = false
+    /// The text the current card set was read FROM. The confirm page now shows the
+    /// capture, editable, so "have the words moved since the answer?" is a real
+    /// question — and it is the only thing that earns a Re-read affordance.
+    @State private var parsedText = ""
+    /// Measured natural height of the confirm page's transcript box (see
+    /// `transcriptField`). `TextEditor` does not self-size, and a scroll view inside
+    /// the page's scroll view is worse than a box that grows.
+    @State private var transcriptHeight: CGFloat = 0
+    /// One line of `bodyInput`, measured the same way. The ceiling snaps DOWN to a whole
+    /// number of these — a box cut through the middle of a glyph reads as a rendering
+    /// fault, not as "there is more below this".
+    @State private var transcriptLineHeight: CGFloat = 0
 
     init(resuming: Capture? = nil) {
         self.resuming = resuming
@@ -252,7 +268,11 @@ struct ComposerView: View {
             // slide the buttons through it — and the bar (solid background) rides
             // above the keyboard, keeping Ramble reachable mid-typing.
             .safeAreaInset(edge: .bottom) {
-                if phase == .capture { captureBar }
+                switch phase {
+                case .capture: captureBar
+                case .confirm: confirmBar
+                default: EmptyView()
+                }
             }
             // Success notification — capture committed is a capstone moment.
             .sensoryFeedback(.success, trigger: committed)
@@ -279,8 +299,15 @@ struct ComposerView: View {
                         // surface never shows it, so this label upgrades honestly the
                         // moment there are words to keep — and leaving parks them.
                         Button("Close") { dismiss() }
-                    case .understanding, .confirm:
+                    case .understanding:
+                        // The one place Back still means something: it cancels a parse
+                        // in flight and returns the words to the canvas.
                         Button("Back") { backToCapture() }
+                    case .confirm:
+                        // The reveal page CARRIES the canvas now — the transcript is
+                        // right there, editable — so there is nothing to go back to.
+                        // Leaving parks the capture; nothing is lost.
+                        Button("Close") { dismiss() }
                     case .created:
                         EmptyView()
                     }
@@ -452,6 +479,15 @@ struct ComposerView: View {
                     "Your tasks didn't save. Check your storage and try again — nothing you typed is lost."
                 )
             }
+            // Presented imperatively so the listening surface's photo control can end
+            // the voice tenure BEFORE the picker appears — a `PhotosPicker` offers no
+            // hook between the tap and the sheet, and the mic must not stay hot behind
+            // it. The canvas's own `imageButton` is still a plain `PhotosPicker`; it has
+            // nothing to tear down.
+            .photosPicker(
+                isPresented: $showPhotoPicker, selection: $photoItem, matching: .images,
+                photoLibrary: .shared()
+            )
             .alert("Couldn't read that photo", isPresented: $showPhotoImportFailedAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -527,6 +563,9 @@ struct ComposerView: View {
     private func submit(fromVoice: Bool = false) {
         let captured = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !captured.isEmpty else { return }
+        // The baseline the confirm page's Re-read affordance is measured against: these
+        // are the exact words the card set about to appear was read from.
+        parsedText = captured
         focused = false
         speech.stop()
         submittedAt = Date()
@@ -534,9 +573,14 @@ struct ComposerView: View {
         let localStarted = Date()
         let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
         let localMs = Int(Date().timeIntervalSince(localStarted) * 1000)
-        // An empty local read can't be revealed, whatever the router said — fall through to
-        // the model rather than showing "nothing actionable" on a capture we never parsed.
-        let route: CaptureRoute = local.isEmpty ? .cloud : CaptureRoute.route(for: captured)
+        // Device-first, escalate on evidence (2026-08-29): the deterministic read above
+        // IS the default interpretation, and the capture transmits only when
+        // `CaptureEscalation` finds observable evidence it fell short — an empty read,
+        // a big dump, one draft against many boundary signals, an unresolved spoken
+        // detail, dropped content. Most captures reveal this read directly: instant,
+        // private, free. The check itself is microseconds of string work.
+        let decision = CaptureRoute.route(for: captured, localRead: local)
+        let route = decision.route
         structureSource = route.metricName
 
         // Verification seam: hold the Understanding beat so the orb can actually be looked
@@ -564,7 +608,7 @@ struct ComposerView: View {
             // to beat, and a baseline with no number can't be one. Measured p50: 3ms.
             var run = CaptureRunTelemetry.local(
                 segmentation: Segmentation.structure(of: captured).label,
-                cloudAvailable: CloudModel.isAvailable)
+                cloudAvailable: CloudModel.isReachable)
             run.parseMs = localMs
             // The local route's cost, recorded where it is actually paid. It is the
             // baseline the cloud arm is judged against, and a baseline nobody measures
@@ -610,7 +654,7 @@ struct ComposerView: View {
             understandingSince = .now
             Motion.withMotion(Motion.heroSettle) { phase = .understanding }
             parkIfUnfinished(force: true)
-            runParse(captured, route: route)
+            runParse(captured, route: route, escalation: decision.escalation)
         }
     }
 
@@ -634,7 +678,10 @@ struct ComposerView: View {
     /// once, at submit, and a second call to `CaptureRoute.route` here could disagree
     /// with the first if connectivity changed in between — the user would then be
     /// waiting behind an orb for an arm the router no longer believes in.
-    private func runParse(_ captured: String, route: CaptureRoute) {
+    private func runParse(
+        _ captured: String, route: CaptureRoute,
+        escalation: CaptureEscalationReason? = nil
+    ) {
         parse.parseTask?.cancel()
         parse.parseTask = Task {
             let roster = rosterSnapshot
@@ -653,7 +700,12 @@ struct ComposerView: View {
             guard !Task.isCancelled else { return }
             parse.parseTask = nil
             EmbeddingStore.persistFresh(openTasks: openTasks, in: context)
-            lastRun = result.telemetry
+            var receipt = result.telemetry
+            // Why this capture cost a cloud call — the router's evidence, stamped on
+            // the receipt so the escalation signals are tuned from provenance, not
+            // recollection.
+            receipt.escalationReason = escalation?.rawValue
+            lastRun = receipt
 
             // The model decides the structure; if it found nothing, the deterministic
             // read is the honest fallback rather than an empty screen.
@@ -825,13 +877,17 @@ struct ComposerView: View {
 
         imageChip
         composerField
-            // Generous, but BOUNDED. `maxHeight: .infinity` here hangs layout: the
-            // field's ZStack holds a TextEditor (itself scrollable and greedy) and,
-            // with no fixed ceiling, the pass doesn't settle — the composer never
-            // presents. A tall ceiling gets the canvas feel without asking the layout
-            // system to resolve a cycle; the Spacer below absorbs the slack on tall
-            // screens so the field never stretches to fill awkwardly.
-            .frame(minHeight: 200, maxHeight: 460)
+            // GROWS with the words, between a floor and a ceiling. Never
+            // `maxHeight: .infinity`: the field's ZStack holds a TextEditor (itself
+            // scrollable and greedy) and with no ceiling the layout pass doesn't settle —
+            // the composer never presents at all. The floor keeps an empty canvas
+            // inviting; the ceiling stops a long dump from pushing Ramble off screen,
+            // after which the editor scrolls internally. Before this the box was a fixed
+            // 200–460pt, so one typed line sat in a large empty rectangle with the
+            // keyboard up — the canvas read as unfinished rather than generous.
+            .frame(height: clampedCanvasHeight)
+            .animation(Motion.settle, value: clampedCanvasHeight)
+            .overlay { transcriptHeightOracle }
             .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
 
         Spacer(minLength: 0)
@@ -847,15 +903,18 @@ struct ComposerView: View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             dictationHint
                 .animation(Motion.fade, value: speech.state)
-            // Ramble appears only once there is something to ramble about. A disabled
-            // primary button on an empty canvas is a dead affordance occupying the
-            // spot the live one should own.
-            if canSubmit { rambleButton }
             HStack(spacing: Spacing.sm) {
-                micButton
+                micButton(canSubmit ? "Speak instead" : "Speak")
                 imageButton
                 Spacer(minLength: 0)
             }
+            // Ramble appears only once there is something to ramble about. A disabled
+            // primary button on an empty canvas is a dead affordance occupying the
+            // spot the live one should own. It sits LAST — nearest the thumb and the
+            // keyboard's top edge — because the secondary row above it was the half
+            // getting clipped when the keyboard came up, and the primary CTA is the
+            // one control in the bar that must never be.
+            if canSubmit { rambleButton }
         }
         // Deliberately NOT animated. The empty and non-empty states are different
         // CONTAINERS (a stacked primary vs. a compact row), and asking SwiftUI to
@@ -939,23 +998,114 @@ struct ComposerView: View {
                             typeInstead()
                         }
                     }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel("Done — make sense of it")
-                    .accessibilityHint("Dictation also finishes on its own after a pause")
-                    .accessibilityAction(.escape) {
-                        if phase == .listening { typeInstead() }
-                    }
-                    .accessibilityHidden(phase != .listening)
+                    // DECORATIVE to assistive technology, deliberately — and only since
+                    // the explicit controls below exist. The orb used to BE the finish
+                    // control, so it had to announce itself as a button; now Done, the
+                    // photo control and Type instead are real, labelled, reachable
+                    // targets, and a fourth unlabelled "Done" over the whole screen
+                    // would be a duplicate a VoiceOver user has to step past. Every
+                    // modifier here stays unconditional so the orb's view identity
+                    // survives the listening → thinking swap.
+                    .accessibilityHidden(true)
                 statusWord
                 auxLine
                 Spacer(minLength: 0)
-                if phase == .listening {
-                    typeInsteadButton.transition(.opacity)
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The controls are an OVERLAY, never members of the stack. The orb's
+            // diameter is derived from THIS surface's geometry, so anything occupying
+            // vertical room in the stack silently shrinks the hero — and the orb owning
+            // the screen is the whole point of the surface. Overlaid, the row floats in
+            // the orb's lower field and the orb is exactly the size it was.
+            .overlay(alignment: .bottom) {
+                if phase == .listening {
+                    listeningControls.transition(.opacity)
+                }
+            }
         }
+    }
+
+    /// The listening surface's three explicit controls — one for each direction out of
+    /// voice: a photo instead, done now, or the keyboard. They are the only chrome on
+    /// this screen and they sit at the very bottom, so the orb keeps the field above
+    /// them; the generous emptiness between the two is what makes the orb feel important
+    /// rather than parked on a toolbar.
+    ///
+    /// The orb stays tappable-to-finish underneath. That tap was always the explicit
+    /// control for whoever found it; this row is what makes it findable, and what makes
+    /// the other two exits reachable without leaving the surface first.
+    private var listeningControls: some View {
+        HStack(spacing: Spacing.md) {
+            circleControl("photo", label: "Add a photo instead") { photoInsteadOfListening() }
+            endVoiceButton
+            circleControl("keyboard", label: "Type instead") { typeInstead() }
+        }
+        .padding(.bottom, Spacing.xs)
+        .accessibilityElement(children: .contain)
+    }
+
+    /// A secondary control on the orb surface: icon only, solid, quiet. Never glass
+    /// (glass desaturates and there is nothing behind it here to refract) and never
+    /// text-bearing — a label at this size would compete with the one primary.
+    private func circleControl(
+        _ systemImage: String, label: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.glyphAction())
+                .foregroundStyle(Palette.secondaryText)
+                .frame(width: LayoutMetrics.hitTarget, height: LayoutMetrics.hitTarget)
+                .background(Palette.secondarySurface, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.pressableIcon)
+        .accessibilityLabel(label)
+    }
+
+    /// END VOICE — the deliberate handoff, made explicit. Silence still finishes a
+    /// capture on its own (that is the calm path, and the reason there is no "tap to
+    /// finish" copy on the orb), but waiting out five seconds when you already know you
+    /// are done is a wait with nothing in it. This wears the house primary-CTA treatment
+    /// for the same reason Ramble and Create do — it is the primary action of the screen
+    /// it is on, and one gradient capsule at the bottom edge does not compete with a
+    /// screen-filling orb.
+    private var endVoiceButton: some View {
+        Button {
+            // Identical to the orb's tap, including the dead-mic escape: a Done button
+            // over a warm-up that never arrived must not swallow the press.
+            if speech.state == .listening { finishListening() } else { typeInstead() }
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "checkmark")
+                Text("Done").font(.ctaLabel)
+            }
+            .foregroundStyle(Palette.onAccent)
+            .padding(.horizontal, Spacing.xl)
+            .frame(height: 52)
+            .background(Palette.accentGradient, in: Capsule())
+        }
+        .buttonStyle(.pressableProminent)
+        .accessibilityLabel("Done — make sense of it")
+        .accessibilityHint("Dictation also finishes on its own after a pause")
+    }
+
+    /// Photo, from the listening surface. A photo is a different input channel, and the
+    /// mic cannot stay hot behind a picker — so this ENDS the voice tenure exactly the
+    /// way Type instead does (words kept, nothing interpreted) and lands on the canvas
+    /// with the picker already open.
+    ///
+    /// `phase` moves FIRST, before the stop: the speech-state observer's lifecycle rule
+    /// treats any non-user drop as a fall-back-to-canvas *with the keyboard up*, and
+    /// this is a user-initiated exit toward a camera roll, not toward a cursor.
+    private func photoInsteadOfListening() {
+        parse.silenceTask?.cancel()
+        parse.silenceTask = nil
+        silenceDeadline = nil
+        Motion.withMotion(Motion.settle) { phase = .capture }
+        speech.stop()
+        foldTranscript()
+        focused = false
+        showPhotoPicker = true
     }
 
     /// Listening feeds the mic level in; every other tenure is the thinking gesture.
@@ -1019,50 +1169,49 @@ struct ComposerView: View {
     /// The microcopy appears only for the tail of the silence window.
     static let countdownVisibleSeconds: TimeInterval = 2
 
-    /// The deliberately boring escape hatch: plain muted text, no chrome, under all
-    /// that presence — subordinate by design, never hidden.
-    private var typeInsteadButton: some View {
-        Button {
-            typeInstead()
-        } label: {
-            Text("Type instead")
-                .font(.controlLabel)
-                .foregroundStyle(Palette.mutedText)
-                .frame(minHeight: LayoutMetrics.hitTarget)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressableLink)
-        .accessibilityHint("Put the keyboard up — anything you said comes along")
-    }
-
-    /// REVEAL / CONFIRM — the answer, as one composition. Tasks own the viewport.
+    /// REVEAL / CONFIRM — the answer AND the words it was read from, as ONE scrollable
+    /// page.
+    ///
+    /// The reveal used to show cards alone. That put the user in the position of judging
+    /// "did it understand me?" with the *me* half missing: the capture they had just
+    /// spoken was gone from the screen at exactly the moment it mattered most, and the
+    /// only route back to it ("Say more") looked like a Cancel. The transcript now leads
+    /// the page — editable, because it is their text — with the cards beneath it and the
+    /// whole surface scrolling as one thing.
+    ///
+    /// Nothing here breaks the reveal contract. The cards on screen are still final
+    /// against the SYSTEM (`Interpretation` refuses a late proposal); editing the
+    /// transcript is a user act, and only a user act unlocks a second reading, which is
+    /// precisely what `Re-read` does and why it appears only once the words have moved.
+    ///
+    /// The keyboard is never raised on arrival. This is a page you READ first; the
+    /// cursor comes up when the field is tapped and leaves on a scroll or a tap outside.
     @ViewBuilder private var confirmSurface: some View {
-        VStack(alignment: .leading, spacing: Spacing.xxs) {
-            Text(interpretation.drafts.isEmpty ? "Nothing actionable in that" : "Here's what I understood")
-                .screenTitleStyle()
-            if !interpretation.drafts.isEmpty {
-                Text(
-                    interpretation.drafts.count == 1
-                        ? "1 thing" : "\(interpretation.drafts.count) things"
-                )
-                .supportingStyle()
-            }
-        }
-        .padding(.top, Spacing.xs)
-        .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text(
+                        interpretation.drafts.isEmpty
+                            ? "Nothing actionable in that" : "Here's what I understood"
+                    )
+                    .screenTitleStyle()
+                    if !interpretation.drafts.isEmpty {
+                        Text(
+                            interpretation.drafts.count == 1
+                                ? "1 thing" : "\(interpretation.drafts.count) things"
+                        )
+                        .supportingStyle()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
 
-        if interpretation.drafts.isEmpty {
-            Text(Self.nothingFoundHint).supportingStyle()
-            Spacer(minLength: 0)
-        } else {
-            // The composition CENTERS in whatever room it has. Top-aligned, a one-card
-            // reveal put a small card under a headline and left the bottom half of the
-            // screen empty above the button — which reads as an empty state, not as an
-            // answer. The `GeometryReader`'s concrete height is what lets the content
-            // claim the full area and centre inside it; a bare `maxHeight: .infinity`
-            // here has nothing to resolve against and hangs the layout pass.
-            GeometryReader { proxy in
-                ScrollView {
+                transcriptField
+                addMoreRow
+
+                if interpretation.drafts.isEmpty {
+                    Text(Self.nothingFoundHint).supportingStyle()
+                } else {
                     ConfirmCreationList(
                         drafts: $interpretation.editableDrafts,
                         ownerOptions: ownerOptions,
@@ -1071,14 +1220,188 @@ struct ComposerView: View {
                         onRemove: { removedDrafts.record($0) },
                         revealedAt: revealedAt
                     )
-                    .padding(.top, Spacing.xxs)
-                    .frame(minHeight: proxy.size.height, alignment: .center)
                 }
-                .scrollBounceBehavior(.basedOnSize)
             }
+            .padding(.top, Spacing.xs)
+            .padding(.bottom, Spacing.md)
         }
+        // The keyboard is a guest on this page: it leaves the moment the user does
+        // anything else with the surface.
+        .scrollDismissesKeyboard(.interactively)
+        .scrollBounceBehavior(.basedOnSize)
+    }
 
-        VStack(spacing: Spacing.sm) {
+    /// The capture, as the user gave it, on the page where they judge what was made of
+    /// it. Auto-growing: `TextEditor` does not self-size, and a fixed box leaves a short
+    /// capture floating in emptiness while a long one needs a second scroll view inside
+    /// the page's own. Past `transcriptMaxHeight` it scrolls internally, which by then is
+    /// what the reader expects of a long transcript.
+    private var transcriptField: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
+                .fill(Palette.primarySurface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
+                        .strokeBorder(
+                            focused
+                                ? AnyShapeStyle(Palette.accentFlat) : AnyShapeStyle(Palette.border),
+                            lineWidth: focused ? 1.5 : 1
+                        )
+                }
+                .animation(Motion.fade, value: focused)
+
+            TextEditor(text: $text)
+                .focused($focused)
+                .font(.bodyInput)
+                .foregroundStyle(Palette.primaryText)
+                .scrollContentBackground(.hidden)
+                .padding(Spacing.sm)
+                .accessibilityLabel("What you said")
+                .accessibilityHint("Edit it, then Re-read to update the tasks.")
+        }
+        .frame(height: clampedTranscriptHeight)
+        .animation(Motion.settle, value: clampedTranscriptHeight)
+        .overlay { transcriptHeightOracle }
+    }
+
+    /// The measured natural height of the transcript, clamped to the page's budget.
+    private var clampedTranscriptHeight: CGFloat {
+        fieldHeight(min: Self.transcriptMinHeight, max: Self.transcriptMaxHeight)
+    }
+
+    /// Natural height for a growing field, between a floor and a ceiling. At the ceiling
+    /// the height snaps DOWN to a whole number of lines: the editor scrolls internally
+    /// from there, and a line sliced through the middle reads as clipping rather than as
+    /// an invitation to scroll.
+    private func fieldHeight(min minHeight: CGFloat, max maxHeight: CGFloat) -> CGFloat {
+        let chrome = Spacing.sm * 2 + Self.transcriptEditorInset
+        let natural = transcriptHeight + chrome
+        if natural <= maxHeight { return max(natural, minHeight) }
+        guard transcriptLineHeight > 0 else { return maxHeight }
+        let lines = max(1, ((maxHeight - chrome) / transcriptLineHeight).rounded(.down))
+        return chrome + lines * transcriptLineHeight
+    }
+
+    /// The height oracle: the same string, in the same font, at the same width — laid out
+    /// at its ideal height and never drawn. `fixedSize` is what makes it honest; without
+    /// it the measurement would be clamped by the very frame it exists to decide. The
+    /// second, one-glyph measurement is the line height the ceiling snaps to.
+    private var transcriptHeightOracle: some View {
+        GeometryReader { proxy in
+            let inner = proxy.size.width - Spacing.sm * 2 - Self.transcriptEditorHorizontalInset
+            ZStack(alignment: .topLeading) {
+                measuredHeight(of: text.isEmpty ? " " : text, width: inner) { transcriptHeight = $0 }
+                measuredHeight(of: "A", width: inner) { transcriptLineHeight = $0 }
+            }
+            .hidden()
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func measuredHeight(
+        of string: String, width: CGFloat, into report: @escaping (CGFloat) -> Void
+    ) -> some View {
+        Text(string)
+            .font(.bodyInput)
+            .frame(width: max(1, width), alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onChange(of: proxy.size.height, initial: true) { _, height in
+                            report(height)
+                        }
+                }
+            }
+    }
+
+    /// The canvas field's measured height, clamped to the canvas's own budget — a
+    /// taller floor than the confirm page's transcript (an empty canvas is an
+    /// invitation) and a taller ceiling (a long dump is what this surface is for).
+    private var clampedCanvasHeight: CGFloat {
+        fieldHeight(min: Self.canvasMinHeight, max: Self.canvasMaxHeight)
+    }
+    private static let canvasMinHeight: CGFloat = 160
+    private static let canvasMaxHeight: CGFloat = 420
+
+    /// A short capture must still read as a box, not a chip.
+    private static let transcriptMinHeight: CGFloat = 88
+    /// …and a long one must not push every card off the first screen.
+    private static let transcriptMaxHeight: CGFloat = 220
+    /// `TextEditor` adds its own text-container insets around the string; the oracle is a
+    /// plain `Text` and has to account for them on BOTH axes or the box measures short.
+    /// The horizontal one matters more than it looks: measuring 10pt too wide wraps one
+    /// line fewer than the editor will, and the field renders a line short of its own
+    /// content — which is what a clipped last line actually is.
+    private static let transcriptEditorInset: CGFloat = Spacing.md
+    private static let transcriptEditorHorizontalInset: CGFloat = 10
+
+    /// Adding to a revealed capture. The transcript above is editable, so this row
+    /// carries only the two channels a keyboard cannot reach — and `Re-read` appears
+    /// ONLY once the words have actually moved. A standing re-read button on an
+    /// untouched capture invites the user to audit an answer they were handed a second
+    /// ago, which is exactly the cognitive work the product exists to remove.
+    private var addMoreRow: some View {
+        HStack(spacing: Spacing.sm) {
+            // "Say more", never "Speak instead" — on this page the mic ADDS to a capture
+            // that has already been read, and the tasks below stay.
+            micButton("Say more")
+            imageButton
+            Spacer(minLength: 0)
+            if transcriptEdited { rereadButton.transition(.opacity) }
+        }
+        .animation(Motion.fade, value: transcriptEdited)
+    }
+
+    /// Have the words moved since the cards were read from them?
+    private var transcriptEdited: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines) != parsedText
+    }
+
+    private var rereadButton: some View {
+        Button {
+            reread()
+        } label: {
+            Label("Re-read", systemImage: "sparkle")
+                .font(.controlLabel)
+                .foregroundStyle(Palette.accentFlat)
+                .padding(.horizontal, Spacing.md)
+                .frame(height: 40)
+                .background(Palette.accentSoft, in: Capsule())
+                .frame(minHeight: LayoutMetrics.hitTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        .accessibilityHint("Read the edited text again and update the tasks")
+    }
+
+    /// The user changed their own words on the reveal page. That is exactly the event
+    /// `Interpretation.reopen` exists for — the system may speak again because the person
+    /// spoke again — so this is the documented RE-SUBMIT path, not a second parse of the
+    /// same capture: existing cards and any edits on them ride along through `merge`.
+    private func reread() {
+        parse.parseTask?.cancel()
+        parse.parseTask = nil
+        interpretation.reopen()
+        submit()
+    }
+
+    /// The confirm page's pinned CTA — the same `safeAreaInset` treatment the canvas
+    /// uses, for the same reason: in the content stack a keyboard transition relays the
+    /// button through the page, and as an inset it rides above the keyboard instead.
+    private var confirmBar: some View {
+        VStack(spacing: Spacing.xs) {
+            // The one thing a card can't be missing — the title binding has no
+            // trim/empty guard (a user can select-all-delete it), so this is what
+            // stops a blank, hard-to-find row from ever reaching the store, rather
+            // than a guard buried in `createTasks()` that would silently drop the
+            // card the user is looking at.
+            if hasBlankTitledDraft {
+                Text("Give every task a title before creating.")
+                    .font(.supporting)
+                    .foregroundStyle(Palette.mutedText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             Button {
                 createTasks()
             } label: {
@@ -1091,33 +1414,11 @@ struct ComposerView: View {
             }
             .buttonStyle(.pressableProminent)
             .disabled(interpretation.drafts.isEmpty || hasBlankTitledDraft || commitPendingRetry)
-
-            // The one thing a card can't be missing — the title binding has no
-            // trim/empty guard (a user can select-all-delete it), so this is what
-            // stops a blank, hard-to-find row from ever reaching the store, rather
-            // than a guard buried in `createTasks()` that would silently drop the
-            // card the user is looking at.
-            if hasBlankTitledDraft {
-                Text("Give every task a title before creating.")
-                    .font(.supporting)
-                    .foregroundStyle(Palette.mutedText)
-            }
-
-            // "Add another" was three plausible meanings and none of them right: it
-            // adds nothing, it returns to the canvas with your words and drafts intact
-            // so you can keep talking. Under a primary CTA a bare text button also reads
-            // as Cancel. "Say more" names what happens, and the arrow points back.
-            Button {
-                backToCapture()
-            } label: {
-                Label("Say more", systemImage: "arrow.up.left")
-                    .font(.controlLabel)
-                    .foregroundStyle(Palette.secondaryText)
-                    .frame(height: LayoutMetrics.hitTarget)
-            }
-            .buttonStyle(.pressableLink)
-            .accessibilityHint("Back to the canvas — your words and these tasks are kept")
         }
+        .padding(.horizontal, Spacing.lg)
+        .padding(.top, Spacing.sm)
+        .padding(.bottom, Spacing.sm)
+        .background(Palette.background)
     }
 
     private var createTitle: String {
@@ -1474,7 +1775,7 @@ struct ComposerView: View {
         }
     }
 
-    private var micButton: some View {
+    private func micButton(_ title: String) -> some View {
         // Always the compact form: the way INTO voice is the orb the sheet opens on —
         // reaching this canvas means the user chose typing (or the mic can't lead),
         // so a full-width Speak here would argue with the landing they picked. It
@@ -1486,7 +1787,7 @@ struct ComposerView: View {
             beginListening(from: base.isEmpty ? "" : base + " ")
         } label: {
             // "Instead" only once there is something to do instead OF.
-            Label(canSubmit ? "Speak instead" : "Speak", systemImage: "mic.fill")
+            Label(title, systemImage: "mic.fill")
                 .font(.controlLabel)
                 .foregroundStyle(micUsable ? Palette.primaryText : Palette.mutedText)
                 .padding(.horizontal, Spacing.md)
@@ -1538,6 +1839,12 @@ struct ComposerView: View {
     /// on the fresh open, the canvas's words plus a separating space when Speak
     /// re-enters from typing (the field → orb morph comes free from the matched pair).
     private func beginListening(from base: String) {
+        // Speak can be entered from the REVEAL page as well as the canvas, and there the
+        // interpretation is already revealed — so the next parse would be refused and the
+        // user's new words would vanish into a no-op. The person is about to speak again,
+        // which is the one event that lets the system speak again; their existing cards
+        // and edits ride along through `merge`. A no-op on every other entry.
+        interpretation.reopen()
         dictationBase = base
         focused = false
         showPreparingLabel = false

@@ -291,12 +291,20 @@ struct DataBoundaryTests {
     }
 
     @Test("The copy matches what routing actually does")
-    func copyAgreesWithRouting() {
+    func copyAgreesWithRouting() async {
         // Ties the sentence to the behaviour rather than to a reviewer's memory of it.
-        // A typed list stays; a lone sentence does not — which is exactly what the
-        // online copy now claims, and what it must keep claiming or be rewritten.
-        #expect(CaptureRoute.route(for: "buy milk\ncall mom", cloudAvailable: true) == .local)
-        #expect(CaptureRoute.route(for: "buy some milk on the way home", cloudAvailable: true) == .cloud)
+        // 2026-08-29: the copy now says everything is read on the device first and the
+        // words travel only when that reading isn't good enough — so a typed list AND a
+        // clean lone sentence stay, and the named exception (a big dump) goes out.
+        let clean = "buy some milk on the way home"
+        let read = IntentResolver.resolve(
+            (try? await HeuristicEngine().triage(rawText: clean)) ?? [])
+        #expect(CaptureRoute.route(for: clean, localRead: read).route == .local)
+
+        let dump = String(repeating: "another thing I still need to handle soon ", count: 12)
+        let dumpRead = IntentResolver.resolve(
+            (try? await HeuristicEngine().triage(rawText: dump)) ?? [])
+        #expect(CaptureRoute.route(for: dump, localRead: dumpRead).route == .cloud)
     }
 
     @Test("No sentence names a provider, a model, or a budget")

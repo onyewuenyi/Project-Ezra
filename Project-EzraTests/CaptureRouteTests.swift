@@ -2,17 +2,18 @@
 //  CaptureRouteTests.swift
 //  Project-EzraTests
 //
-//  The routing POLICY — one pure function, pinned. It is policy rather than architecture
-//  on purpose ("simple inputs never use AI" must not calcify), so what these tests
-//  protect is not the current answers but the properties the privacy boundary and the
-//  reveal contract are built on.
+//  The routing POLICY, pinned. It is policy rather than architecture on purpose, so
+//  what these tests protect is not the current answers but the properties the privacy
+//  boundary and the reveal contract are built on.
 //
-//  Rewritten 2026-08-22 when routing collapsed to two arms. The three-state
-//  `Segmentation.confidence` and the on-device confidence gate both existed to answer
-//  "is this unpunctuated text probably one task?", and both are gone: the first because
-//  a verb lexicon should not make semantic judgments, the second because it measured a
-//  warm p50 of 2303ms against a cloud arm answering in about a second. What remains is
-//  the only deterministic claim that was ever an observation — the user pressed return.
+//  Rewritten 2026-08-29 for the device-first reversal: the deterministic read is now
+//  the DEFAULT interpretation of an unstructured capture, and the raw words transmit
+//  only when `CaptureEscalation` finds observable evidence that read fell short. The
+//  08-22 cloud-default these tests used to pin was itself a reversal of two dead
+//  local-first attempts (`.singleThought`'s lexicon, the on-device confidence gate);
+//  the difference this time is the direction of trust — the verifier can only
+//  ESCALATE, so its mistakes cost a cloud call rather than the user's words, and the
+//  FM on-device model (p90 21s on device, 2026-08-29) is out of the chain entirely.
 //
 
 import Foundation
@@ -31,56 +32,90 @@ struct CaptureRouteTests {
         // This is the whole of the local path now, and all of why a cloud default is
         // defensible: the list you typed never becomes a network call.
         let typed = "renew my passport\nbook the flights\npay the water bill"
-        #expect(CaptureRoute.route(for: typed, cloudAvailable: true) == .local)
-        #expect(CaptureRoute.route(for: typed, cloudAvailable: false) == .local)
+        #expect(CaptureRoute.route(for: typed) == .local)
+        #expect(CaptureRoute.route(for: typed).transmitsRawCapture == false)
 
         #expect(CaptureRoute.route(for: "- call the dentist\n- fix the faucet") == .local)
         #expect(CaptureRoute.route(for: "buy milk, return package, pay water bill") == .local)
     }
 
-    @Test("A lone sentence goes to the authority, however obviously single it reads")
-    func unpunctuatedSingleThoughtsEscalate() {
-        // The deliberate cost of the collapse, and the case most likely to be "fixed" by
-        // someone who thinks it is a bug. "renew my passport" is one task — and knowing
-        // that requires reading it, which is the semantic authority's job. The previous
-        // architecture answered this with an 18-word ceiling and a verb lexicon; that was
-        // an interpretation wearing an observation's clothes.
-        #expect(CaptureRoute.route(for: "renew my passport") == .cloud)
-        #expect(CaptureRoute.route(for: "call mom back") == .cloud)
-        #expect(CaptureRoute.route(for: "renew my passport and call mom") == .cloud)
-    }
-
-    @Test("The dictation that started all of this reaches the authority")
-    func theRunOnEscalates() {
-        // Four errands, no connectives. Under the old gate this read as ONE item and was
-        // revealed as a single task titled with its own transcript.
-        #expect(
-            CaptureRoute.route(
-                for: "Cook dinner at 3PM make odd duck reservation tonight take my wife to "
-                    + "dinner next week book reservation at tiki tomorrow at 1pm") == .cloud)
-    }
-
-    @Test("Cloud availability can never turn a local read into a transmission")
-    func availabilityNeverPromotesALocalRead() {
-        // THE privacy property, stated once over the whole corpus. Routing has exactly
-        // one input beyond the text, and it may only ever degrade the cloud arm toward
-        // the deterministic tail — never the reverse. If this fails, the sentence in
-        // Settings is false.
-        for text in (RambleEval.evalSet + RambleEval.gateAdversarialSet).map(\.utterance) {
-            let offline = CaptureRoute.route(for: text, cloudAvailable: false)
-            let online = CaptureRoute.route(for: text, cloudAvailable: true)
-            #expect(offline == online, "availability changed the route for: \(text.prefix(50))")
+    @Test("A lone clean sentence stays on the device (the 2026-08-29 reversal)")
+    func cleanSinglesStayLocal() async {
+        // Under the 08-22 policy these transmitted, because knowing "renew my passport"
+        // is one task requires reading it. The device-first reversal keeps them: the
+        // deterministic read IS a reading, it holds the corpus floors at 2ms, and the
+        // verifier found no evidence against it — so the sentence reveals instantly,
+        // privately, for free. The structural OBSERVATION still says a model could be
+        // needed (`route(for:)` stays `.cloud`); the POLICY answers the second question.
+        for text in ["renew my passport", "call mom back"] {
+            #expect(CaptureRoute.route(for: text) == .cloud)  // the observation
+            let read = IntentResolver.resolve(
+                (try? await HeuristicEngine().triage(rawText: text)) ?? [])
+            let decision = CaptureRoute.route(for: text, localRead: read)
+            #expect(decision.route == .local, "clean single transmitted: \(text)")
+            #expect(decision.escalation == nil)
         }
     }
 
-    @Test("Routing reads STRUCTURE, never length or content")
-    func routingIgnoresEverythingButStructure() {
-        // A guard against the deleted architecture creeping back in as a heuristic. If
-        // someone adds "…but short inputs can stay local", this fails: the two strings
-        // below differ only in length and content, never in the boundaries the user drew.
+    @Test("The dictation that started all of this still reaches the authority")
+    func theRunOnEscalates() async {
+        // Four errands, no connectives, four time expressions. Under the old gate this
+        // read as ONE item and was revealed as a single task titled with its own
+        // transcript — the founding failure. The verifier catches it the deterministic
+        // way: one draft against multiple time signals is the least certain outcome a
+        // splitter can produce, so it escalates to Gemini rather than revealing.
+        let runOn =
+            "Cook dinner at 3PM make odd duck reservation tonight take my wife to "
+            + "dinner next week book reservation at tiki tomorrow at 1pm"
+        let read = IntentResolver.resolve(
+            (try? await HeuristicEngine().triage(rawText: runOn)) ?? [])
+        let decision = CaptureRoute.route(for: runOn, localRead: read)
+        #expect(decision.route == .cloud)
+        #expect(decision.escalation != nil)
+    }
+
+    @Test("Raw text leaves the device only on evidence, and never for typed structure")
+    func transmissionRequiresEvidence() async {
+        // THE privacy property under the 2026-08-29 policy, stated over the whole
+        // corpus: a capture transmits exactly when the user did NOT draw the boundaries
+        // AND the deterministic read shows a named failure signal. Two directions:
+        // explicit structure never transmits (unchanged since 08-22), and an
+        // unstructured capture transmits only with an escalation reason attached — a
+        // transmission with no reason on its receipt is a routing bug.
+        for text in (RambleEval.evalSet + RambleEval.gateAdversarialSet).map(\.utterance) {
+            let read = IntentResolver.resolve(
+                (try? await HeuristicEngine().triage(rawText: text)) ?? [])
+            let decision = CaptureRoute.route(for: text, localRead: read)
+            let explicit = Segmentation.structure(of: text).isExplicit
+            if explicit, !read.isEmpty {
+                #expect(
+                    !decision.route.transmitsRawCapture,
+                    "typed structure transmitted: \(text.prefix(50))")
+            }
+            #expect(
+                decision.route.transmitsRawCapture == (decision.escalation != nil),
+                "transmission and evidence disagreed for: \(text.prefix(50))")
+        }
+    }
+
+    @Test("The observation reads structure; the policy is allowed to read evidence")
+    func observationIgnoresLengthPolicyDoesNot() async {
+        // Two guards in one. The structural observation must stay blind to length and
+        // content — that is what makes it an observation. The POLICY, since 08-29, is
+        // explicitly allowed to read the depth floors: a big dump goes straight to the
+        // authority because it is the population device evidence says deterministic
+        // segmentation fails on. That length-sensitivity is the owner's deliberate
+        // re-weighting, not the deleted lexicon creeping back — the lexicon KEPT reads
+        // on its own authority; the floors only ever escalate.
         let short = "buy milk"
         let long = String(repeating: "something to do later ", count: 30)
         #expect(CaptureRoute.route(for: short) == CaptureRoute.route(for: long))
+
+        let read = IntentResolver.resolve(
+            (try? await HeuristicEngine().triage(rawText: long)) ?? [])
+        let decision = CaptureRoute.route(for: long, localRead: read)
+        #expect(decision.route == .cloud)
+        #expect(decision.escalation == .bigDump)
     }
 
     @Test("The authority receives the ORIGINAL text, whole and unsplit")

@@ -199,6 +199,24 @@ struct RootTabView: View {
     private func runRambleEvalIfRequested() async {
         #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("-RambleEval") else { return }
+        // `-EvalToFile`: tee the whole run into Documents/rambleeval-report.txt instead
+        // of stdout, so a DEVICE run needs no live console. The `--console` attachment
+        // is the least reliable link in the chain — the CoreDevice tunnel dropped three
+        // times in one session, each time discarding an in-flight eval's output — and a
+        // file in the app container is pullable afterward with a one-shot
+        // `devicectl device copy from`, immune to every drop in between. Line-buffered
+        // so a poll mid-run sees real progress; `=== END RAMBLE EVAL ===` is the
+        // completion marker a puller greps for.
+        if ProcessInfo.processInfo.arguments.contains("-EvalToFile"),
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+                .first
+        {
+            let report = documents.appendingPathComponent("rambleeval-report.txt")
+            try? FileManager.default.removeItem(at: report)
+            FileManager.default.createFile(atPath: report.path, contents: nil)
+            freopen(report.path, "a", stdout)
+            setvbuf(stdout, nil, _IOLBF, 0)
+        }
         print("=== RAMBLE EVAL ===")
         print("host engine: \(brain.status.description)")
 
@@ -209,33 +227,57 @@ struct RootTabView: View {
             return IntentResolver.resolve(intents)
         }
 
-        // The on-device arm, only where there is one. `brain.triage` is the REAL front
-        // door — the same path a capture takes — which is the whole point: scoring a
-        // hand-assembled approximation of it would reproduce the original mistake in a
-        // new place.
-        // The on-device arm is DEGRADED OFFLINE CAPTURE, not a rung the router can
-        // choose — it is reached only when the cloud is unreachable. Scored so the
-        // offline experience has a number, never so it can be compared as a peer.
+        // The escalation-policy report (2026-08-29): for every unstructured case, would
+        // the deterministic read have been KEPT or ESCALATED — and of the keeps, how
+        // many the labels say were wrong (the false-keep rate, the one number that can
+        // kill the device-first policy). Printed before the model arms because it needs
+        // none of them: the policy is deterministic end to end.
+        await printEscalationPolicyReport()
+
+        // The FM on-device arm — RETIRED from the capture chain (2026-08-29: p90 21s
+        // against the deterministic read's 2ms, no floor the deterministic arm doesn't
+        // hold), kept HERE as the tripwire instrument: a materially faster Apple model
+        // re-opens capture routing, and a tripwire nobody can measure never fires.
+        // Constructed DIRECTLY — its first configured-device run reached the model via
+        // `route: .cloud` + availability degrade, and a dead-quota provider turned that
+        // into 429 noise with 31 of 52 cases scoring the fallback. A pinned engine
+        // cannot be polluted by whatever the router would have done.
         if brain.status.isOnDevice {
-            await runEvalArm("degraded-offline", expectsModel: true) { utterance in
-                await brain.triage(utterance, route: .cloud, allowHedge: false).drafts
+            await runEvalArm("on-device(direct)", expectsModel: true) { utterance in
+                let started = Date()
+                let engine = FoundationModelsEngine()
+                do {
+                    let intents = try await engine.triage(
+                        rawText: utterance, context: TriageContext(), onPartial: nil)
+                    // The served-call proof: a direct engine call bypasses `AppBrain.triage`,
+                    // where capture metrics are normally recorded, so the arm records its
+                    // own — without this the DEGRADED banner would cry wolf on every run.
+                    ModelMetrics.shared.record(
+                        .captureTriage, .success,
+                        latencyMs: Int(Date().timeIntervalSince(started) * 1000))
+                    return IntentResolver.resolve(intents)
+                } catch {
+                    ModelMetrics.shared.record(
+                        .captureTriage, .failed(String(describing: type(of: error))),
+                        latencyMs: Int(Date().timeIntervalSince(started) * 1000))
+                    throw error
+                }
             }
         } else {
-            print("\n(degraded-offline arm skipped — no on-device model on this host)")
+            print("\n(on-device(direct) arm skipped — no on-device model on this host)")
         }
 
         // The cloud arm — the one the routing change is FOR, and the reason both arms
         // above run in the same command: the numbers only mean something next to each
         // other, on the same hardware, in the same run.
         if CloudModel.isAvailable {
-            // `allowHedge: false` — this arm must measure the CLOUD arm, not the blend the
-            // composer ships. With hedging on, a slow cloud call is answered by the local
-            // model and scored under a "cloud" heading, and the served-call delta still
-            // looks correct because the cloud calls really were issued. The blend is the
-            // right product behaviour and the wrong measurement.
+            // The hedge is gone from capture, so this measures the cloud arm plainly;
+            // an unreachable or throttled provider falls to the deterministic tail and
+            // the served-ratio DEGRADED banner says so rather than letting the fallback
+            // wear a cloud label.
             await runEvalArm("cloud(\(CloudModel.provider.identifier))", expectsModel: true) {
                 utterance in
-                await brain.triage(utterance, route: .cloud, allowHedge: false).drafts
+                await brain.triage(utterance, route: .cloud).drafts
             }
         } else {
             print("\n(cloud arm skipped — no provider installed; CloudModel.provider is inert)")
@@ -244,6 +286,48 @@ struct RootTabView: View {
         print("=== END RAMBLE EVAL ===")
         #endif
     }
+
+    #if DEBUG
+    /// Score the 2026-08-29 routing policy itself: run every UNSTRUCTURED corpus case
+    /// through the deterministic pipeline, ask `CaptureEscalation` for its verdict, and
+    /// compare keeps against the labels. Three numbers matter: how often the policy
+    /// escalates (the cost dial), how often it keeps (the savings), and how many keeps
+    /// the labels call wrong (**false-keeps** — the intent-loss rate, the number that
+    /// can kill device-first). Explicit-structure cases are excluded: they never had a
+    /// routing question.
+    private func printEscalationPolicyReport() async {
+        print("\n── Capture escalation policy (deterministic read + verifier) ──")
+        var kept = 0
+        var escalated: [CaptureEscalationReason: Int] = [:]
+        var falseKeeps: [String] = []
+        var unstructured = 0
+        for evalCase in RambleEval.evalSet
+        where !Segmentation.structure(of: evalCase.utterance).isExplicit {
+            unstructured += 1
+            let intents = (try? await HeuristicEngine().triage(rawText: evalCase.utterance)) ?? []
+            let drafts = IntentResolver.resolve(intents)
+            if let reason = CaptureEscalation.reason(for: evalCase.utterance, drafts: drafts) {
+                escalated[reason, default: 0] += 1
+            } else {
+                kept += 1
+                if drafts.count != evalCase.expected.count {
+                    falseKeeps.append(String(evalCase.utterance.prefix(56)))
+                }
+            }
+        }
+        let escalations = escalated.values.reduce(0, +)
+        let reasons =
+            escalated
+            .sorted { $0.value > $1.value }
+            .map { "\($0.key.rawValue) \($0.value)" }
+            .joined(separator: " · ")
+        print(
+            "unstructured \(unstructured) · kept local \(kept) · escalated \(escalations)"
+                + (reasons.isEmpty ? "" : " (\(reasons))"))
+        print("false-keeps (kept local, wrong task count): \(falseKeeps.count)")
+        falseKeeps.forEach { print("  false-keep ← \($0)") }
+    }
+    #endif
 
     #if DEBUG
     /// Score one arm and print its table, WITH proof of which engine actually answered.
@@ -482,7 +566,9 @@ struct RootTabView: View {
         guard ProcessInfo.processInfo.arguments.contains("-BriefDiagnostics") else { return }
         print("=== BRIEF DIAGNOSTICS ===")
         print("engine: \(brain.status.description)")
-        print("cloud provider reachable: \(CloudModel.isAvailable) (\(CloudModel.label))")
+        print(
+            "cloud provider: configured \(CloudModel.isAvailable) · "
+                + "reachable \(CloudModel.isReachable) (\(CloudModel.label))")
 
         let all = TaskItem.fetchAll(in: context)
         let live = all.filter { $0.status.isLive }
@@ -561,23 +647,30 @@ struct RootTabView: View {
         print("=== CAPTURE COMPARE ===")
         print("input (\(text.count) chars): \(text)")
         // What PRODUCTION would do with this input, before any arm runs — so the
-        // comparison is read against the route the user would actually get.
+        // comparison is read against the route the user would actually get. Since
+        // 2026-08-29 that decision includes the verifier, so it needs the local read.
         let structure = Segmentation.structure(of: text)
-        print("structure: \(structure.label) → route \(CaptureRoute.route(for: text).metricName)")
+        let localRead = IntentResolver.resolve(
+            (try? await HeuristicEngine().triage(rawText: text)) ?? [])
+        let decision = CaptureRoute.route(for: text, localRead: localRead)
+        print(
+            "structure: \(structure.label) → route \(decision.route.metricName)"
+                + (decision.escalation.map { " (escalates: \($0.rawValue))" }
+                    ?? " (local read kept)"))
 
         await compareArm("deterministic (always available)") {
             IntentResolver.resolve(try await HeuristicEngine().triage(rawText: text))
         }
 
         if brain.status.isOnDevice {
-            await compareArm("degraded-offline (on-device)") {
+            await compareArm("on-device FM (retired from capture; tripwire arm)") {
                 let engine = FoundationModelsEngine(sessionSource: .onDevice)
                 let intents = try await engine.triage(
                     rawText: text, context: TriageContext(), onPartial: nil)
                 return IntentResolver.resolve(intents)
             }
         } else {
-            print("\n— degraded-offline: no on-device model on this host")
+            print("\n— on-device FM: no on-device model on this host")
         }
 
         if args.contains("-WithCloud") {
@@ -656,6 +749,12 @@ struct RootTabView: View {
                 """
         print("=== CAPTURE DIAGNOSTICS ===")
         print("engine: \(brain.status.description)")
+        // The first line to read when a capture is slow. `configured` is whether this
+        // build is wired to a provider at all; `health` is whether the last calls
+        // actually landed. A run that shows `configured yes` and `health open` went
+        // on-device DELIBERATELY and instantly — which is a completely different
+        // diagnosis from a hung network, and was indistinguishable before the breaker.
+        print("cloud: configured \(CloudModel.isAvailable) · \(CloudHealth.shared.statusLine())")
         print("input: \(ramble.count) chars")
         // The provisional arm FIRST — it is what the user now sees, and the gap
         // between these two numbers is the whole instant-capture claim, in one
@@ -682,6 +781,9 @@ struct RootTabView: View {
                 + "· blockers: \(drafts.compactMap(\.blockedBy).count) "
                 + "· dated: \(drafts.compactMap(\.dueDate).count)")
         for line in ModelMetrics.shared.footerLines() { print("metrics: \(line)") }
+        // AFTER the run: if the cloud arm threw, this names the classification that moved
+        // the breaker, so a slow capture explains itself in one line instead of a guess.
+        print("cloud after: \(CloudHealth.shared.statusLine())")
         await runContinuousDiagnosticsArm(ramble: ramble)
         print("=== END CAPTURE DIAGNOSTICS ===")
     }

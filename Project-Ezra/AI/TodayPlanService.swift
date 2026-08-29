@@ -553,7 +553,10 @@ extension AppBrain {
     /// model, because constructing PCC unentitled traps the process) is now a
     /// documented requirement of `CloudModelProvider.isAvailable`, where it applies to
     /// every future provider rather than only this one.
-    private static func cloudAvailable() -> Bool { CloudModel.isAvailable }
+    /// REACHABILITY, not configuration. A configured-but-failing provider used to keep
+    /// the cloud tier at the head of the chain all day, so every Brief paid a doomed
+    /// call before falling through to the on-device voice it was going to use anyway.
+    private static func cloudAvailable() -> Bool { CloudModel.isReachable }
 
     // MARK: ChangeLog
 

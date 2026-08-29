@@ -119,7 +119,23 @@ enum CloudModel {
 
     /// Availability of the currently-installed provider, asked fresh. Safe to call on
     /// any device — see the protocol's warning about construction.
+    ///
+    /// **This is CONFIGURATION PRESENCE, not reachability.** It answers "is this build
+    /// wired to a cloud provider at all", which is the right question for the privacy
+    /// copy (`DataBoundary` must warn about transmission whenever this app transmits,
+    /// even during an outage) and for a receipt recording how a build was set up. It is
+    /// the WRONG question for "should this call be made now" — a configured provider
+    /// failing every request reports `true` forever. Use `isReachable` for that.
     static var isAvailable: Bool { provider.isAvailable }
+
+    /// Whether the cloud rung should actually be asked right now: configured **and** not
+    /// currently tripped by `CloudHealth`.
+    ///
+    /// Every routing and execution decision reads THIS. The split is the whole point —
+    /// before it existed, an exhausted quota cost one failed call plus a full hedge delay
+    /// on every capture, forever, because nothing anywhere remembered that the last
+    /// twenty calls had failed.
+    static var isReachable: Bool { isAvailable && CloudHealth.shared.isClosed() }
 
     /// What the DEBUG readout calls this rung: `cloud(gemini-flash)`.
     static var label: String { "cloud(\(provider.identifier))" }

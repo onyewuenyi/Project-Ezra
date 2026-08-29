@@ -201,6 +201,13 @@ struct SettingsView: View {
                 // are hoping for.
                 Text(CloudBudget.statusLine())
                     .metadataStyle()
+                // The breaker. Read this FIRST when capture feels slow: "open" means the
+                // cloud rung is being skipped deliberately and the on-device arm is
+                // answering, which is a much better explanation than a hung network. The
+                // reading we want is the boring one — a breaker that never opens is a
+                // provider that never fails.
+                Text(CloudHealth.shared.statusLine())
+                    .metadataStyle()
                 // THE MASTER METRIC: four dimensions that must fall and one that must
                 // rise. Read this before believing any single-stage improvement — the unit
                 // of optimization is effort reduction across the whole loop, and a feature

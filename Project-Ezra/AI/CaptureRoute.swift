@@ -23,21 +23,25 @@
 import Foundation
 import FoundationModels
 
-/// How this capture's interpretation gets produced. Two arms, one question.
+/// How this capture's interpretation gets produced. Two arms; since 2026-08-29, two
+/// questions asked in order.
 ///
-/// **The whole routing policy is now "did the user draw the boundaries?"** — and that
-/// simplicity was earned by deleting two things that tried to answer a harder question.
+/// **The policy is "did the user draw the boundaries — and if not, did the instant
+/// deterministic read visibly fall short?"** The first is a structural observation
+/// (`Segmentation`); the second reads facts about an answer that already exists
+/// (`CaptureEscalation`). Neither asks a model anything, so routing costs microseconds.
 ///
-/// The first was `Segmentation.confidence`'s `.singleThought`: a word ceiling and a verb
-/// lexicon deciding that an unpunctuated sentence probably described one task. The second
-/// was an on-device confidence gate, built to make that call properly with a model. It
-/// was measured on device and failed: warm p50 2303ms against a 400ms budget, escalating
-/// 95-100% of what it saw. The decisive number was the comparison — the cloud answers a
-/// median ramble in about a second, so the "local-first" path was slower than the
-/// network it was avoiding.
-///
-/// What survives is the only deterministic claim that was ever an observation rather than
-/// an interpretation: the user pressed return. Everything else is Gemini's.
+/// The lineage matters because two prior attempts at "keep it local" died on
+/// measurement, and this one is shaped by their autopsies. `.singleThought` was a
+/// lexicon TRUSTING a read it couldn't verify — false positives silently lost intent.
+/// The on-device confidence gate asked a model a pre-parse meta-question — 2.3s of
+/// pure overhead that escalated 95–100% of what it saw, slower than the network it
+/// avoided. This policy inverts both failure modes: the local read is verified after
+/// the fact, from evidence, and the verifier can only escalate — its false positives
+/// cost a cloud call, never the user's words. The FM on-device model, measured
+/// 2026-08-29 at p90 21s against the deterministic read's 2ms with no accuracy
+/// advantage on this corpus, is out of the capture chain entirely (it remains the
+/// Advisor's rung 2, where seconds-long judgment is the job).
 enum CaptureRoute: String, Equatable, CaseIterable {
 
     /// The user gave us the boundaries, so there is no segmentation problem to solve.
@@ -50,18 +54,50 @@ enum CaptureRoute: String, Equatable, CaseIterable {
     /// because boundaries are precisely what it is being asked for.
     case cloud
 
-    /// THE routing decision, in one place and one line.
-    ///
-    /// No `budgetAllows` parameter: a spend counter may not override an accuracy
-    /// decision on the product's front door. `CloudBudget` still guards the Advisor's
-    /// speculative precompute, where the thing being bought is a guess.
-    ///
-    /// `cloudAvailable` is the one input, and it may only ever degrade `.cloud` toward
-    /// the deterministic tail — never promote a local read into a transmission.
-    static func route(
-        for text: String, cloudAvailable: Bool = CloudModel.isAvailable
-    ) -> CaptureRoute {
+    /// The STRUCTURAL half of routing: did the user draw the boundaries? Still one
+    /// line, still text-only — but since 2026-08-29 it is no longer the whole policy.
+    /// `.cloud` from here means "a model COULD be needed"; whether one actually is
+    /// belongs to `route(for:localRead:)`, which checks the deterministic read's own
+    /// evidence first. Callers that only need the observation (seams, prints) may use
+    /// this; the composer must not.
+    static func route(for text: String) -> CaptureRoute {
         Segmentation.structure(of: text).isExplicit ? .local : .cloud
+    }
+
+    /// THE routing decision (2026-08-29): device-first, escalate on evidence.
+    ///
+    /// The 2026-08-22 policy sent every unstructured capture to the cloud, on the
+    /// grounds that judging task boundaries is the semantic authority's job. What the
+    /// owner reversed — deliberately, re-weighting capture's objectives — is the
+    /// DEFAULT: the deterministic read runs first (it holds every eval floor at p90
+    /// 2ms, measured on device 2026-08-29), and the capture transmits only when
+    /// `CaptureEscalation` finds observable evidence that read fell short. Most
+    /// captures now reveal instantly, privately, and for free; the hard tail still
+    /// gets Gemini.
+    ///
+    /// What this is NOT is the deleted confidence gate returning: no model is asked
+    /// anything before routing (the check is microseconds of string work over an
+    /// answer that already exists), and the verifier can only ESCALATE — a wrong
+    /// signal costs a cloud call, never a lost intent (see `CaptureEscalation`'s
+    /// header for the asymmetry argument).
+    ///
+    /// Still no `budgetAllows` parameter, and still no availability input: a spend
+    /// counter may not override an accuracy decision on the front door, and with no
+    /// reachability input a dead cloud structurally cannot promote a local read into
+    /// a transmission — escalated captures that find no reachable provider fall to
+    /// the deterministic tail in `AppBrain.triage`.
+    static func route(
+        for text: String, localRead drafts: [TaskDraft]
+    ) -> (route: CaptureRoute, escalation: CaptureEscalationReason?) {
+        // An empty read can't be revealed whatever the structure said — this arm
+        // predates the verifier (the composer's old `local.isEmpty ? .cloud`), and it
+        // outranks the explicit short-circuit for the same reason it always did.
+        guard !drafts.isEmpty else { return (.cloud, .emptyRead) }
+        guard !Segmentation.structure(of: text).isExplicit else { return (.local, nil) }
+        if let reason = CaptureEscalation.reason(for: text, drafts: drafts) {
+            return (.cloud, reason)
+        }
+        return (.local, nil)
     }
 
     var metricName: String { rawValue }

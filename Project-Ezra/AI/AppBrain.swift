@@ -240,7 +240,6 @@ final class AppBrain {
         ownership: OwnershipContext = .none,
         preparedCandidates: [RetrievalCandidate] = [],
         route: CaptureRoute = .cloud,
-        allowHedge: Bool = true,
         onPartial: (@MainActor ([TaskDraft]) -> Void)? = nil
     ) async -> TriageRun {
         isProcessing = true
@@ -257,7 +256,11 @@ final class AppBrain {
             rung: route.rung.rawValue,
             segmentation: Segmentation.structure(of: rawText).label,
             reasoningDepth: CaptureRoute.captureDepth(for: rawText).map(String.init(describing:)),
-            cloudAvailable: CloudModel.isAvailable)
+            // REACHABILITY, not configuration: the receipt's job is to explain why this
+            // run took the rung it took, and "configured" cannot explain an on-device
+            // parse on a build that has Firebase wired up. The Activity detail already
+            // labels this row "Cloud reachable".
+            cloudAvailable: CloudModel.isReachable)
         // Retrieval runs CONCURRENTLY with generation (audit A1): the model is
         // prompted the moment the debounce survives, with whatever candidate package
         // the CALLER prepared — the previous parse's retrieval, riding the rolling
@@ -367,35 +370,22 @@ final class AppBrain {
             switch route {
             case .local:
                 return nil
-            case .cloud where CloudModel.isAvailable:
+            case .cloud where CloudModel.isReachable:
                 return FoundationModelsEngine(sessionSource: .cloud)
             case .cloud:
                 // A cloud route with no reachable provider is not an error — it is the
-                // routing answer for "offline", and it degrades to the arm below it.
-                // That degrade is DEGRADED OFFLINE CAPTURE, not a rung the router chose:
-                // the on-device full parse is the arm device evidence says fails at
-                // segmentation, and it exists so capture never blocks, never as the
-                // standard the pipeline is tuned against.
-                return status.isOnDevice ? engine : nil
+                // routing answer for "offline" AND for "the last calls all failed"
+                // (`CloudHealth`), and it now degrades STRAIGHT to the deterministic
+                // tail below. The FM on-device parse used to sit here as DEGRADED
+                // OFFLINE CAPTURE; the 2026-08-29 device eval retired it from this
+                // chain — p90 21s against the deterministic read's 2ms, with the
+                // deterministic arm holding every floor the FM arm was kept around to
+                // protect. An offline capture now answers in milliseconds from the
+                // heuristic instead of half a minute from a model with no measured
+                // accuracy advantage; the FM model remains the Advisor's rung 2, where
+                // seconds-long judgment is the job and nobody is mid-capture.
+                return nil
             }
-        }()
-        // The HEDGE arm: the free model, started only if the paid one turns out to be
-        // slow (`CaptureTriageRace.hedged`). It exists only when the primary is the cloud
-        // and there is a local model to hedge WITH — hedging the on-device arm against
-        // itself is nothing, and there is no third arm below it but the deterministic
-        // read, which is instant and needs no head start.
-        //
-        // `allowHedge: false` exists for MEASUREMENT, and only for it. An instrument that
-        // says "cloud arm" has to have measured the cloud arm; a hedged run would fold
-        // on-device answers into that table for exactly the slow, hard cases the cloud
-        // arm is being evaluated on, and the served-call delta would still look right
-        // because the cloud calls really were issued. That is the "a green table proved
-        // the fallback, not the front door" failure with a new coat of paint, so
-        // `-RambleEval` turns the hedge off rather than reporting a blend.
-        let hedgeEngine: AIEngine? = {
-            guard allowHedge, let modelEngine, !modelEngine.isOnDevice, status.isOnDevice
-            else { return nil }
-            return engine
         }()
         // Which model this parse ACTUALLY reached, recorded after the availability
         // degrade rather than from the route — a `.cloud` route on a device with no
@@ -419,33 +409,43 @@ final class AppBrain {
             // both arms deliberately: it measures the user's patience, not the model's
             // speed, and a slower rung does not buy more of it.
             IntelligenceLedger.shared.record(modelEngine.isOnDevice ? .onDevice : .cloud, for: .ramble)
+            // The race still owns the deadline, salvage and cancellation; what it no
+            // longer has is a hedge arm to start. The hedge's free runner WAS the FM
+            // on-device parse, and it retired from capture with the rest of that arm
+            // (2026-08-29) — a slow cloud call now runs to the deadline, salvages what
+            // streamed, and falls to the instant deterministic tail below, which is
+            // both faster and better-measured than the model it replaced. The race's
+            // hedge machinery stays built and tested (`CaptureHedgeTests`) for the day
+            // a rung worth racing exists again.
             let raced = await CaptureTriageRace.hedged(
                 budget: ModelDeadline.captureSeconds,
                 hedgeAfter: ModelDeadline.captureHedgeSeconds,
                 onPartial: partialHandler,
                 primary: { tee in
-                    try await modelEngine.triage(rawText: rawText, context: context, onPartial: tee)
-                },
-                hedge: hedgeEngine.map { free in
-                    { tee in
-                        try await free.triage(rawText: rawText, context: context, onPartial: tee)
+                    // The cloud arm's health is recorded HERE, around the call, rather
+                    // than from the race's result. The race reports the arm that WON, so
+                    // a capture the hedge rescued would otherwise hide the cloud failure
+                    // that made the rescue necessary — which is precisely the run whose
+                    // failure has to be counted. Capture is also the highest-volume cloud
+                    // workload, so it is the one that trips the breaker first and the
+                    // Brief/Advisor inherit a verdict they never had to pay for.
+                    do {
+                        let value = try await modelEngine.triage(
+                            rawText: rawText, context: context, onPartial: tee)
+                        // Any answer, including an empty parse, proves the round trip.
+                        if !modelEngine.isOnDevice { CloudHealth.shared.recordSuccess() }
+                        return value
+                    } catch {
+                        // Cancellation is the user leaving, never a verdict on the rung.
+                        if !modelEngine.isOnDevice, !(error is CancellationError) {
+                            CloudHealth.shared.recordFailure(error)
+                        }
+                        throw error
                     }
-                }
+                },
+                hedge: nil
             )
             let outcome = raced.outcome
-            // Recorded only if the hedge actually issued a call. A hedge that never woke
-            // up — the ordinary case, because a healthy cloud read lands first — must not
-            // appear in the ledger, which is the same rule that stops the availability
-            // degrade from reporting paid calls that never happened. When it DID run,
-            // both rungs are recorded: the capture genuinely asked two models, and the
-            // footer showing that is how the hedge delay gets tuned.
-            if raced.hedgeStarted {
-                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
-            }
-            if hedgeEngine != nil {
-                ModelMetrics.shared.recordHedge(
-                    started: raced.hedgeStarted, won: raced.arm == .hedge)
-            }
             telemetry.hedgeStarted = raced.hedgeStarted
             telemetry.armWon = raced.arm.map(String.init(describing:))
             if case .cancelled = outcome {
@@ -521,16 +521,18 @@ final class AppBrain {
                 intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
             }
         } else {
-            // Heuristic path: synchronous string work, no deadline needed, zero overhead
-            // — and the branch every capture test exercises (XCTest forces this engine).
+            // The deterministic branch — explicitly `HeuristicEngine`, never
+            // `self.engine`. On a device the brain's selected engine is the FM model,
+            // and this branch used to route through it, which meant the "deterministic"
+            // arm of an offline capture quietly became a 20-second model call (the
+            // fourth leg of the FM-in-capture retirement, found 2026-08-29). Synchronous
+            // string work, no deadline needed, zero overhead — and the branch every
+            // capture test exercises.
             do {
-                intents = try await engine.triage(
+                intents = try await HeuristicEngine().triage(
                     rawText: rawText, context: context, onPartial: partialHandler)
-                if intents.isEmpty {
-                    intents = try await HeuristicEngine().triage(rawText: rawText)
-                }
             } catch {
-                intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
+                intents = []
             }
             let (fresh, retrievalMs) = await retrievalTask.value
             mergeFresh(fresh, into: &gateCandidates)

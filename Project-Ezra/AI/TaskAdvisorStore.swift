@@ -259,7 +259,10 @@ final class TaskAdvisorStore: ObservableObject {
             ? CloudBudget.allowsPrecompute(ledger: ledger, now: now)
             : CloudBudget.allows(ledger: ledger, now: now)
         let rung = AdvisorRouting.rung(
-            for: budget, cloudAvailable: CloudModel.isAvailable, budgetAllows: allowance)
+            // Reachability, not configuration: a deep judgment routed to a rung that is
+            // currently failing spends the user's wait to arrive at the on-device
+            // reading the ladder would have degraded to anyway.
+            for: budget, cloudAvailable: CloudModel.isReachable, budgetAllows: allowance)
 
         // A speculative shallow read is pointless (above), and a speculative DEEP read
         // that has degraded to on-device is the same thing wearing a different hat — the

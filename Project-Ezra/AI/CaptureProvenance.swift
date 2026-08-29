@@ -46,6 +46,10 @@ struct CaptureRunTelemetry: Codable, Equatable {
     /// The reasoning level this ramble bought, nil when it ran reasoning-free.
     var reasoningDepth: String?
     var cloudAvailable = false
+    /// Why this capture escalated past the deterministic read (2026-08-29 policy), nil
+    /// when the local read was revealed as-is. The receipt's answer to "why did this
+    /// capture cost a cloud call?" — the number the escalation signals get tuned on.
+    var escalationReason: String?
 
     // Which model actually answered. Nil on the deterministic arm — which is a fact
     // about the run, not a gap in it.
