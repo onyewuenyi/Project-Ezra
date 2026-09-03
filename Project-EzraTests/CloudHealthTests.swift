@@ -153,19 +153,19 @@ struct CloudHealthTests {
     }
 
     @Test("Repeated failures back off, so a daily quota isn't probed every minute")
-    func cooldownBacksOff() {
+    func cooldownBacksOff() throws {
         let health = fresh()
         var now = Date()
         let refusal = LabeledError(description: "429")
 
         health.recordFailure(refusal, now: now)
-        let first = try! #require(health.openUntil).timeIntervalSince(now)
+        let first = try #require(health.openUntil).timeIntervalSince(now)
 
         // Fail the probe: the next window must be longer, or a day-long quota would make
         // one capture per minute pay the full failure for hours.
         now = now.addingTimeInterval(first + 1)
         health.recordFailure(refusal, now: now)
-        let second = try! #require(health.openUntil).timeIntervalSince(now)
+        let second = try #require(health.openUntil).timeIntervalSince(now)
         #expect(second > first)
 
         // …and bounded, so a long outage can't push recovery past the session.
@@ -173,7 +173,7 @@ struct CloudHealthTests {
             now = now.addingTimeInterval(CloudHealth.maxCooldownSeconds + 1)
             health.recordFailure(refusal, now: now)
         }
-        let settled = try! #require(health.openUntil).timeIntervalSince(now)
+        let settled = try #require(health.openUntil).timeIntervalSince(now)
         #expect(settled <= CloudHealth.maxCooldownSeconds)
     }
 

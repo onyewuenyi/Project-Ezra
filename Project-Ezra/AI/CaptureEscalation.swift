@@ -112,6 +112,18 @@ enum CaptureEscalation {
         }
     }
 
+    // Compiled once. Constructing NSRegularExpression per call is measurably wasteful
+    // even at capture volume; the pattern is fixed so a static let is the right site.
+    private static let timeSignalRegex: NSRegularExpression? = try? NSRegularExpression(
+        pattern:
+            "\\b(today|tonight|tomorrow"
+            + "|next (week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+            + "|this (weekend|week|month|morning|afternoon|evening)"
+            + "|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+            + "|at \\d{1,2}(:\\d{2})?\\s?(am|pm)?"
+            + "|\\d{1,2}\\s?(am|pm))\\b",
+        options: [.caseInsensitive])
+
     /// Distinct time expressions in the capture. Several of them beyond the draft
     /// count is the run-on-dictation shape: occasions competing for boundaries no
     /// draft accounts for. The vocabulary deliberately shadows
@@ -120,17 +132,7 @@ enum CaptureEscalation {
     /// two occasions) — so the signal never claims time-ness the pipeline doesn't
     /// recognize, and never misses one it does.
     static func timeSignals(in text: String) -> Int {
-        guard
-            let regex = try? NSRegularExpression(
-                pattern:
-                    "\\b(today|tonight|tomorrow"
-                    + "|next (week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
-                    + "|this (weekend|week|month|morning|afternoon|evening)"
-                    + "|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
-                    + "|at \\d{1,2}(:\\d{2})?\\s?(am|pm)?"
-                    + "|\\d{1,2}\\s?(am|pm))\\b",
-                options: [.caseInsensitive])
-        else { return 0 }
+        guard let regex = timeSignalRegex else { return 0 }
         let range = NSRange(text.startIndex..., in: text)
         return regex.numberOfMatches(in: text, range: range)
     }
