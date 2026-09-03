@@ -2,10 +2,26 @@
 //  RootTabView.swift
 //  Project-Ezra
 //
-//  The app shell, now two tabs and a button — Brief (the cinematic daily briefing) and
-//  Tasks (the system of record), plus the floating circular Capture button. The loop IS
-//  the navigation: you ramble in, you glance at the Brief, you work the Tasks. Review is
-//  not a destination; first launch presents the onboarding transformation.
+//  The app shell: the SYSTEM tab bar (Brief · Tasks) with one app-owned control beside it
+//  in the same row — the circular Capture orb (`captureOrbButton`). The loop IS the
+//  navigation: you ramble in, you work the Tasks. Review is not a destination; first
+//  launch presents the onboarding transformation.
+//
+//  The Brief was CUT on 2026-09-02 (two equal pillars: Ramble/Capture and the Advisor);
+//  its tab, sequence, seams and reminder are gone. Tasks is the floor of the tab range.
+//
+//  **The division of labour, and the rule for changing anything here:** the OS owns the
+//  tab bar — its rendering, selection, safe area and accessibility — and the app owns
+//  exactly one control, because iOS 27 publishes no way to place a custom view inline with
+//  an EXPANDED tab bar (`tabViewBottomAccessoryPlacement` is get-only, and `.inline` only
+//  happens once the bar minimizes). Positioning the orb ourselves is therefore the
+//  smallest custom chrome that can express "the orb is always beside the bar". Any change
+//  that would require modifying the native bar's visual hierarchy is the wrong approach.
+//
+//  A fully custom bottom bar was built here and REVERTED (2026-08-29, same day): it drew
+//  Brief · Capture · Tasks in one hand-rolled glass capsule, which cost the OS's rendering
+//  and safe-area management and bought a composition the owner didn't want. Do not
+//  resurrect it.
 //
 //  The Inbox and Household TABS were cut (product shape v2, 2026-08-18) — surfaces cut,
 //  systems relocated. The trust surface survives as `ActivityView`, a sheet this shell
@@ -26,6 +42,9 @@ import SwiftUI
 /// shell so deep views (empty states, cards) never need their own sheet plumbing.
 extension EnvironmentValues {
     @Entry var openCapture: () -> Void = {}
+    /// Ask about everything — the household inquiry, summoned as a sheet from where you
+    /// are (F-12), with the same bubble glyph the task pager uses for its own scope.
+    @Entry var openAsk: () -> Void = {}
     /// Reopen a specific parked capture (the Today "captures waiting" line). Distinct
     /// from `openCapture`, which always begins a fresh one.
     @Entry var resumeCapture: (Capture) -> Void = { _ in }
@@ -42,18 +61,27 @@ extension EnvironmentValues {
 private struct ComposerSession: Identifiable {
     let id = UUID()
     let resuming: Capture?
+    var autoSubmit = false
 }
 
 struct RootTabView: View {
     @AppStorage("hasOnboarded") private var hasOnboarded = false
     @Environment(\.managedObjectContext) private var context
     @Environment(AppBrain.self) private var brain
-    @Environment(BriefingReminder.self) private var briefing
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
+    /// Gates the bar orb's timeline — a permanently-mounted animation has no business
+    /// running while the app is backgrounded. (The Reduce Transparency / Increase Contrast
+    /// reads that used to live here went with the FAB's hand-rolled glass lens; the bar
+    /// routes through `.glassChrome`, which owns both fallbacks itself.)
+    @Environment(\.scenePhase) private var scenePhase
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
     private var familyMembers: [FamilyMember] { Array(familyMembersResults) }
     @State private var showOnboarding: Bool
+
+    init() {
+        // Onboarding is decided once, before the first body pass, from the persisted flag —
+        // so a returning user never sees the cover flash for a frame.
+        _showOnboarding = State(initialValue: !UserDefaults.standard.bool(forKey: "hasOnboarded"))
+    }
     /// The Activity screen's one mount point. Deliberately not a tab and deliberately
     /// not badged: the trust surface is something you go to when you want to check or
     /// undo, never something that asks to be visited (guardrail 1, calm over
@@ -69,60 +97,58 @@ struct RootTabView: View {
     /// console seam). `sheet(item:)` hands the closure the value itself; the race is
     /// unrepresentable. `resuming` nil = a fresh capture — opening the composer always
     /// starts a NEW one, so being interrupted twice never overwrites the first thought.
-    @State private var composerSession: ComposerSession?
+    @State private var composerSession: ComposerSession? = nil
+    @State private var showAsk = false
+    /// Private Capture — the long-press sibling of the capture orb. A Bool, not a
+    /// session type: the mode has no resume semantics (one thought, kept or not).
     /// The transient "Added N tasks" receipt, shown after the composer closes.
-    @State private var commitNotice: UndoNotice?
-    @State private var selection: Int
+    @State private var commitNotice: UndoNotice? = nil
+    /// Whether the keyboard is up. The orb hides under it (`body`): the composer's
+    /// capture bar owns that space while a keyboard is showing.
+    @State private var keyboardUp = false
 
-    init() {
-        let onboarded = UserDefaults.standard.bool(forKey: "hasOnboarded")
-        // Verification seams skip onboarding: both exist to reach a screen state
-        // directly, and a first-run cover would fight the presentation they drive.
-        let seeding =
-            ProcessInfo.processInfo.arguments.contains("-SeedSampleData")
-            || ProcessInfo.processInfo.arguments.contains("-OpenCapture")
-        _showOnboarding = State(initialValue: !onboarded && !seeding)
-        // Verification seam: `-InitialTab N` selects the starting tab.
-        let args = ProcessInfo.processInfo.arguments
-        let initialTab =
-            args.firstIndex(of: "-InitialTab").flatMap {
-                args.indices.contains($0 + 1) ? Int(args[$0 + 1]) : nil
-            } ?? 0
-        // TabView crashes if selection is set to an unavailable tab, so clamp the
-        // verification seam to the two valid tab values (0 Brief, 1 Tasks). The old
-        // range was 0…3; a stale `-InitialTab 3` now lands on Tasks rather than crashing.
-        _selection = State(initialValue: min(max(initialTab, 0), 1))
-    }
 
     var body: some View {
-        TabView(selection: $selection) {
-            Tab("Brief", systemImage: "sparkles", value: 0) {
-                BriefHomeView()
-            }
-            Tab("Tasks", systemImage: "checklist", value: 1) {
-                TasksHomeView()
-            }
+        // The orb belongs to the BAR, and the keyboard covers the bar. Both
+        // `.overlay` on the TabView and a ZStack sibling with `.ignoresSafeArea(.keyboard)`
+        // laid the orb out against the keyboard-reduced bounds — it rode up and sat on
+        // the Ask composer's Send button (measured twice, 2026-09-02) — so the fix is
+        // explicit: while the keyboard is up the orb is hidden and its timeline paused.
+        // An orb beside no bar means nothing; hiding it is the truthful state, not a
+        // workaround. Keyboard avoidance inside the tabs is untouched.
+        ZStack(alignment: .bottomTrailing) {
+            // ONE surface and one verb beside it. The tab bar went with the Brief and
+            // the Ask tab (F-12): Tasks is the record, the orb is capture, and Ask is a
+            // sheet summoned from the Tasks header — the same grammar as the task
+            // pager's Ask bubble, so asking is one gesture at every scope.
+            TasksHomeView()
+                // The tab bar used to supply the bottom inset the list scrolled clear
+                // of; with the bar gone the orb would sit over the last row. One inset,
+                // sized to the orb and its padding, so the list ends above it.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    Color.clear.frame(height: Self.captureButtonDiameter + Spacing.md * 2)
+                }
+            captureOrbButton
+                .opacity(keyboardUp ? 0 : 1)
+                .allowsHitTesting(!keyboardUp)
+                .animation(Motion.fade, value: keyboardUp)
         }
-        .tint(Palette.accentFlat)
-        .overlay(alignment: .bottomTrailing) { captureButton }
-        // The confirm's receipt. It renders HERE, not in the composer, because the sheet
-        // is already gone by the time there is anything to report — which also puts it
-        // ABOVE the floating tab bar, so it needs the same tuned inset the FAB uses or
-        // it prints across the tab labels.
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
+        ) { _ in keyboardUp = true }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+        ) { _ in keyboardUp = false }
         .undoNotice($commitNotice, bottomInset: Spacing.xxl)
         .environment(\.openCapture, { presentComposer(resuming: nil) })
         .environment(\.resumeCapture, { capture in presentComposer(resuming: capture) })
         .environment(\.openActivity, { showActivity = true })
-        // Tapping the daily nudge lands on the Brief, wherever the app was left.
-        .onChange(of: briefing.pendingOpenBriefing) { _, pending in
-            guard pending else { return }
-            selection = 0
-            briefing.pendingOpenBriefing = false
-        }
+        .environment(\.openAsk, { showAsk = true })
+        .sheet(isPresented: $showAsk) { HouseholdChatView() }
         // Item-based, so however the sheet closed (commit, discard, swipe) the session
         // clears with it — the next open starts fresh unless \.resumeCapture re-arms it.
         .sheet(item: $composerSession, onDismiss: { presentCommitNotice() }) { session in
-            ComposerView(resuming: session.resuming)
+            ComposerView(resuming: session.resuming, autoSubmit: session.autoSubmit)
         }
         .sheet(isPresented: $showActivity) { ActivityView() }
         .fullScreenCover(isPresented: $showOnboarding) {
@@ -131,41 +157,78 @@ struct RootTabView: View {
                 showOnboarding = false
             }
         }
-        .task {
-            // A cold launch from the nudge can set the flag before `onChange` is
-            // watching, so catch it here too.
-            if briefing.pendingOpenBriefing {
-                selection = 0
-                briefing.pendingOpenBriefing = false
-            }
+        .task { await onLaunch() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { consumePendingCapture() }
+        }
+    }
+
+    /// Everything the shell does once at launch — identity, seeds, the diagnostic
+    /// seams, the verification seams. Hoisted out of `body` when the root became a
+    /// ZStack (the orb's keyboard fix) so the launch sequence reads in one place.
+    private func onLaunch() async {
+        do {
+            // The daily nudge used to route here (`pendingOpenBriefing` → `selection = 0`,
+            // both on `onChange` and on this cold-launch path). Both are gone with the
+            // Brief: nothing schedules that notification any more, and an assignment to a
+            // destination the bar renders as unavailable is exactly the kind of dead path
+            // that quietly comes back. the app now sends no notifications at all.
             if ProcessInfo.processInfo.arguments.contains("-SeedFlowFixtures") {
                 // Flow fixtures own their identity setup (a named "you" member + owned
                 // tasks), so bootstrap is deliberately not called here.
                 seedFlowFixturesIfRequested()
-            } else if ProcessInfo.processInfo.arguments.contains("-SeedTodayFixtures") {
-                // Today fixtures own their identity setup too (see TodayFixtures.seed).
-                seedTodayFixturesIfRequested()
-            } else {
+                       } else {
                 // Guarantee the current user exists as a real household member before any
                 // surface computes `isMine` or any capture stamps ownership.
                 UserProfile.bootstrapIdentity(in: context)
                 await seedIfRequested()
             }
-            await runBriefDiagnosticsIfRequested()
-            await runCaptureCompareIfRequested()
-            await runCaptureDiagnosticsIfRequested()
-            await runRambleEvalIfRequested()
+            await LaunchSeams(brain: brain, context: context, familyMembers: familyMembers).run()
             #if DEBUG
+            // FM viability diagnosis: refuses to share a launch with -RambleEval
+            // (which prewarms the state it measures) — the guard is inside.
+            await FMDiagnostics.runIfRequested(brain: brain)
+            // Campaign 3: the Private Capture envelope (bounded single-intent FM).
+            await QuickCaptureDiagnostics.runIfRequested(brain: brain)
             await AdvisorDiagnostics.runIfRequested()
             // Gold-standard-first routing discovery: which cases measurably need depth.
             await AdvisorBenchmark.runIfRequested()
+            // The Ask tab's eval: the floor and retrieval cases (CI-tested) plus the
+            // model arm's grounding, served ratio and latency (device numbers).
+            await HouseholdChatEval.runIfRequested(brain: brain)
             // Coverage reads the LIVE store (the fixtures next door answer a different
             // question), so it runs here where the real context is in scope.
             AdvisorCoverageDiagnostics.runIfRequested(in: context)
             #endif
             openActivityIfRequested()
             await openCaptureIfRequested()
+            consumePendingCapture()
+            askHouseholdIfRequested()
         }
+    }
+
+    /// Deterministic verification seam. `-AskHousehold "question"` sends one question
+    /// through the LIVE household store on the Ask tab (pair with `-InitialTab 2`), so
+    /// a floor answer's rows or the model's reply — or the honest failure line — is
+    /// screenshot-reachable without a keyboard. `-HouseholdChatFixture` seeds a canned
+    /// thread instead (a cited floor answer, a model answer, a reply in flight) for a
+    /// host with no model. Never fires in normal runs.
+    private func askHouseholdIfRequested() {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        let facts = HouseholdChatFacts.make(
+            tasks: (try? context.fetch(NSFetchRequest<TaskItem>(entityName: "TaskItem"))) ?? [],
+            members: familyMembers, currentUserID: UserProfile.currentMemberID(in: context))
+        if args.contains("-HouseholdChatFixture") {
+            HouseholdChatStore.shared.seedFixture(
+                citing: Array(facts.overdue.prefix(3)).map(\.id))
+            showAsk = true
+        }
+        if let flag = args.firstIndex(of: "-AskHousehold"), args.indices.contains(flag + 1) {
+            HouseholdChatStore.shared.ask(args[flag + 1], facts: facts)
+            showAsk = true
+        }
+        #endif
     }
 
     /// Deterministic verification seam. Launch with `-OpenActivity` to present the
@@ -177,228 +240,6 @@ struct RootTabView: View {
         guard ProcessInfo.processInfo.arguments.contains("-OpenActivity") else { return }
         showActivity = true
     }
-
-    /// Verification seam: `-RambleEval` runs the labeled eval set through **every arm
-    /// available on this host**, scoring each against the SAME shared floors
-    /// (`RambleEval.Floors`) and printing a per-field PASS/FAIL table plus named misses
-    /// to stdout.
-    ///
-    /// It used to run "the ACTIVE engine" — one arm, whichever the host happened to
-    /// select — and print percentages with no floors attached, so reading it meant
-    /// eyeballing numbers against literals in a test file. That is how the front door
-    /// went unmeasured: CI held the heuristic arm to the floors, the device printed the
-    /// on-device arm's numbers next to nothing, and an unstructured spoken blob failed
-    /// to segment while every number in the suite stayed green.
-    ///
-    /// Both arms run whenever both exist, deliberately. The interesting output is not
-    /// either table but the DIFFERENCE, and a baseline the cloud arm must beat has to be
-    /// measured on the same hardware in the same run — not inherited from CI.
-    ///
-    /// Non-destructive: nothing commits, same rule as `-CaptureDiagnostics`. DEBUG-only,
-    /// like the fixture set it reads.
-    private func runRambleEvalIfRequested() async {
-        #if DEBUG
-        guard ProcessInfo.processInfo.arguments.contains("-RambleEval") else { return }
-        // `-EvalToFile`: tee the whole run into Documents/rambleeval-report.txt instead
-        // of stdout, so a DEVICE run needs no live console. The `--console` attachment
-        // is the least reliable link in the chain — the CoreDevice tunnel dropped three
-        // times in one session, each time discarding an in-flight eval's output — and a
-        // file in the app container is pullable afterward with a one-shot
-        // `devicectl device copy from`, immune to every drop in between. Line-buffered
-        // so a poll mid-run sees real progress; `=== END RAMBLE EVAL ===` is the
-        // completion marker a puller greps for.
-        if ProcessInfo.processInfo.arguments.contains("-EvalToFile"),
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-                .first
-        {
-            let report = documents.appendingPathComponent("rambleeval-report.txt")
-            try? FileManager.default.removeItem(at: report)
-            FileManager.default.createFile(atPath: report.path, contents: nil)
-            freopen(report.path, "a", stdout)
-            setvbuf(stdout, nil, _IOLBF, 0)
-        }
-        print("=== RAMBLE EVAL ===")
-        print("host engine: \(brain.status.description)")
-
-        // The deterministic arm always exists — it is the offline arm of everything, so
-        // it is never "not applicable", only sometimes not the one that ships.
-        await runEvalArm("heuristic") { utterance in
-            let intents = try await HeuristicEngine().triage(rawText: utterance)
-            return IntentResolver.resolve(intents)
-        }
-
-        // The escalation-policy report (2026-08-29): for every unstructured case, would
-        // the deterministic read have been KEPT or ESCALATED — and of the keeps, how
-        // many the labels say were wrong (the false-keep rate, the one number that can
-        // kill the device-first policy). Printed before the model arms because it needs
-        // none of them: the policy is deterministic end to end.
-        await printEscalationPolicyReport()
-
-        // The FM on-device arm — RETIRED from the capture chain (2026-08-29: p90 21s
-        // against the deterministic read's 2ms, no floor the deterministic arm doesn't
-        // hold), kept HERE as the tripwire instrument: a materially faster Apple model
-        // re-opens capture routing, and a tripwire nobody can measure never fires.
-        // Constructed DIRECTLY — its first configured-device run reached the model via
-        // `route: .cloud` + availability degrade, and a dead-quota provider turned that
-        // into 429 noise with 31 of 52 cases scoring the fallback. A pinned engine
-        // cannot be polluted by whatever the router would have done.
-        if brain.status.isOnDevice {
-            await runEvalArm("on-device(direct)", expectsModel: true) { utterance in
-                let started = Date()
-                let engine = FoundationModelsEngine()
-                do {
-                    let intents = try await engine.triage(
-                        rawText: utterance, context: TriageContext(), onPartial: nil)
-                    // The served-call proof: a direct engine call bypasses `AppBrain.triage`,
-                    // where capture metrics are normally recorded, so the arm records its
-                    // own — without this the DEGRADED banner would cry wolf on every run.
-                    ModelMetrics.shared.record(
-                        .captureTriage, .success,
-                        latencyMs: Int(Date().timeIntervalSince(started) * 1000))
-                    return IntentResolver.resolve(intents)
-                } catch {
-                    ModelMetrics.shared.record(
-                        .captureTriage, .failed(String(describing: type(of: error))),
-                        latencyMs: Int(Date().timeIntervalSince(started) * 1000))
-                    throw error
-                }
-            }
-        } else {
-            print("\n(on-device(direct) arm skipped — no on-device model on this host)")
-        }
-
-        // The cloud arm — the one the routing change is FOR, and the reason both arms
-        // above run in the same command: the numbers only mean something next to each
-        // other, on the same hardware, in the same run.
-        if CloudModel.isAvailable {
-            // The hedge is gone from capture, so this measures the cloud arm plainly;
-            // an unreachable or throttled provider falls to the deterministic tail and
-            // the served-ratio DEGRADED banner says so rather than letting the fallback
-            // wear a cloud label.
-            await runEvalArm("cloud(\(CloudModel.provider.identifier))", expectsModel: true) {
-                utterance in
-                await brain.triage(utterance, route: .cloud).drafts
-            }
-        } else {
-            print("\n(cloud arm skipped — no provider installed; CloudModel.provider is inert)")
-        }
-
-        print("=== END RAMBLE EVAL ===")
-        #endif
-    }
-
-    #if DEBUG
-    /// Score the 2026-08-29 routing policy itself: run every UNSTRUCTURED corpus case
-    /// through the deterministic pipeline, ask `CaptureEscalation` for its verdict, and
-    /// compare keeps against the labels. Three numbers matter: how often the policy
-    /// escalates (the cost dial), how often it keeps (the savings), and how many keeps
-    /// the labels call wrong (**false-keeps** — the intent-loss rate, the number that
-    /// can kill device-first). Explicit-structure cases are excluded: they never had a
-    /// routing question.
-    private func printEscalationPolicyReport() async {
-        print("\n── Capture escalation policy (deterministic read + verifier) ──")
-        var kept = 0
-        var escalated: [CaptureEscalationReason: Int] = [:]
-        var falseKeeps: [String] = []
-        var unstructured = 0
-        for evalCase in RambleEval.evalSet
-        where !Segmentation.structure(of: evalCase.utterance).isExplicit {
-            unstructured += 1
-            let intents = (try? await HeuristicEngine().triage(rawText: evalCase.utterance)) ?? []
-            let drafts = IntentResolver.resolve(intents)
-            if let reason = CaptureEscalation.reason(for: evalCase.utterance, drafts: drafts) {
-                escalated[reason, default: 0] += 1
-            } else {
-                kept += 1
-                if drafts.count != evalCase.expected.count {
-                    falseKeeps.append(String(evalCase.utterance.prefix(56)))
-                }
-            }
-        }
-        let escalations = escalated.values.reduce(0, +)
-        let reasons =
-            escalated
-            .sorted { $0.value > $1.value }
-            .map { "\($0.key.rawValue) \($0.value)" }
-            .joined(separator: " · ")
-        print(
-            "unstructured \(unstructured) · kept local \(kept) · escalated \(escalations)"
-                + (reasons.isEmpty ? "" : " (\(reasons))"))
-        print("false-keeps (kept local, wrong task count): \(falseKeeps.count)")
-        falseKeeps.forEach { print("  false-keep ← \($0)") }
-    }
-    #endif
-
-    #if DEBUG
-    /// Score one arm and print its table, WITH proof of which engine actually answered.
-    ///
-    /// `expectsModel` is the load-bearing parameter, and it exists because the first
-    /// version of this seam reproduced the exact failure it was built to catch. On a
-    /// host where `SystemLanguageModel.default.availability == .available` but the model
-    /// catalog is empty (a real simulator state: *"There are no underlying assets … for
-    /// asset set com.apple.modelcatalog"*), every generation throws and
-    /// `AppBrain.triage` degrades to the heuristic — **by design**, because capture must
-    /// never fail. The arm then produces the fallback's drafts, scores the fallback's
-    /// numbers, and prints "on-device: ALL FLOORS HELD".
-    ///
-    /// Availability is a claim about a model EXISTING; it is not evidence that one
-    /// ANSWERED. So the arm proves it: the `ModelMetrics` delta across the run says how
-    /// many calls were served, and an arm that expected a model and served none is
-    /// reported as **DEGRADED** rather than as a pass. A green table nobody can trust is
-    /// worse than no table.
-    ///
-    /// A thrown error is reported as a failed ARM rather than a failed run, so one
-    /// broken arm never hides another's numbers.
-    private func runEvalArm(
-        _ name: String, expectsModel: Bool = false,
-        resolve: @escaping (String) async throws -> [TaskDraft]
-    ) async {
-        let before = ModelMetrics.shared.stats[.captureTriage] ?? ModelMetrics.Stats()
-        let started = Date()
-        do {
-            let report = try await RambleEval.score(resolve: resolve)
-            let seconds = Date().timeIntervalSince(started)
-            let after = ModelMetrics.shared.stats[.captureTriage] ?? ModelMetrics.Stats()
-            let served = after.served - before.served
-            let failed = (after.failures - before.failures) + (after.timeouts - before.timeouts)
-
-            print(report.table(against: .standard, arm: name))
-            print(
-                String(
-                    format: "arm %@ took %.1fs · model calls served %d · failed %d",
-                    name, seconds, served, failed))
-            // DEGRADED is a RATIO, not a zero test.
-            //
-            // It used to fire only on `served == 0`, and that let the worst possible
-            // report through: a cloud arm that served 2 of 52 calls printed "ALL FLOORS
-            // HELD" with numbers identical to the heuristic's, because 96% of the corpus
-            // had quietly scored the deterministic fallback. One survivor was enough to
-            // suppress the warning. A partially degraded arm is not a weaker version of
-            // a degraded arm — it is the same lie with better camouflage, because the
-            // table looks plausible instead of empty.
-            //
-            // `lastError` is printed with it: an arm can now say WHY it degraded, which
-            // is the difference between "re-run somewhere else" and a diagnosis. Without
-            // it the only signal was a count, and a count cannot distinguish a missing
-            // model from a rejected request.
-            let attempted = served + failed
-            let servedShare = attempted > 0 ? Double(served) / Double(attempted) : 0
-            if expectsModel && (attempted == 0 || servedShare < 0.9) {
-                let reason = ModelMetrics.shared.stats[.captureTriage]?.lastError
-                print(
-                    """
-                    ⚠️  ARM DEGRADED — "\(name)" served \(served)/\(attempted) call\
-                    \(attempted == 1 ? "" : "s"); the rest scored the DETERMINISTIC \
-                    fallback, so this table describes the fallback, not \(name). \
-                    \(reason.map { "Last error: \($0)." } ?? "No error label recorded.") \
-                    Fix the arm before treating any number above as a baseline.
-                    """)
-            }
-        } catch {
-            print("arm \(name) FAILED: \(AppBrain.errorLabel(error))")
-        }
-    }
-    #endif
 
     /// Deterministic verification seam. Launch with `-OpenCapture ["text"]` to present
     /// the composer at launch — the one capture surface no other arg could reach
@@ -429,18 +270,35 @@ struct RootTabView: View {
     /// `resumeCapture`) warms the substrate, sets the resume target explicitly — a stale
     /// one must never leak into a fresh capture — and clears any unconsumed commit
     /// summary, so a seed-path commit can't fire a receipt on a later dismiss.
-    private func presentComposer(resuming capture: Capture?) {
+    private func presentComposer(resuming capture: Capture?, autoSubmit: Bool = false) {
         // Warm the model + retrieval substrate NOW: the sheet-presentation animation
         // absorbs the cost, so the first parse doesn't pay it against the user's pause.
         AppBrain.prewarmCapture(in: context)
         brain.lastCommitSummary = nil
-        composerSession = ComposerSession(resuming: capture)
+        composerSession = ComposerSession(resuming: capture, autoSubmit: autoSubmit)
     }
 
-    /// Show the receipt for a confirm that just happened, once — and ONLY for what the
-    /// composer's own ✓ moment couldn't say. The count is delivered in the sheet now
-    /// ("5 tasks added"), so re-announcing it here made the arc end twice; a merge
-    /// target still needs naming, because that is the one thing the count leaves open.
+    /// Words handed over by an App Intent (F-01) — "Hey Siri, tell Ezra…", the Action
+    /// Button, Shortcuts. Parked as a `Capture` (the shape a dismissed composer leaves)
+    /// and resumed with `autoSubmit`, so the person lands on the confirm card: nothing
+    /// said is retyped, nothing is created without the one human moment.
+    private func consumePendingCapture() {
+        guard let pending = PendingCapture.shared.consume() else { return }
+        let capture = Capture(rawText: pending.words, source: pending.source, in: context)
+        capture.parkedDrafts = []
+        context.insert(capture)
+        context.saveChanges()
+        presentComposer(resuming: capture, autoSubmit: true)
+    }
+
+    /// Speak for a confirm that just happened, once — and ONLY about a MERGE.
+    ///
+    /// This used to be justified as "what the composer's ✓ receipt couldn't say", the
+    /// receipt having delivered the count. That receipt was removed on 2026-08-30 (it read
+    /// as an extra screen), so this pill is now the ONLY thing that speaks after a commit —
+    /// and it still deliberately says nothing about the count. The list the user just
+    /// landed on shows the new tasks; a merge is the one outcome it cannot show, because
+    /// the merged capture is folded into a task that was already there.
     ///
     /// Deliberately no Undo button: undoing a batch means deleting the created tasks AND
     /// reversing each merge AND unwinding the blocker edges commit wrote onto OTHER
@@ -453,51 +311,92 @@ struct RootTabView: View {
         commitNotice = UndoNotice(message: message)
     }
 
-    /// The persistent Capture action: a circular accent-gradient button in the
-    /// bottom-trailing corner. Linear's agent button sits INLINE beside its (icon-only,
-    /// narrow) tab bar; with four labeled tabs ours couldn't — the system capsule was too
-    /// wide to leave beside-room, so it was pinned just ABOVE the bar's trailing edge
-    /// ("near the bar"), which also keeps it from floating orphaned when the bar
-    /// minimizes on scroll. `bottomInset` is a TUNED CONSTANT (the bar geometry isn't
-    /// public), not a pixel-lock.
+    // MARK: - The Capture orb
+
+    /// The persistent Capture action: a circular Liquid Glass button holding a live mini
+    /// `RambleOrb`, parked bottom-trailing IN THE SAME ROW as the system tab bar's capsule
+    /// — Linear's agent-button placement, which the two-tab collapse finally leaves room
+    /// for, and which this file's retired FAB comment wanted but deferred.
     ///
-    /// The two-tab collapse frees the width the original beside-placement wanted, and it
-    /// is deliberately NOT taken here: this is a layout change with a real chance of
-    /// colliding with the bar's own minimize behaviour, and it belongs to a beat that can
-    /// be looked at in the simulator rather than riding along with a structural cut.
-    private var captureButton: some View {
+    /// It is the app's ONE piece of bottom chrome. The bar beside it is the OS's: iOS 27
+    /// publishes no way to put a custom control inline with an expanded tab bar
+    /// (`tabViewBottomAccessoryPlacement` is get-only and `.inline` only happens once the
+    /// bar minimizes), so positioning this button is the smallest custom chrome that can
+    /// express "the orb is always beside the bar".
+    ///
+    /// **Every line of the composition is load-bearing**, and all three ways to get it
+    /// wrong were made and caught in the simulator during the custom-bar pass:
+    ///
+    /// - **Glass is the BACKGROUND, never a wrapper.** `.glassChrome` draws as
+    ///   `content.overlay { glass }` and, on its flat (Reduce Transparency / Increase
+    ///   Contrast) path, REPLACES content with a filled shape. Wrapped around the orb it
+    ///   would put the orb under a glass sheet — and DELETE it under either setting.
+    /// - **No `GlassEffectContainer`.** A container groups its descendants into the glass
+    ///   rendering pass, which blurs them; the orb would smear. A container earns its
+    ///   place only when two glass elements must morph, and the system's bar is not in our
+    ///   view tree to morph with.
+    /// - **No tint, no coloured shadow, no dark well.** Glass is recessive chrome and the
+    ///   orb supplies the only saturation. The well the old CTA needed existed because the
+    ///   orb sat on `accentGradient` — the same two hues it is built from — and had no
+    ///   value separation; on neutral glass it has plenty.
+    private var captureOrbButton: some View {
         Button {
-            // Opening the composer from here always starts a NEW capture — a stale
-            // resume target from an earlier \.resumeCapture must not leak into it
-            // (it could be committed or deleted by now).
+            // Byte-identical to the FAB's and the CTA's action. Opening from here always
+            // starts a NEW capture — a stale resume target from an earlier
+            // \.resumeCapture must not leak in (it could be committed or deleted by now).
             presentComposer(resuming: nil)
         } label: {
-            Image(systemName: "plus")
-                .font(.glyphControl(.semibold))
-                .foregroundStyle(Palette.onAccent)
-                .frame(width: 52, height: 52)
-                .background(Palette.accentGradient, in: Circle())
-                // The one piece of app chrome floating over scrolling content joins the
-                // glass system: an interactive Liquid Glass lens over the brand gradient
-                // (specular edge + native press response). Falls back to the plain
-                // gradient under Reduce Transparency / Increase Contrast.
-                .overlay { captureGlass }
-                .shadow(color: Palette.accentGlow, radius: 12, y: 4)
+            RambleOrb(
+                diameter: Self.captureOrbDiameter,
+                frameInterval: Motion.orbBarFrameInterval,
+                paused: barOrbPaused
+            )
+            .frame(width: Self.captureButtonDiameter, height: Self.captureButtonDiameter)
+            .background { Color.clear.glassChrome(in: Circle(), interactive: true) }
         }
-        .buttonStyle(.pressableProminent)
+        .buttonStyle(.pressable)
+        // The second orb's front door: long-press = Private Capture ("I know the
+        // thing", device-only), tap = Ramble ("let me dump this out") — the owner's
+        // entry-point decision, 2026-08-30. `simultaneousGesture` so the Button's
+        // tap keeps working untouched.
+        // `RambleOrb` is `.accessibilityHidden(true)` — it is atmosphere — so the button
+        // has no other label source.
         .accessibilityLabel("Capture a task")
         .padding(.trailing, Spacing.md)
-        .padding(.bottom, Spacing.xxl)
+        .padding(.bottom, Spacing.md)
     }
 
-    /// The interactive Liquid Glass lens over the Capture button's gradient — present
-    /// only when the accessibility settings allow glass (else the plain gradient shows).
-    @ViewBuilder
-    private var captureGlass: some View {
-        if !reduceTransparency && contrast != .increased {
-            Color.clear.glassEffect(.regular.interactive(), in: Circle())
-        }
+    /// Whether the bar orb's timeline should stop. It is mounted for the whole app
+    /// lifetime — unlike the capture beat's orb, which exists only while someone waits —
+    /// so it runs only while it can actually be seen.
+    ///
+    /// KNOWN GAP, pre-existing and not caused by the move to the native bar: this does not
+    /// cover `taskDetailSheet`, which is a `fullScreenCover` presented by `TasksHomeView`
+    /// rather than by this shell, so the orb keeps animating underneath a full-screen task
+    /// detail.
+    ///
+    /// **`.background`, not `!= .active`.** The stricter test also catches `.inactive`,
+    /// which is not "nobody is looking": it fires for the app switcher, Control Centre, an
+    /// incoming call — and, in the simulator, for the window merely not being key, which
+    /// left the orb frozen in every headless check (caught by sampling the orb's pixels
+    /// across a breath and finding them byte-identical, against a full-screen capture orb
+    /// that changed every frame). Those states are brief and mostly still visible, so the
+    /// saving was nil and the cost was an orb that looked dead.
+    private var barOrbPaused: Bool {
+        keyboardUp || composerSession != nil || showActivity || showOnboarding || showAsk
+            || scenePhase == .background
     }
+
+    /// The Capture button's diameter, set to the system tab bar capsule's MEASURED height
+    /// so the two are the same size and read as one row rather than a bar with something
+    /// parked beside it. Grown from the retired FAB's 52pt on 2026-08-29.
+    private static let captureButtonDiameter: CGFloat = 62
+
+    /// The orb inside it, preserving the 11pt glass bezel the old 52/30 pairing had: the
+    /// bezel is what makes this read as a lens set into a button rather than a bare orb
+    /// floating next to the bar.
+    private static let captureOrbDiameter: CGFloat = 40
+
 
     /// Deterministic verification seam. Launch with `-SeedSampleData` to run the
     /// sample brain-dump through the active engine and skip onboarding. Never fires
@@ -533,306 +432,6 @@ struct RootTabView: View {
         showOnboarding = false
     }
 
-    /// Verification seam for the ONE thing only real hardware can answer: how the
-    /// capture pipeline behaves against a live on-device model.
-    ///
-    /// `-CaptureDiagnostics` runs a deliberately long ramble through the active engine
-    /// and prints the result — tier, wall-clock, draft count, and the `ModelMetrics`
-    /// tallies — to stdout, where `devicectl process launch --console` can read it.
-    /// Everything here was previously legible only as text on a DEBUG footer, i.e. only
-    /// to a human holding the phone, which is why "device-verify" had stayed a checklist
-    /// someone had to perform rather than a thing that could simply be run.
-    ///
-    /// Deliberately does NOT commit: this measures the parse, and leaving a pile of
-    /// tasks behind would make the seam destructive to re-run.
-    /// `-BriefDiagnostics` — prove the CLOUD BRIEF end to end, headlessly.
-    ///
-    /// **Why this exists as a seam rather than a footer reading.** The MAX_TOKENS bug was
-    /// unit-proven and operationally broken for weeks: the profile was right, a per-call
-    /// `GenerationOptions` overrode it, and every cloud briefing returned
-    /// `finishReason: MAX_TOKENS` while the UI simply showed the deterministic tail. The
-    /// only visible symptom was a briefing that read a bit flat. Nothing failed, nothing
-    /// was logged where anyone looked, and the fix for it was itself unverifiable without
-    /// standing in the app watching a DEBUG footer.
-    ///
-    /// So this prints the whole chain as facts: which tier ANSWERED, whether the reply is
-    /// actually voiced or merely a ranked list wearing a headline, the token accounting,
-    /// and the typed error when it fails. A cloud tier that silently degrades now says so
-    /// in one line.
-    ///
-    /// Non-destructive: generates a plan and prints it, commits nothing.
-    private func runBriefDiagnosticsIfRequested() async {
-        #if DEBUG
-        guard ProcessInfo.processInfo.arguments.contains("-BriefDiagnostics") else { return }
-        print("=== BRIEF DIAGNOSTICS ===")
-        print("engine: \(brain.status.description)")
-        print(
-            "cloud provider: configured \(CloudModel.isAvailable) · "
-                + "reachable \(CloudModel.isReachable) (\(CloudModel.label))")
-
-        let all = TaskItem.fetchAll(in: context)
-        let live = all.filter { $0.status.isLive }
-        guard !live.isEmpty else {
-            print("no live tasks — run with -SeedTodayFixtures to give the advisor something to plan")
-            print("=== END BRIEF DIAGNOSTICS ===")
-            return
-        }
-        let request = TodayPlanRequest.make(
-            candidateItems: TaskRanking.sorted(live, among: all, now: Date()),
-            allTasks: all, recapCount: 0, typicalCompleted: nil, now: Date())
-        print("candidates: \(request.candidates.count)")
-
-        let started = Date()
-        let plan = await brain.todayPlan(for: request, in: context)
-        let ms = Int(Date().timeIntervalSince(started) * 1000)
-
-        // The claim under test. A deterministic plan is a ranked list with fact lines and
-        // no tradeoffs or risks — structurally distinguishable from an advisor's voice,
-        // which is exactly why "the Brief looked fine" was never evidence.
-        let voiced = plan.tier != PlanTier.deterministic && plan.tradeoffs != nil && plan.risks != nil
-        print("tier that ANSWERED: \(plan.tier)  ·  \(ms)ms")
-        print("headline: \(plan.headline ?? "—")")
-        print(
-            "actions: \(plan.actions.count) · tradeoffs: \(plan.tradeoffs != nil) · risks: \(plan.risks != nil)"
-        )
-        print(
-            voiced
-                ? "✅ VOICED — the advisor answered"
-                : "⚠️  NOT VOICED — this is the deterministic tail wearing a headline")
-        if plan.tier == PlanTier.deterministic {
-            print(
-                "   why: err \(brain.planMetrics.lastError ?? "none") · availability \(brain.planMetrics.lastAvailability ?? "?")"
-            )
-        }
-        let m = brain.planMetrics
-        print(
-            "metrics: last tier \(m.lastTier ?? "—") · \(m.lastLatencyMs)ms · "
-                + "prompt \(m.lastPromptTokens) · output \(m.lastOutputTokens) · "
-                + "err \(m.lastError ?? "none") · availability \(m.lastAvailability ?? "?")")
-        print(
-            "metrics: tiers — on-device \(m.onDeviceCount) · cloud \(m.cloudCount) · rules \(m.deterministicCount)"
-        )
-        print("=== END BRIEF DIAGNOSTICS ===")
-        #endif
-    }
-
-    /// `-CaptureCompare "<your ramble>"` — the same words, read by every arm, printed
-    /// side by side. Add `-WithCloud` to include the paid rung.
-    ///
-    /// **The manual-judgment instrument.** `RambleEval` answers "does this match the
-    /// labels?" over a frozen corpus; that is the right question for regressions and the
-    /// wrong one for "is this good?". Quality on YOUR OWN messy sentences is a thing a
-    /// person has to read and decide, and until now the only way to see a reading was to
-    /// capture it in the app and inspect cards — one arm, no comparison, no way to tell
-    /// which reader you were looking at.
-    ///
-    /// It matters more on the Spark plan than it would otherwise. Unstructured capture
-    /// routes to the cloud, the cloud is rationed, and what actually serves the ramble is
-    /// the DEGRADED OFFLINE arm — the one device evidence says is weakest at exactly this
-    /// job. Whether that is tolerable to live with is a judgment call, and this is the
-    /// tool for making it on real input instead of on the corpus.
-    ///
-    /// The cloud arm is OPT-IN (`-WithCloud`) because one eval sweep exhausts a day's
-    /// free quota, which then breaks real capture — measuring the product must not cost
-    /// you the product.
-    private func runCaptureCompareIfRequested() async {
-        #if DEBUG
-        let args = ProcessInfo.processInfo.arguments
-        guard let flag = args.firstIndex(of: "-CaptureCompare") else { return }
-        let text =
-            args.indices.contains(flag + 1) && !args[flag + 1].hasPrefix("-")
-            ? args[flag + 1]
-            : "renew my passport before the trip and book flights after it comes through"
-
-        print("=== CAPTURE COMPARE ===")
-        print("input (\(text.count) chars): \(text)")
-        // What PRODUCTION would do with this input, before any arm runs — so the
-        // comparison is read against the route the user would actually get. Since
-        // 2026-08-29 that decision includes the verifier, so it needs the local read.
-        let structure = Segmentation.structure(of: text)
-        let localRead = IntentResolver.resolve(
-            (try? await HeuristicEngine().triage(rawText: text)) ?? [])
-        let decision = CaptureRoute.route(for: text, localRead: localRead)
-        print(
-            "structure: \(structure.label) → route \(decision.route.metricName)"
-                + (decision.escalation.map { " (escalates: \($0.rawValue))" }
-                    ?? " (local read kept)"))
-
-        await compareArm("deterministic (always available)") {
-            IntentResolver.resolve(try await HeuristicEngine().triage(rawText: text))
-        }
-
-        if brain.status.isOnDevice {
-            await compareArm("on-device FM (retired from capture; tripwire arm)") {
-                let engine = FoundationModelsEngine(sessionSource: .onDevice)
-                let intents = try await engine.triage(
-                    rawText: text, context: TriageContext(), onPartial: nil)
-                return IntentResolver.resolve(intents)
-            }
-        } else {
-            print("\n— on-device FM: no on-device model on this host")
-        }
-
-        if args.contains("-WithCloud") {
-            guard CloudModel.isAvailable else {
-                print("\n— cloud: no provider configured")
-                print("=== END CAPTURE COMPARE ===")
-                return
-            }
-            await compareArm("cloud (the semantic authority)") {
-                let engine = FoundationModelsEngine(sessionSource: .cloud)
-                let intents = try await engine.triage(
-                    rawText: text, context: TriageContext(), onPartial: nil)
-                return IntentResolver.resolve(intents)
-            }
-        } else {
-            print("\n— cloud: skipped (pass -WithCloud to spend a call)")
-        }
-        print("=== END CAPTURE COMPARE ===")
-        #endif
-    }
-
-    #if DEBUG
-    /// One arm's reading, printed as the DRAFTS THEMSELVES rather than as counts.
-    ///
-    /// Counts are what the old diagnostics gave ("11 drafts · 3 dated"), and they cannot
-    /// answer the only question that matters here: did it understand the sentence? A
-    /// wrong split and a right one both count as two.
-    private func compareArm(
-        _ name: String, resolve: @escaping () async throws -> [TaskDraft]
-    ) async {
-        let started = Date()
-        do {
-            let drafts = try await resolve()
-            let ms = Int(Date().timeIntervalSince(started) * 1000)
-            print("\n── \(name) — \(drafts.count) task\(drafts.count == 1 ? "" : "s") · \(ms)ms ──")
-            if drafts.isEmpty { print("   (nothing)") }
-            for (i, d) in drafts.enumerated() {
-                var line = "  \(i + 1). \(d.title)  [\(d.category)]"
-                if let due = d.dueDate {
-                    line += " · due \(Self.dayFormatter.string(from: due))"
-                    if d.dueReason != nil { line += " (inferred)" }
-                }
-                if let owner = d.ownerName { line += " · @\(owner)" }
-                if let blocker = d.blockedBy { line += " · waits on \(blocker)" }
-                if d.isJudgmentCall { line += " · JUDGMENT" }
-                if d.unresolved.contains(.date) { line += " · asks WHEN?" }
-                print(line)
-            }
-        } catch {
-            print("\n── \(name) — FAILED: \(AppBrain.errorLabel(error))")
-        }
-    }
-
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "EEE d MMM"
-        return f
-    }()
-    #endif
-
-    private func runCaptureDiagnosticsIfRequested() async {
-        guard ProcessInfo.processInfo.arguments.contains("-CaptureDiagnostics") else { return }
-        // Long, messy, and full of the shapes that make the model work: dates, a
-        // delegation, a blocker, judgment calls, and a duplicate of a seeded task.
-        let ramble =
-            String(repeating: "", count: 1) + """
-                ok brain dump time — renew my passport before the trip, and book flights \
-                for that trip but only after the passport comes through, oil change is \
-                overdue by like two weeks now, should I keep paying for the gym I honestly \
-                never use, call mom back she left three voicemails, daycare enrollment \
-                forms are due Friday, finish the Q3 deck for the board thing, return the \
-                amazon package before the window closes, figure out if the side project is \
-                still worth it or if I should let it go, pay the water bill it's the second \
-                notice, ask Maya to sort out the insurance renewal, schedule the kitchen \
-                plumber once the contractor calls back, and renew my passport
-                """
-        print("=== CAPTURE DIAGNOSTICS ===")
-        print("engine: \(brain.status.description)")
-        // The first line to read when a capture is slow. `configured` is whether this
-        // build is wired to a provider at all; `health` is whether the last calls
-        // actually landed. A run that shows `configured yes` and `health open` went
-        // on-device DELIBERATELY and instantly — which is a completely different
-        // diagnosis from a hung network, and was indistinguishable before the breaker.
-        print("cloud: configured \(CloudModel.isAvailable) · \(CloudHealth.shared.statusLine())")
-        print("input: \(ramble.count) chars")
-        // The provisional arm FIRST — it is what the user now sees, and the gap
-        // between these two numbers is the whole instant-capture claim, in one
-        // re-runnable line. Also printed at three input lengths, because the
-        // coalesce window is tuned on how this scales, not on how it reads once.
-        for cut in [ramble.count / 3, (ramble.count * 2) / 3, ramble.count] {
-            let slice = String(ramble.prefix(cut))
-            let started = Date()
-            let provisional = AppBrain.provisionalDrafts(slice)
-            let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-            print(
-                "provisional @\(cut) chars: \(provisional.count) drafts · \(elapsed)ms "
-                    + "· owners \(provisional.compactMap(\.ownerName).count) "
-                    + "· dated \(provisional.compactMap(\.dueDate).count)")
-        }
-        let started = Date()
-        let drafts = await brain.triage(ramble).drafts
-        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-        print("drafts: \(drafts.count)")
-        print("wall clock: \(elapsed)ms")
-        print(
-            "proposals: \(drafts.reduce(0) { $0 + $1.edgeProposals.count }) "
-                + "· owners: \(drafts.compactMap(\.ownerName).count) "
-                + "· blockers: \(drafts.compactMap(\.blockedBy).count) "
-                + "· dated: \(drafts.compactMap(\.dueDate).count)")
-        for line in ModelMetrics.shared.footerLines() { print("metrics: \(line)") }
-        // AFTER the run: if the cloud arm threw, this names the classification that moved
-        // the breaker, so a slow capture explains itself in one line instead of a guess.
-        print("cloud after: \(CloudHealth.shared.statusLine())")
-        await runContinuousDiagnosticsArm(ramble: ramble)
-        print("=== END CAPTURE DIAGNOSTICS ===")
-    }
-
-    /// The A/B arm for the CONTINUOUS capture session (`CaptureConversation`): the
-    /// same ramble fed as three growing snapshots — the shape the rolling chain
-    /// produces — with per-turn wall-clock, draft counts, and token accounting. The
-    /// continuous session becomes the composer's default the day these numbers beat
-    /// the single-use baseline above on real hardware; until then it is measured,
-    /// not shipped (the capture-deadline precedent: tuned on evidence).
-    private func runContinuousDiagnosticsArm(ramble: String) async {
-        guard brain.status.isOnDevice else {
-            print("continuous: skipped (engine is not on-device)")
-            return
-        }
-        // Three prefixes at natural clause boundaries, ending with the full text —
-        // turn 1 initial, turns 2-3 suffix continuations.
-        let cuts = [ramble.count / 3, (ramble.count * 2) / 3, ramble.count]
-        let snapshots = cuts.map { String(ramble.prefix($0)) }
-        let conversation = CaptureConversation(context: TriageContext())
-        for (index, snapshot) in snapshots.enumerated() {
-            let turn = CaptureConversation.turn(
-                from: conversation.coveredText, to: snapshot)
-            let turnLabel: String
-            switch turn {
-            case .initial: turnLabel = "initial"
-            case .continuation(let suffix): turnLabel = "continuation(+\(suffix.count) chars)"
-            case .revision: turnLabel = "revision"
-            }
-            let started = Date()
-            do {
-                let intents = try await conversation.triage(
-                    rawText: snapshot, context: TriageContext(), onPartial: nil)
-                let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-                let prompt = CaptureConversation.prompt(for: turn)
-                let tokens =
-                    (try? await SystemLanguageModel.default.tokenCount(for: prompt)) ?? -1
-                print(
-                    "continuous turn \(index + 1)/\(snapshots.count) [\(turnLabel)]: "
-                        + "\(intents.count) intents · \(elapsed)ms · prompt \(tokens) tok")
-            } catch {
-                let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-                print(
-                    "continuous turn \(index + 1)/\(snapshots.count) [\(turnLabel)]: "
-                        + "FAILED after \(elapsed)ms · \(AppBrain.errorLabel(error))")
-            }
-        }
-    }
-
     /// Deterministic verification seam. Launch with `-SeedFlowFixtures` to populate
     /// hand-built data covering every core user flow except onboarding, bypassing
     /// the AI engine so status/confidence/autonomy are exact. The fixtures below are
@@ -850,25 +449,10 @@ struct RootTabView: View {
         showOnboarding = false
     }
 
-    /// Deterministic verification seam. Launch with `-SeedTodayFixtures` to populate
-    /// data that exercises every beat of the Today sequence — Recap (recent
-    /// completions), Docket (due/overdue/decisions), a blocked-and-blocking chain,
-    /// and `CapacityLog` history driving the personalized/divergent/cold-start
-    /// baselines. See `TodayFixtures`. Never fires in normal runs.
-    private func seedTodayFixturesIfRequested() {
-        guard ProcessInfo.processInfo.arguments.contains("-SeedTodayFixtures") else { return }
-        // Force a fresh seed every launch with the arg set (device iteration): wipe
-        // prior task data + the Today cache first, so a used store still shows the set.
-        TodayFixtures.reset(in: context)
-        TodayFixtures.seed(into: context)
-        hasOnboarded = true
-        showOnboarding = false
-    }
 }
 
 #Preview {
     RootTabView()
         .environment(AppBrain())
-        .environment(BriefingReminder())
         .environment(\.managedObjectContext, PersistenceStack.scratch)
 }

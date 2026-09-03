@@ -107,16 +107,6 @@ enum CapabilityProfiles {
     static let taskAdvisor = Config(
         temperature: 0.5, reasoningLevel: .deep, maximumResponseTokens: 500)
 
-    /// The Brief's voice. Deep on the cloud rung, degraded on device — same profile,
-    /// same contract, and the deterministic tail underneath either way.
-    ///
-    /// The answer budget is explicit rather than nil because a briefing is the longest
-    /// thing this product generates: a headline, up to `maxActions` (7) action lines with
-    /// rationales, plus tradeoffs and risks. Left nil it inherited a framework default
-    /// small enough that thinking consumed the whole allowance.
-    static let briefPlan = Config(
-        temperature: 0.6, reasoningLevel: .deep, maximumResponseTokens: 1200)
-
     /// Ramble's parse. **Deliberately no reasoning level, on any rung.** Capture is
     /// Level 2–3 semantic parsing — segmentation, modifier attachment, compound temporal
     /// structure — which is squarely inside a Flash-class model's reliable band and

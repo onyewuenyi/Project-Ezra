@@ -56,7 +56,7 @@ struct WorkIntentClassifier {
     /// reaching for a kind that no longer exists) is `noUsableOutput`, not a silent nil —
     /// otherwise a systematically wrong prompt would look exactly like a quiet model.
     func classify(_ context: WorkIntentContext) async -> ModelResult<WorkIntent> {
-        let outcome = await ModelRun.perform(.workIntent, deadline: ModelDeadline.backgroundSeconds) {
+        let outcome = await ModelRun.perform(.workIntent, deadline: ModelDeadline.seconds(for: .background)) {
             let session = CapabilityProfiles.session(
                 instructions: Self.instructions, config: CapabilityProfiles.workIntent)
             return try await session.respond(

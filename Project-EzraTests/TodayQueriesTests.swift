@@ -108,22 +108,4 @@ struct TodayQueriesTests {
 
     // MARK: - Chain detection
 
-    @Test("A task both blocked and blocking is a chain; a single edge is not")
-    func chainDetection() {
-        // C waits on B waits on A → B is both blocked (by A) and blocking (C).
-        let a = TaskItem(title: "a", status: .todo)
-        let b = TaskItem(title: "b", status: .todo)
-        let c = TaskItem(title: "c", status: .todo)
-        let all = [a, b, c]
-        b.addTaskBlocker(a.uuid!, among: all)
-        c.addTaskBlocker(b.uuid!, among: all)
-        #expect(TodayQueries.hasBlockedBlockingChain(all))
-
-        // A single edge (B waits on A): nobody is both blocked and blocking.
-        let x = TaskItem(title: "x", status: .todo)
-        let y = TaskItem(title: "y", status: .todo)
-        let pair = [x, y]
-        y.addTaskBlocker(x.uuid!, among: pair)
-        #expect(!TodayQueries.hasBlockedBlockingChain(pair))
-    }
 }

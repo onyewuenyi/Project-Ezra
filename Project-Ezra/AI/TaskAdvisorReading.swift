@@ -28,7 +28,7 @@ import FoundationModels
 /// The internal move vocabulary — the contract between intelligence and application
 /// behavior. `.nothing` is silence (no surface at all); `.advise` is a words-only
 /// reading. The user never sees these names.
-enum AdvisorMove: String, Sendable, Equatable, CaseIterable {
+enum AdvisorMove: String, Sendable, Equatable, CaseIterable, Codable {
     case nothing
     case advise
     case decide
@@ -128,12 +128,12 @@ struct AdvisorStep: Sendable {
 
 /// One option, post-validation. A plain value so the state machine stays `Equatable`
 /// without leaning on generated conformances.
-struct AdvisorChoice: Sendable, Equatable {
+struct AdvisorChoice: Sendable, Equatable, Codable {
     let label: String
     let tradeoff: String
 }
 
-struct AdvisorRecommendation: Sendable, Equatable {
+struct AdvisorRecommendation: Sendable, Equatable, Codable {
     let label: String
     let why: String
 }
@@ -141,7 +141,7 @@ struct AdvisorRecommendation: Sendable, Equatable {
 /// The reading the UI renders and the store caches — every per-move payload proven
 /// present, every string trimmed, the move typed. THE product contract; the generated
 /// struct above never crosses the service boundary.
-struct ValidatedReading: Sendable, Equatable {
+struct ValidatedReading: Sendable, Equatable, Codable {
     let move: AdvisorMove
     let observation: String
     let guidance: String?

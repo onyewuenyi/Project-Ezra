@@ -119,180 +119,20 @@ final class MetricsRecorder {
 
 // MARK: - Today plan instrumentation (spec §7)
 
-/// The Today sequence's own instrumentation, kept next to `MetricsRecorder` and the
-/// same shape: injectable `UserDefaults`, on-device only, counted signals that can't
-/// be derived after the fact. Which tier produced a plan, its latency and token
-/// cost (−1 when the model doesn't expose usage), how many planned tasks got
-/// skipped, and how often the user tapped through the cinematic beats before the
-/// stagger finished (a high count on first playthrough ⇒ §4 pacing is too slow).
-/// V0 has no manual reorder — the AI owns order — so there is no reorder signal.
-@MainActor
-@Observable
-final class PlanMetrics {
-    private let defaults: UserDefaults
-
-    private(set) var onDeviceCount: Int
-    private(set) var cloudCount: Int
-    private(set) var deterministicCount: Int
-    private(set) var lastLatencyMs: Int
-    private(set) var lastPromptTokens: Int
-    private(set) var lastOutputTokens: Int
-    /// In-memory session diagnostics — tool calls last generation, and its turn number.
-    private(set) var lastToolCalls = 0
-    private(set) var lastTurn = 0
-    private(set) var skips: Int
-    private(set) var interruptions: Int
-    /// The tier that produced the last returned plan ("on-device"/"cloud(<provider>)"/"rules").
-    private(set) var lastTier: String?
-    /// The typed label of the last *swallowed* model-tier failure (timedOut,
-    /// guardrailViolation, exceededContextWindowSize, modelNotReady, …) — the one signal
-    /// that tells us WHY the advisor fell back. Cleared on a successful on-device plan.
-    private(set) var lastError: String?
-    /// `SystemLanguageModel.default.availability` at the last generation attempt.
-    private(set) var lastAvailability: String?
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        self.onDeviceCount = defaults.integer(forKey: Key.onDeviceCount)
-        self.cloudCount = defaults.integer(forKey: Key.cloudCount)
-        self.deterministicCount = defaults.integer(forKey: Key.deterministicCount)
-        self.lastLatencyMs = defaults.object(forKey: Key.lastLatencyMs) as? Int ?? -1
-        self.lastPromptTokens = defaults.object(forKey: Key.lastPromptTokens) as? Int ?? -1
-        self.lastOutputTokens = defaults.object(forKey: Key.lastOutputTokens) as? Int ?? -1
-        self.skips = defaults.integer(forKey: Key.skips)
-        self.interruptions = defaults.integer(forKey: Key.interruptions)
-        self.lastTier = defaults.string(forKey: Key.lastTier)
-        self.lastError = defaults.string(forKey: Key.lastError)
-        self.lastAvailability = defaults.string(forKey: Key.lastAvailability)
-    }
-
-    /// Record a completed generation: bump the tier's count and stamp the latest
-    /// latency/token readings. `promptTokens`/`outputTokens` are −1 when the model
-    /// surface doesn't expose usage (device-verify wires the real numbers).
-    func recordGeneration(
-        tier: PlanTier, latencyMs: Int, promptTokens: Int, outputTokens: Int,
-        toolCalls: Int = 0, turn: Int = 0
-    ) {
-        // Session diagnostics (in-memory, like the parse-shape trio): the tool-call
-        // count is the over-calling tripwire, the turn number says whether this was
-        // the morning briefing or a recompose.
-        lastToolCalls = toolCalls
-        lastTurn = turn
-        switch tier {
-        case .onDevice:
-            onDeviceCount += 1
-            defaults.set(onDeviceCount, forKey: Key.onDeviceCount)
-            // A successful on-device plan means the advisor worked — clear the last
-            // failure so a stale error doesn't linger in the diagnostics.
-            lastError = nil
-            defaults.removeObject(forKey: Key.lastError)
-        case .cloud:
-            cloudCount += 1
-            defaults.set(cloudCount, forKey: Key.cloudCount)
-        case .deterministic:
-            deterministicCount += 1
-            defaults.set(deterministicCount, forKey: Key.deterministicCount)
-        }
-        lastTier = tierLabel(tier)
-        defaults.set(lastTier, forKey: Key.lastTier)
-        lastLatencyMs = latencyMs
-        lastPromptTokens = promptTokens
-        lastOutputTokens = outputTokens
-        defaults.set(latencyMs, forKey: Key.lastLatencyMs)
-        defaults.set(promptTokens, forKey: Key.lastPromptTokens)
-        defaults.set(outputTokens, forKey: Key.lastOutputTokens)
-    }
-
-    /// Record a *swallowed* model-tier failure (the tier threw and the chain fell
-    /// through). This is what surfaces WHY the advisor voice is missing.
-    func recordFailure(tier: PlanTier, label: String, availability: String) {
-        lastError = "\(tierLabel(tier)):\(label)"
-        lastAvailability = availability
-        defaults.set(lastError, forKey: Key.lastError)
-        defaults.set(availability, forKey: Key.lastAvailability)
-    }
-
-    /// The tier's DEBUG label. The cloud rung names its PROVIDER (`cloud(pcc)`) rather
-    /// than just the rung: when a briefing came back voiced from off-device, "which
-    /// provider answered" is the first thing you need in order to read the latency and
-    /// the failure next to it — and it is the only level at which that question is
-    /// legitimate (see `CloudModelProvider`).
-    private func tierLabel(_ tier: PlanTier) -> String {
-        switch tier {
-        case .onDevice: return "on-device"
-        case .cloud: return CloudModel.label
-        case .deterministic: return "rules"
-        }
-    }
-
-    /// A task that was on today's plan but got deferred or killed that day (§7).
-    func recordSkip() {
-        skips += 1
-        defaults.set(skips, forKey: Key.skips)
-    }
-
-    /// The user tapped through a beat before its stagger finished — the §4 pacing
-    /// signal.
-    func recordInterruption() {
-        interruptions += 1
-        defaults.set(interruptions, forKey: Key.interruptions)
-    }
-
-    /// Wipe the tier counts and last-generation diagnostics (Settings ▸ Reset everything).
-    /// In-memory as well as persisted — these are cached at init, so clearing the keys
-    /// alone would leave yesterday's numbers on the footer until the next launch.
-    func reset() {
-        onDeviceCount = 0
-        cloudCount = 0
-        deterministicCount = 0
-        lastLatencyMs = -1
-        lastPromptTokens = -1
-        lastOutputTokens = -1
-        lastToolCalls = 0
-        lastTurn = 0
-        skips = 0
-        interruptions = 0
-        lastTier = nil
-        lastError = nil
-        lastAvailability = nil
-        for key in [
-            Key.onDeviceCount, Key.cloudCount, Key.deterministicCount, Key.lastLatencyMs,
-            Key.lastPromptTokens, Key.lastOutputTokens, Key.skips, Key.interruptions,
-            Key.lastTier, Key.lastError, Key.lastAvailability,
-        ] {
-            defaults.removeObject(forKey: key)
-        }
-    }
-
-    private enum Key {
-        static let onDeviceCount = "today.gen.count.onDevice"
-        static let cloudCount = "today.gen.count.cloud"
-        static let deterministicCount = "today.gen.count.deterministic"
-        static let lastLatencyMs = "today.gen.lastLatencyMs"
-        static let lastPromptTokens = "today.gen.lastPromptTokens"
-        static let lastOutputTokens = "today.gen.lastOutputTokens"
-        static let skips = "today.plan.skips"
-        static let interruptions = "today.seq.interruptions"
-        static let lastTier = "today.gen.lastTier"
-        static let lastError = "today.gen.lastError"
-        static let lastAvailability = "today.gen.lastAvailability"
-    }
-}
-
 /// Per-capability model-call outcomes — the evidence behind `ModelDeadline.cardSeconds`.
 ///
 /// Picking a 20-second deadline without data is guesswork, and the Today plan already
 /// regressed once from a deadline that was too tight for a cold model. This records what
 /// actually happens so the next adjustment is measured rather than argued.
 ///
-/// **Local only, and that is a deliberate boundary.** Same shape as `PlanMetrics`:
+/// **Local only, and that is a deliberate boundary.** Same shape as `MetricsRecorder`:
 /// UserDefaults-backed, surfaced in the DEBUG diagnostics footer, never transmitted.
 /// `prev-docs/product-guardrails.md` refuses vanity metrics and the store holds real
 /// personal data, so shipping per-feature latency off-device would be a product-posture
 /// change — one that deserves its own decision, not a ride along inside a timeout fix.
 ///
 /// A singleton because `ModelRun` is a free function with no instance to hang off, unlike
-/// `PlanMetrics` which rides on `AppBrain`.
+/// `MetricsRecorder` which rides on `AppBrain`.
 @MainActor
 @Observable
 final class ModelMetrics {

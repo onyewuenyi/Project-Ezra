@@ -43,6 +43,15 @@ extension TaskItem {
     /// `updatedAt`. System paths (capture-time edge writes on existing tasks, sweeps)
     /// call plain `touch()` — staleness and the plan-reconcile deferral discriminator
     /// read the human clock only, so a system write can never fake engagement.
+    /// The day answer named this task (F-11). Feeds `RequiredAttention.orientation` —
+    /// the share of worked tasks the answer never surfaced. Deliberately does NOT bump
+    /// `updatedAt` or `lastHumanTouchAt`: being surfaced is something the system did,
+    /// not something the person did, and it must move neither staleness nor the
+    /// Advisor's fingerprint.
+    func markSurfaced(now: Date = Date()) {
+        lastSurfacedAt = now
+    }
+
     func touchHuman(now: Date = Date()) {
         lastHumanTouchAt = now
         // Engagement breaks the avoidance streak. `deferralCount` counts times the task
@@ -445,6 +454,20 @@ enum RecommendedAction: Equatable {
         case .resume: return "Resume"
         case .resolve: return "Mark done"
         case .reopen: return "Reopen"
+        }
+    }
+
+    /// The icon for the same verb, so a surface that shows one shows the other — the
+    /// record row's leading swipe reveals `symbol` + `title` together, and it must read
+    /// as the same action the detail's pinned CTA would perform, because it is: both go
+    /// through `performRecommendedAction`.
+    var symbol: String {
+        switch self {
+        case .claim: return "person.crop.circle"
+        case .unblock: return "lock.open"
+        case .start, .resume: return "play.fill"
+        case .resolve: return "checkmark"
+        case .reopen: return "arrow.uturn.backward"
         }
     }
 

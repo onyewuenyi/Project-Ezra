@@ -73,7 +73,7 @@ enum DataReset {
     @discardableResult
     static func clear(
         _ scope: Scope, in context: NSManagedObjectContext,
-        metrics: MetricsRecorder? = nil, planMetrics: PlanMetrics? = nil,
+        metrics: MetricsRecorder? = nil,
         defaults: UserDefaults = .standard, now: Date = Date(),
         at location: PersistenceStack.StoreLocation = .default,
         provenance: CaptureProvenanceStore? = nil
@@ -107,7 +107,6 @@ enum DataReset {
         if scope == .everything {
             for key in identityKeys { defaults.removeObject(forKey: key) }
             metrics?.reset(now: now)
-            planMetrics?.reset()
             ModelMetrics.shared.reset()
             AdvisorMetrics.shared.reset()
             IntelligenceLedger.shared.reset(now: now)

@@ -7,6 +7,7 @@
 
 import CoreData
 import SwiftUI
+import UserNotifications
 
 @main
 struct Project_EzraApp: App {
@@ -17,7 +18,6 @@ struct Project_EzraApp: App {
     @State private var brain = AppBrain()
     /// The single daily nudge. Constructed at launch because it must be the
     /// notification-centre delegate before any tap can arrive.
-    @State private var briefing = BriefingReminder()
     @Environment(\.scenePhase) private var scenePhase
 
     let container: NSPersistentContainer = {
@@ -158,31 +158,26 @@ struct Project_EzraApp: App {
     private var appContent: some View {
         ContentView()
             .environment(brain)
-            .environment(briefing)
             .environment(\.managedObjectContext, container.viewContext)
             .preferredColorScheme(.dark)  // dark-first reads premium; matches the "quiet" thesis
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .active:
-                    // A foreground counts as a self-initiated open UNLESS the app
-                    // asked for it. The briefing nudge is the only thing that can
-                    // ask, and an open we solicited is not evidence of pull — see
-                    // `BriefingReminder.consumeCameFromNotification`.
-                    if !briefing.consumeCameFromNotification() {
-                        brain.metrics.recordOpen()
-                    }
+                    // Every foreground is a self-initiated open by construction: the app
+                    // sends no notifications (the one carve-out closed with the Brief,
+                    // 2026-09-02), so there is nothing that could have solicited it.
+                    brain.metrics.recordOpen()
                     // Hourly-debounced maintenance: the reversible stale auto-archive.
                     brain.runMaintenanceSweepsIfDue(in: container.viewContext)
-                case .background:
-                    // Roll the nudge horizon forward, skipping today if the sequence
-                    // already played. Backgrounding is the moment we know both.
-                    Task {
-                        await briefing.reschedule(
-                            briefingPlayedToday: TodayPlanStore.sequencePlayedToday())
-                    }
                 default:
                     break
                 }
+            }
+            // Clear any notification a PREVIOUS build scheduled. The daily briefing nudge
+            // retired with the Brief; without this the requests survive the update and
+            // keep firing at a surface that no longer exists. Idempotent, so it just runs.
+            .task {
+                UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
             }
     }
 }

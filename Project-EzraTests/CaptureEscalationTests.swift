@@ -63,6 +63,35 @@ struct CaptureEscalationTests {
         }
     }
 
+    @Test("A compound noun is not an interior verb — a correct three-item read stays local")
+    func compoundNounsAreNotVerbs() async {
+        // "action plan" put a lexicon verb mid-sentence; counted, it was the fifth
+        // signal against three drafts and sent a correctly-read capture to the cloud
+        // — which on a stalled network meant thirty seconds behind the orb for an
+        // answer the device already had (2026-09-02, simulator).
+        let text =
+            "Cook dinner at 3 PM, make an action plan this Sunday for the week and text mom about thanksgiving"
+        #expect(CaptureEscalation.interiorVerbSignals(in: text) == 0)
+        let drafts = await read(text)
+        #expect(drafts.count == 3)
+        #expect(CaptureEscalation.reason(for: text, drafts: drafts) == nil)
+        // The signal still fires where a verb really does start a juxtaposed outcome.
+        #expect(CaptureEscalation.interiorVerbSignals(in: "go to the park cook a lunch walk my dog") == 2)
+    }
+
+    @Test("The capture budget is sized by WHY the words left the device")
+    func budgetFollowsEscalationReason() {
+        // A second opinion over a read already in hand waits the standby budget; a
+        // dump the local arm cannot represent, or an empty read, waits the full one.
+        #expect(ModelDeadline.captureSeconds(for: .underSegmented) == ModelDeadline.captureStandbySeconds)
+        #expect(ModelDeadline.captureSeconds(for: .unresolvedDetail) == ModelDeadline.captureStandbySeconds)
+        #expect(ModelDeadline.captureSeconds(for: .lowCoverage) == ModelDeadline.captureStandbySeconds)
+        #expect(ModelDeadline.captureSeconds(for: .bigDump) == ModelDeadline.captureSeconds)
+        #expect(ModelDeadline.captureSeconds(for: .emptyRead) == ModelDeadline.captureSeconds)
+        #expect(ModelDeadline.captureSeconds(for: nil) == ModelDeadline.captureSeconds)
+        #expect(ModelDeadline.captureStandbySeconds < ModelDeadline.captureSeconds)
+    }
+
     @Test("Case 50 — the named target — escalates instead of hiding seven outcomes")
     func caseFiftyEscalates() async {
         // The utterance the cloud arm exists for: 251 chars, nine outcomes, and the
@@ -122,5 +151,23 @@ struct CaptureEscalationTests {
         #expect(CaptureEscalation.connectiveSignals(in: "call mom, email bob, and fix the sink") >= 2)
         #expect(CaptureEscalation.timeSignals(in: "dentist tomorrow then the gym at 6pm") >= 2)
         #expect(CaptureEscalation.timeSignals(in: "sort out the garage") == 0)
+        // The clock vocabulary is the resolver's: "noon" and "9 p.m." are occasions.
+        #expect(CaptureEscalation.timeSignals(in: "make lunch at noon") == 1)
+        #expect(CaptureEscalation.timeSignals(in: "cook dinner at 9 p.m.") == 1)
+        // A day word and the clock beside it are ONE occasion — counted as two, this
+        // real single-thought capture nagged "sounds like several things" and would
+        // have escalated a one-line capture to the cloud.
+        #expect(CaptureEscalation.timeSignals(in: "clean my room tomorrow at 3 PM") == 1)
+        #expect(CaptureEscalation.timeSignals(in: "take micah to daycare monday at 8 am") == 1)
+        // …in either order: the clock before the day is still one occasion.
+        #expect(CaptureEscalation.timeSignals(in: "Cook at 3PM today") == 1)
+        #expect(CaptureEscalation.timeSignals(in: "make a plan this sunday") == 1)
+        // A trailing dictation comma is not a boundary.
+        #expect(CaptureEscalation.connectiveSignals(in: "Clean my car tomorrow,") == 0)
+        #expect(!PrivateCaptureEngine.soundsLikeSeveralThings("Clean my car tomorrow,"))
+        #expect(!PrivateCaptureEngine.soundsLikeSeveralThings("Cook at 3PM today"))
+        #expect(
+            CaptureEscalation.timeSignals(
+                in: "pick up groceries at noon make an action plan this sunday for the week") == 2)
     }
 }

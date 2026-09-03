@@ -103,6 +103,48 @@ struct CaptureProvenanceTests {
         #expect(42.nonNegative == 42)
     }
 
+    @Test("A pre-contract v1 record decodes with nil contract fields — history survives")
+    func preContractRecordsDecode() throws {
+        // Hand-written v1 JSON WITHOUT the 2026-08-29 contract quartet (confirmMs /
+        // tier / sinceLastWordMs / fromVoice). Additive optionals must decode as nil
+        // and the record must pass the version gate — the alternative (bumping the
+        // version for an additive change) would have `load` silently discard every
+        // receipt written before the upgrade, destroying the very history the live
+        // report exists to fold.
+        let json = """
+            {"version": 1, "captureID": "\(UUID().uuidString)", "rawText": "old",
+             "capturedAt": 0, "committedAt": 0,
+             "run": {"route": "local", "rung": "facts", "segmentation": "explicit",
+                     "cloudAvailable": false, "hedgeStarted": false,
+                     "outcome": "success", "partialCount": 0,
+                     "ungroundedDrops": 0, "candidateTitles": []},
+             "drafts": [], "createdTaskIDs": [], "mergedTaskIDs": []}
+            """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(CaptureProvenance.self, from: json)
+        #expect(decoded.version == CaptureProvenance.currentVersion)
+        #expect(decoded.run.confirmMs == nil)
+        #expect(decoded.run.tier == nil)
+        #expect(decoded.run.sinceLastWordMs == nil)
+        #expect(decoded.run.fromVoice == nil)
+    }
+
+    @Test("The contract fields round-trip through the store")
+    func contractFieldsRoundTrip() {
+        let sut = store()
+        let id = UUID()
+        var run = CaptureRunTelemetry()
+        run.confirmMs = 742
+        run.tier = "simple"
+        run.sinceLastWordMs = 5003
+        run.fromVoice = true
+        sut.record(provenance(capture: id, run: run))
+        let found = sut.provenance(forCapture: id)
+        #expect(found?.run.confirmMs == 742)
+        #expect(found?.run.tier == "simple")
+        #expect(found?.run.sinceLastWordMs == 5003)
+        #expect(found?.run.fromVoice == true)
+    }
+
     // MARK: - The Activity row
 
     @Test("Commit writes exactly one non-reversible `captured` entry carrying the capture id")

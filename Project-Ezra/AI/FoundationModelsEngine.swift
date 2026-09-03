@@ -71,7 +71,9 @@ struct FoundationModelsEngine: AIEngine {
             var config = CapabilityProfiles.capture
             config.reasoningLevel = CaptureRoute.captureDepth(for: text)
             return try CloudModel.provider.session(
-                instructions: Self.instructionText(for: context), config: config)
+                // No tools ride a cloud session, so the text must not promise one.
+                instructions: Self.instructionText(for: context, attachesResolvePersonTool: false),
+                config: config)
         }
     }
 
@@ -239,12 +241,27 @@ struct FoundationModelsEngine: AIEngine {
 
     /// The full instruction text for a context — the pool's fingerprint reads this,
     /// so anything that changes what a session was built with MUST flow through here.
-    static func instructionText(for context: TriageContext) -> String {
+    ///
+    /// `attachesResolvePersonTool` is CONDITIONAL ASSEMBLY HONESTY, not a per-arm
+    /// prompt fork: the capture CONTRACT (grounding, raw expressions, the outcome
+    /// rule) stays byte-identical across arms — what varies is whether the session
+    /// this text describes actually has the tool. The cloud path attaches none
+    /// (`CloudModelProvider.session` takes no tools), and before this parameter its
+    /// instructions told Gemini to call a tool that did not exist — a prompt lying to
+    /// the model on the arm being tuned. Defaulted `true` so every on-device call
+    /// site (including the pool fingerprint) is untouched.
+    ///
+    /// FOLLOW-UP (cloud-authorized campaign, not this one): Gemini advertises
+    /// `.toolCalling` — validate ATTACHING resolve_person there instead, which is the
+    /// richer symmetric fix but changes paid-path behavior.
+    static func instructionText(
+        for context: TriageContext, attachesResolvePersonTool: Bool = true
+    ) -> String {
         var instructions = Self.instructions
         if let personalization = context.personalization {
             instructions += "\n\n" + personalization
         }
-        if !context.roster.isEmpty {
+        if !context.roster.isEmpty && attachesResolvePersonTool {
             instructions += """
 
 
@@ -314,6 +331,9 @@ struct FoundationModelsEngine: AIEngine {
         Hard rules, before anything else:
         - EVERY task you return must come from something the user actually said. Never
           invent a task, however useful or likely it seems.
+        - If the words are a conversation, narration or thinking aloud with NO intended
+          outcomes, return an EMPTY list. An empty list is a correct answer; a task
+          nobody asked for is not.
         - sourceQuote: copy the user's own words that this task comes from, VERBATIM from
           the text above. If you cannot quote the words, the task does not belong here.
         - Filling in a task's FIELDS is expected — a date, an effort, a category the user

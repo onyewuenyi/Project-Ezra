@@ -188,6 +188,47 @@ struct HeuristicEngineTests {
         #expect(HeuristicEngine.dateExpression(from: "sometime soonish") == nil)
     }
 
+    @Test("A clock time is handed over verbatim, and never shadows a spoken day")
+    func clockTimePhrases() {
+        #expect(HeuristicEngine.dateExpression(from: "clean up room at 3 pm.") == "at 3 pm")
+        #expect(HeuristicEngine.dateExpression(from: "make lunch at noon") == "at noon")
+        #expect(HeuristicEngine.dateExpression(from: "cook dinner at 9 p.m. no. no") == "at 9 p.m.")
+        #expect(HeuristicEngine.dateExpression(from: "cook dinner at 5") == "at 5")
+        #expect(HeuristicEngine.dateExpression(from: "get ready for the gym at 10 am. be") == "at 10 am")
+        // The day token list runs first, so the resolver sees the day, not the clock.
+        #expect(HeuristicEngine.dateExpression(from: "clean my room tomorrow at 3 pm") == "tomorrow")
+        #expect(HeuristicEngine.dateExpression(from: "cook at 3pm today") == "today")
+        #expect(HeuristicEngine.dateExpression(from: "call back this afternoon") == "this afternoon")
+        // A capture cut at "at": the person spoke a time the window never heard. The
+        // bare "at" is handed over so the resolver reports it as unresolved and the
+        // "When?" ask fires — instead of a silently undated card.
+        #expect(HeuristicEngine.dateExpression(from: "be ready to go to brunch at") == "at")
+        #expect(HeuristicEngine.dateExpression(from: "look at") == "at")
+        #expect(HeuristicEngine.dateExpression(from: "meet at the station") == nil)
+    }
+
+    @Test("Meta-narration and a dangling tail leave the title; the ask still fires")
+    func narrationStrippedAndFragmentAsks() {
+        // Real corpus rows 31 and 40 (2026-09-02): "I want to add that…" is the act of
+        // capturing, not the capture; "…brunch at" was cut by the silence window.
+        // Through the segmenter, as production runs it: lead-ins are stripped when a
+        // clause is cut, and the per-clause classifier sees the stripped line.
+        func first(_ text: String) -> TaskIntent {
+            HeuristicEngine.intent(from: Segmentation.items(from: text).first ?? text)
+        }
+        let intent = first("I want to add that I need to be ready to go to brunch at")
+        #expect(intent.title == "Be ready to go to brunch")
+        #expect(intent.dateExpression == "at")
+        let draft = IntentResolver.resolve(intent)
+        #expect(draft.dueDate == nil)
+        #expect(draft.unresolved == [.date])
+        #expect(first("Adding pickup shirt at 3 PM").title == "Pickup shirt at 3 PM")
+        #expect(first("remind me to call the vet").title == "Call the vet")
+        #expect(first("Take something to my").title == "Take something")
+        // Never empties: a one-word line keeps its word.
+        #expect(HeuristicEngine.cleanTitle("at") == "At")
+    }
+
     // MARK: - End-to-end triage
 
     @Test("Triage turns a messy blob into structured intents")

@@ -8,14 +8,26 @@
 //  row (Needs Decision lives in the full-screen detail now; priority/due manifest as
 //  position via `TaskRanking`). What stays: the blocked treatment (a contrast-aware
 //  dim + a small `hourglass` marker — never a blur; glass-on-content reads muddy) and
-//  full accessibility (state enumerated verbally). Quick actions live in
-//  a Linear-style long-press context menu (Done · Status · Urgent · Cancel) —
-//  the system lift-and-pop, no custom gesture.
+//  full accessibility (state enumerated verbally).
 //
-//  The leading glyph is the four-state `StatusGlyphView` menu (.todo · .doing ·
-//  .done · .canceled), so complete/cancel/re-stage is one tap from the row. The trailing avatar answers "whose is this?":
-//  a person's avatar when it's someone else's, a dashed unassigned ring when it's
-//  shared/unowned, and nothing at all when it's mine.
+//  **The gesture map (2026-09-01), and the rule behind it: one channel, one meaning, on
+//  every row type — where a row can't support a meaning the channel is ABSENT, never
+//  repurposed.**
+//
+//      Tap          the whole row → open the detail. ONE target, no holes.
+//      Swipe →      the task's `recommendedAction`, through `performRecommendedAction`
+//                   — the same move the detail's pinned CTA would make. Absent when that
+//                   returns nil, which is exactly someone else's task.
+//      ← Swipe      Cancel (reversible, undo pill). Absent on a resolved row.
+//      Long-press   the full menu: any status, Urgent, Cancel.
+//
+//  The leading glyph used to BE a four-state status menu, which made the row's second tap
+//  target — tapping a task in one place opened it and in another changed its state, and a
+//  chain root had a third (the expander, now gone). It is an indicator now; the verbs it
+//  offered live on the swipe (the common next move) and the long-press (any move).
+//
+//  The trailing avatar answers "whose is this?": a person's avatar when it's someone
+//  else's, a dashed unassigned ring when it's shared/unowned, nothing when it's mine.
 //
 
 import CoreData
@@ -23,8 +35,12 @@ import SwiftUI
 
 struct TaskRow: View {
     let task: TaskItem
-    /// The full working set, so the leading status menu's transitions stay graph-accurate.
+    /// The full working set, so the context menu's transitions stay graph-accurate.
     var allTasks: [TaskItem] = []
+    /// How many tasks are in this row's dependency chain, when it is a chain's root.
+    /// An INDICATOR, exactly like `stepProgress` — the chain used to carry an expander
+    /// button here and no longer does (see `TaskChainStackView`).
+    var chainDepth: Int? = nil
     /// The "waiting on X" phrase — kept ONLY to drive the blocked dim + marker (the
     /// text itself is no longer rendered on the row). Nil when nothing blocks it.
     var blockerSummary: String? = nil
@@ -36,8 +52,10 @@ struct TaskRow: View {
     /// the task belongs to someone else). Nil means mine or shared.
     var ownerDisplayName: String? = nil
     var ownerPhotoData: Data? = nil
-    /// Whether the leading glyph is a tappable state menu. A resolved record row passes
-    /// `false` for a static glyph.
+    /// Whether this row accepts ACTIONS — the long-press menu and the press highlight
+    /// that precedes it. A resolved record row passes `false`: it is a record, not a
+    /// queue entry. (It used to also mean "the leading glyph is a tappable state menu";
+    /// the glyph is an indicator now, so this governs the menu alone.)
     var interactive: Bool = true
     var onComplete: (() -> Void)? = nil
     var onCancel: (() -> Void)? = nil
@@ -76,10 +94,13 @@ struct TaskRow: View {
             SignalMarker(task: task, reservesSpace: true)
                 .recessed(isBlocked)
 
-            StatusGlyphView(
-                task: task, allTasks: allTasks, interactive: interactive, onPick: handlePick
-            )
-            .recessed(isBlocked)
+            // An INDICATOR, never a control. It used to open a status menu, which made
+            // the row's second tap target — tapping a task in one place opened it and in
+            // another changed its state. The state-setting it offered now lives on the
+            // gestures: the leading swipe for the recommended next move, the long-press
+            // menu for any arbitrary status.
+            StatusGlyphView(task: task, allTasks: allTasks, interactive: false)
+                .recessed(isBlocked)
 
             Text(task.title)
                 .taskTitleStyle()
@@ -92,6 +113,7 @@ struct TaskRow: View {
 
             if isBlocked { BlockedIndicator() }
             if let stepProgress { StepProgressIndicator(progress: stepProgress) }
+            if let chainDepth { ChainDepthIndicator(count: chainDepth) }
 
             Spacer(minLength: Spacing.xs)
 
@@ -234,6 +256,17 @@ struct TaskRow: View {
     private func applyDirect(_ state: TaskStatus) {
         Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
         context.saveChanges()
+        // A lifecycle move is the cheapest honest escalation signal there is: the task's
+        // facts just changed, so its cached Advisor reading is stale and the next open
+        // would pay for a cold judgment while the user watches. Think it through now.
+        //
+        // This is one of the two call sites that replaced the Brief's
+        // `primeAdvisorForPlannedWork` when the Brief was switched off (the other is
+        // `TaskDetailPager`, which primes the peers a swipe away). Bounded to one call per
+        // tap, and `precompute` filters the rest on its own terms — the gate makes a
+        // trivial task free, `.shallow` judgments are skipped, and `CloudBudget`
+        // holds speculative work to half the daily cap.
+        TaskAdvisorStore.shared.precompute(task: task, among: allTasks)
     }
 
     /// The Signal toggle from the long-press menu — routes through the shared mutation
@@ -263,6 +296,9 @@ struct TaskRow: View {
         if task.needsDecision && !task.status.isResolved { parts.append("needs a decision") }
         if isBlocked { parts.append("blocked") }
         if let stepProgress { parts.append(stepProgress.label) }
+        // The chain indicator is silent, and the expander that used to announce
+        // "chain of N linked tasks" is gone — so the row says it.
+        if let chainDepth { parts.append("\(chainDepth) linked tasks") }
         if let ownerDisplayName {
             parts.append("owned by \(ownerDisplayName)")
         } else if task.ownerID == nil {

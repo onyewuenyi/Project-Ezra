@@ -116,6 +116,10 @@ final class TaskAdvisorStore: ObservableObject {
         var isSpeculative = false
         /// A move counted as OFFERED only once someone sees it — see `offer(_:on:)`.
         var pendingOffer: AdvisorMove?
+        /// When this judgment was made — what "silence you can feel" shows (F-09): the
+        /// person can tell Ezra looked, and when, rather than wondering whether it is
+        /// there at all.
+        var judgedAt: Date?
     }
 
     @Published private(set) var entries: [UUID: Entry] = [:]
@@ -143,18 +147,34 @@ final class TaskAdvisorStore: ObservableObject {
     /// able to read the rung it took without racing the shared singleton.
     private let ledger: IntelligenceLedger
 
+    /// The human's "no"s, durable across launches (`HumanVerdict`, P-02). Injectable so
+    /// a test can prove a dismissal survives a fresh store instance.
+    private let verdicts: HumanVerdictStore
+    /// Judgments across launches (`AdvisorReadingCache`, F-07). Injectable like the rest.
+    private let readings: AdvisorReadingCache
+
     init(
         judge: @escaping Judge = {
             await TaskAdvisorService().read($0, rung: $1, presenceTime: $2)
         },
         isModelAvailable: @escaping @MainActor () -> Bool = { AppBrain.onDeviceModelAvailable() },
         metrics: AdvisorMetrics = .shared,
-        ledger: IntelligenceLedger = .shared
+        ledger: IntelligenceLedger = .shared,
+        verdicts: HumanVerdictStore = .shared,
+        readings: AdvisorReadingCache = .shared
     ) {
         self.judge = judge
         self.isModelAvailable = isModelAvailable
         self.metrics = metrics
         self.ledger = ledger
+        self.verdicts = verdicts
+        self.readings = readings
+    }
+
+    /// When the current judgment for a task was made, if one exists.
+    func judgedAt(for task: TaskItem) -> Date? {
+        guard let id = task.uuid else { return nil }
+        return entries[id]?.judgedAt
     }
 
     func state(for task: TaskItem) -> AdvisorState {
@@ -223,6 +243,38 @@ final class TaskAdvisorStore: ObservableObject {
             }
             return
         }
+        // Rung 1, for a "no": the person already declined THIS reading — same task, same
+        // facts. Remembered across launches by `HumanVerdictStore` and bound to the
+        // fingerprint, so it costs no generation and never resurfaces until the facts
+        // genuinely change. Before P-02 this lived on the in-memory entry and every cold
+        // start re-offered what had been waved off.
+        if verdicts.isDeclined(reading: id, fingerprint: fingerprint) {
+            entries[id]?.work?.cancel()
+            if presence == .userIsLooking {
+                ledger.record(.memory, for: .advisor, now: now)
+                settle(id, fingerprint: fingerprint, state: .dismissed)
+            }
+            return
+        }
+        // Rung 1 across launches (F-07): the judgment for exactly these facts was made
+        // before — this launch or a previous one. Serve it through the reveal gate with no
+        // generation. Not a new offer: the original reveal counted it. Silence is cached
+        // too, and re-served as `.quiet(.model)` without re-recording the control cohort.
+        if let cached = readings.record(for: id, fingerprint: fingerprint) {
+            entries[id]?.work?.cancel()
+            if presence == .userIsLooking {
+                ledger.record(.memory, for: .advisor, now: now)
+                var entry = Entry(
+                    fingerprint: fingerprint, state: .quiet(.model),
+                    gate: entries[id]?.gate ?? AdvisorRevealGate())
+                if cached.reading.move != .nothing, entry.gate.propose(cached.reading, fingerprint: fingerprint) {
+                    entry.state = .revealed(cached.reading)
+                }
+                entry.judgedAt = cached.judgedAt
+                entries[id] = entry
+            }
+            return
+        }
         entries[id]?.work?.cancel()
 
         guard TaskCapabilities.advisorWorthy(for: task, among: tasks, now: now) else {
@@ -272,7 +324,7 @@ final class TaskAdvisorStore: ObservableObject {
         ledger.record(rung, for: .advisor, now: now)
         read(
             id: id, facts: facts, fingerprint: fingerprint, among: tasks, rung: rung,
-            speculative: presence == .speculative)
+            speculative: presence == .speculative, now: now)
     }
 
     /// The page stopped being the one on screen (the pager keeps neighbours mounted, so
@@ -289,6 +341,7 @@ final class TaskAdvisorStore: ObservableObject {
         guard let id = task.uuid else { return }
         guard case .failed = entries[id]?.state else { return }
         entries[id] = nil
+        readings.forget(taskID: id)
         ensure(task: task, among: tasks, now: now)
     }
 
@@ -299,6 +352,10 @@ final class TaskAdvisorStore: ObservableObject {
         guard let id = taskID, let entry = entries[id] else { return }
         guard case .revealed(let reading) = entry.state else { return }
         metrics.recordDismissed(reading.move)
+        verdicts.record(
+            HumanVerdict(
+                subject: .reading(taskID: id, fingerprint: entry.fingerprint), verdict: .declined,
+                move: reading.move.rawValue))
         entries[id]?.state = .dismissed
     }
 
@@ -325,7 +382,7 @@ final class TaskAdvisorStore: ObservableObject {
 
     private func read(
         id: UUID, facts: TaskAdvisorFacts, fingerprint: Int, among tasks: [TaskItem],
-        rung: IntelligenceRung, speculative: Bool
+        rung: IntelligenceRung, speculative: Bool, now: Date = Date()
     ) {
         // Visible thinking is the presence-time DEEP exception only: the user is here,
         // and the wait is real. Everything else keeps its invisible reserved rhythm.
@@ -342,6 +399,10 @@ final class TaskAdvisorStore: ObservableObject {
             var enriched = facts
             enriched.relatedLines = await TaskAdvisorService.relatedLines(
                 for: facts, among: tasks)
+            // What the person has been declining lately rides the prompt as INTERNAL
+            // lines (F-10) — never the fingerprint.
+            enriched.advisorPreferences = Learned.advisorPreferences(
+                from: HumanVerdicts.collect(store: self.verdicts), now: now)
             // `presenceTime` is the inverse of speculative: it decides the deadline, and
             // a precomputed judgment gets the generous one precisely because nobody is
             // waiting for it.
@@ -373,6 +434,8 @@ final class TaskAdvisorStore: ObservableObject {
         guard var entry = entries[id], entry.fingerprint == fingerprint else { return }
         switch outcome {
         case .success(let reading):
+            entry.judgedAt = Date()
+            readings.store(reading, taskID: id, fingerprint: fingerprint, at: entry.judgedAt ?? Date())
             if reading.move == .nothing {
                 entry.state = .quiet(.model)
                 offer(.nothing, on: &entry)

@@ -65,6 +65,10 @@ enum IntelligenceWorkload: String, CaseIterable, Sendable {
     case advisor
     case brief
     case sweeps
+    /// The Advisor chat — the one workload the PERSON initiates, counted apart from
+    /// the ambient Advisor so a chatty afternoon cannot read as the ambient layer
+    /// climbing the ladder. On-device only, so it can never write `.cloud`.
+    case chat
 }
 
 @MainActor

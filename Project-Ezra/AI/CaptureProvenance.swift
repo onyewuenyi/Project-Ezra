@@ -69,6 +69,24 @@ struct CaptureRunTelemetry: Codable, Equatable {
     var firstPartialMs: Int?
     var partialCount = 0
 
+    // The performance contract's clock (2026-08-29). All optional and stamped at
+    // reveal, so a run that never revealed (cancelled, superseded) carries honest nils.
+    /// `submittedAt` → `revealedAt`, orb dwell INCLUDED — the contract's one clock,
+    /// perceived latency rather than pipeline latency. Nil = predates the contract or
+    /// the reveal never fired.
+    var confirmMs: Int?
+    /// Measurement bucket (`CapturePerformanceContract.Tier.rawValue`), derived from
+    /// the exact text the read came from. Measurement-only — never routing input.
+    var tier: String?
+    /// Voice only: ms from the last transcript delta to capture-end. ≈5000 by
+    /// construction when the silence window fired; shorter when the orb was tapped.
+    /// OUTSIDE the contract's clock — this is the UX parameter the silence window is
+    /// tuned on, not a pipeline cost.
+    var sinceLastWordMs: Int?
+    /// Whether this capture came through `finishListening` — the cohort key separating
+    /// dwell-floored voice reveals from instant typed ones.
+    var fromVoice: Bool?
+
     // Pipeline effects.
     var ungroundedDrops = 0
     /// The retrieval package the model was actually shown — the only ids it was allowed
@@ -88,6 +106,12 @@ struct CaptureRunTelemetry: Codable, Equatable {
 /// One committed capture, in full. Versioned per `ParkedDrafts`: an unrecognized version is
 /// DISCARDED rather than decoded into something that means the wrong thing.
 struct CaptureProvenance: Codable, Equatable {
+    /// Bump ONLY when a field's MEANING changes. Additive optional fields (the
+    /// 2026-08-29 contract quartet on `CaptureRunTelemetry`) decode as nil from older
+    /// records — synthesized `Codable` treats a missing key on an optional as nil — and
+    /// MUST NOT bump this: `load` drops every record whose version mismatches, so a
+    /// bump for an additive change would throw away the whole pre-upgrade history to
+    /// protect it from nothing.
     static let currentVersion = 1
 
     var version = CaptureProvenance.currentVersion
@@ -124,11 +148,13 @@ struct CaptureProvenance: Codable, Equatable {
 
 // MARK: - Storage
 
-/// The provenance sidecar. One JSON file, newest-first, hard-capped.
+/// The provenance sidecar — one `Sidecar` of receipts, newest-first, hard-capped.
 ///
 /// The cap is not tidiness: this ships in Release and writes on every commit, so an
 /// unbounded log would grow with use forever inside the user's container. 200 records is
-/// far more history than a diagnostic needs and still a small file.
+/// far more history than a diagnostic needs and still a small file. Rows whose shape was
+/// re-meaninged (`version`) are dropped on load, never the file — a future field addition
+/// must not erase the history before it.
 @MainActor
 final class CaptureProvenanceStore {
     static let shared = CaptureProvenanceStore()
@@ -136,18 +162,14 @@ final class CaptureProvenanceStore {
     /// How many committed captures to keep. Oldest are dropped first.
     static let maxRecords = 200
 
-    private let fileURL: URL
-    /// Loaded lazily and held, so the Activity detail doesn't re-read the file per row.
-    private var cache: [CaptureProvenance]?
+    private let sidecar: Sidecar<CaptureProvenance>
 
     /// Injectable location, like `PersistenceStack.StoreLocation` — a test must never write
-    /// to (or trim) the real user's file.
-    ///
-    /// `nil` means the default; the default is not a parameter default because resolving it
-    /// reads `PersistenceStack.storeURL`, which is main-actor isolated, and a default
-    /// argument expression is evaluated in the CALLER's isolation.
+    /// to (or trim) the real user's file. `nil` means the default beside the store.
     init(fileURL: URL? = nil) {
-        self.fileURL = fileURL ?? Self.defaultURL
+        sidecar = Sidecar(
+            fileURL: fileURL ?? Self.defaultURL, maxRecords: Self.maxRecords,
+            layout: .array(keep: { $0.version == CaptureProvenance.currentVersion }))
     }
 
     /// Beside the Core Data store, so an Xcode ▸ Download Container pulls the receipts
@@ -158,12 +180,7 @@ final class CaptureProvenanceStore {
     }
 
     /// Every record, newest first.
-    var all: [CaptureProvenance] {
-        if let cache { return cache }
-        let loaded = Self.load(from: fileURL)
-        cache = loaded
-        return loaded
-    }
+    var all: [CaptureProvenance] { sidecar.all }
 
     func provenance(forCapture id: UUID) -> CaptureProvenance? {
         all.first { $0.captureID == id }
@@ -172,41 +189,10 @@ final class CaptureProvenanceStore {
     /// Persist one run. Replaces any existing record for the same capture — a capture is
     /// committed once, but a seam that re-commits must not leave two conflicting receipts.
     func record(_ provenance: CaptureProvenance) {
-        var records = all.filter { $0.captureID != provenance.captureID }
-        records.insert(provenance, at: 0)
-        if records.count > Self.maxRecords { records.removeLast(records.count - Self.maxRecords) }
-        cache = records
-        save(records)
+        sidecar.upsert(provenance) { $0.captureID == provenance.captureID }
     }
 
-    func reset() {
-        cache = []
-        try? FileManager.default.removeItem(at: fileURL)
-    }
-
-    private func save(_ records: [CaptureProvenance]) {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(records) else { return }
-        try? FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // Diagnostics must never be able to break the app: a failed write loses a receipt,
-        // which is strictly better than throwing on the commit path.
-        try? data.write(to: fileURL, options: .atomic)
-    }
-
-    private static func load(from url: URL) -> [CaptureProvenance] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let decoded = try? decoder.decode([CaptureProvenance].self, from: data) else {
-            return []
-        }
-        // Version gate, per `ParkedDrafts`: a record whose shape has been re-meaninged is
-        // dropped, never trusted. Dropping one row is right where dropping the file is not
-        // — a future field addition should not erase the history before it.
-        return decoded.filter { $0.version == CaptureProvenance.currentVersion }
-    }
+    func reset() { sidecar.reset() }
 }
 
 // MARK: - Sentinel bridging

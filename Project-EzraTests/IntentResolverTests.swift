@@ -46,6 +46,32 @@ struct IntentResolverTests {
         #expect(resolved("tomorrow") == day(16))
     }
 
+    @Test("A bare clock time implies today; a spoken day always wins over the clock beside it")
+    func bareClockTimeMeansToday() {
+        // P1 (2026-09-02): 8 of the first 26 real captures were "cook dinner at 3",
+        // "make lunch at noon" — every one meant today, every one used to land undated
+        // behind a "When?" chip.
+        #expect(resolved("at 3 pm") == day(15))
+        #expect(resolved("at 3PM") == day(15))
+        #expect(resolved("3 PM") == day(15))
+        #expect(resolved("at 9 p.m.") == day(15))
+        #expect(resolved("at 3:30pm") == day(15))
+        #expect(resolved("at noon") == day(15))
+        #expect(resolved("midnight") == day(15))
+        #expect(resolved("at 5") == day(15))
+        #expect(resolved("this afternoon") == day(15))
+        // Arm order is load-bearing: the clock arm is LAST, so a day word wins.
+        #expect(resolved("tomorrow at 3 pm") == day(16))
+        #expect(resolved("friday at noon") == day(17))
+        #expect(resolved("monday at 8 am") == day(20))
+        #expect(resolved("next week on friday at 8 am") == day(24))
+        #expect(resolved("tonight at 9") == day(15))
+        // Not a clock time: a capture cut at "at", a duration, a 24h-looking number.
+        #expect(resolved("at") == nil)
+        #expect(resolved("in 5 minutes") == nil)
+        #expect(resolved("at 20") == nil)
+    }
+
     @Test("A weekday name resolves to the NEXT occurrence")
     func weekdays() {
         #expect(resolved("friday") == day(17))
@@ -587,6 +613,16 @@ struct IntentResolverTests {
         let draft = IntentResolver.resolve(intent)
         #expect(draft.dueDate == nil)
         #expect(draft.unresolved == [.date], "a spoken date that resolved to nothing must be named")
+    }
+
+    @Test("A spoken clock time is resolved, so it no longer raises the ask")
+    func clockTimeIsNotUnresolved() {
+        let intent = TaskIntent(
+            title: "Cook dinner", category: "Home", dateExpression: "at 3 pm",
+            confidence: 0.9, isJudgmentCall: false, reasoning: "")
+        let draft = IntentResolver.resolve(intent)
+        #expect(draft.dueDate != nil)
+        #expect(draft.unresolved.isEmpty)
     }
 
     @Test("An UNDATED task is not an unresolved one")

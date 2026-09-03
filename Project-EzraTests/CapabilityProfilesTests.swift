@@ -158,7 +158,7 @@ struct CapabilityProfilesTests {
         // small enough that thinking ate it whole. On a thinking rung, nil is not a
         // shrug — it is an unowned number. Any profile asking to reason must name its
         // reply budget so the headroom has something to be added to.
-        let reasoning = [CapabilityProfiles.taskAdvisor, CapabilityProfiles.briefPlan]
+        let reasoning = [CapabilityProfiles.taskAdvisor]
             .filter { $0.reasoningLevel != nil }
         #expect(!reasoning.isEmpty)
         for config in reasoning {

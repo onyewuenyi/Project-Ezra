@@ -144,13 +144,29 @@ struct HeuristicEngine: AIEngine {
         )
     }
 
-    private static func cleanTitle(_ line: String) -> String {
+    static func cleanTitle(_ line: String) -> String {
         var t = line.trimmingCharacters(in: .whitespaces)
+        // A dangling function word at the end is where dictation was cut ("…to brunch
+        // at", "…something to my"): drop it from the TITLE only — the extractor has
+        // already read the same line for its time phrase, so "at" still raises the
+        // ask. Never empties a title: a one-word line keeps its word.
+        var words = t.split(separator: " ").map(String.init)
+        while words.count > 1, let last = words.last?.lowercased(),
+            danglingTitleTail.contains(last.trimmingCharacters(in: .punctuationCharacters))
+        {
+            words.removeLast()
+        }
+        t = words.joined(separator: " ")
         if let first = t.first {
             t.replaceSubrange(t.startIndex...t.startIndex, with: String(first).uppercased())
         }
         return t
     }
+
+    private static let danglingTitleTail: Set<String> = [
+        "at", "to", "the", "a", "an", "for", "on", "in", "by", "and", "with", "of", "my", "our",
+        "your", "from", "about",
+    ]
 
     private static let categoryKeywords: [(String, [String])] = [
         (
@@ -355,6 +371,7 @@ struct HeuristicEngine: AIEngine {
         // specific first — every token that CONTAINS another must precede it.
         let tokens = [
             "day after tomorrow", "tomorrow", "today", "tonight",
+            "this morning", "this afternoon", "this evening",
             "end of the month", "end of month", "next month",
             "end of the week", "end of week", "this weekend", "weekend",
             "this week", "next week",
@@ -371,11 +388,23 @@ struct HeuristicEngine: AIEngine {
             #"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?\b"#,
             #"\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"#,
             #"\b\d{4}-\d{2}-\d{2}\b"#,
+            // LAST: a clock time ("at 3 PM", "at noon", "9 p.m.") — the resolver
+            // reads it as today. Behind every day token above, so "tomorrow at 3 PM"
+            // hands over "tomorrow" and the clock never shadows a spoken day.
+            IntentResolver.clockTimePattern,
         ]
         for pattern in phrases {
             if let range = lower.range(of: pattern, options: .regularExpression) {
                 return String(lower[range])
             }
+        }
+        // A capture cut off at "at" — the silence window closed before the time was
+        // said ("be ready to go to brunch at", real corpus row 31). The person SPOKE
+        // a time; there is nothing to resolve; that is precisely the "When?" ask's
+        // case (`TaskDraft.unresolved`), and without this the fragment landed as a
+        // silently undated card.
+        if lower.range(of: #"\bat\s*[.,!]?\s*$"#, options: .regularExpression) != nil {
+            return "at"
         }
         return nil
     }

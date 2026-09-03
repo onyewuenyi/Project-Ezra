@@ -76,24 +76,6 @@ struct DataResetTests {
         #expect(UserProfile.current(in: context).displayName == nil)
     }
 
-    @Test("The day cache goes with the work it describes")
-    func clearingWorkDropsTheCachedBriefing() {
-        let context = TestStore.makeContext()
-        let defaults = makeDefaults("cache")
-        seed(in: context)
-        let store = TodayPlanStore(defaults: defaults)
-        store.save(
-            TodayPlanCache(
-                dateKey: TodayPlanStore.dayKey(for: Date()), tier: .deterministic,
-                headline: "Your day", tradeoffs: nil, risks: nil, actions: [],
-                generatedAt: Date(), docketSignature: []))
-        #expect(defaults.data(forKey: "today.planCache") != nil)
-
-        DataReset.clear(.work, in: context, defaults: defaults, at: location("cache"))
-
-        #expect(defaults.data(forKey: "today.planCache") == nil)
-        #expect(defaults.object(forKey: "today.recapCutoff") == nil)
-    }
 
     @Test("Only the factory reset touches identity preferences")
     func onboardingFlagSurvivesAWorkClear() {
@@ -133,24 +115,4 @@ struct DataResetTests {
         #expect(work.reason.explanation.contains("cleared all tasks"))
     }
 
-    @Test("Counted signals are wiped in memory, not just on disk")
-    func factoryResetClearsCachedMetrics() {
-        let context = TestStore.makeContext()
-        let defaults = makeDefaults("metrics")
-        seed(in: context)
-        let metrics = MetricsRecorder(defaults: defaults)
-        let plan = PlanMetrics(defaults: defaults)
-        metrics.recordOpen()
-        metrics.recordFirstPayoffIfNeeded()
-        plan.recordGeneration(tier: .onDevice, latencyMs: 900, promptTokens: 10, outputTokens: 20)
-
-        DataReset.clear(
-            .everything, in: context, metrics: metrics, planMetrics: plan, defaults: defaults,
-            at: location("metrics"))
-
-        #expect(metrics.selfInitiatedOpens == 0)
-        #expect(metrics.timeToFirstPayoff == nil)
-        #expect(plan.onDeviceCount == 0)
-        #expect(plan.lastLatencyMs == -1)
-    }
 }

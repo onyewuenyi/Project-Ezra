@@ -136,18 +136,6 @@ struct IntelligenceLedgerTests {
         #expect(lines.contains("cloud today: 0"))
     }
 
-    @Test("Every plan tier maps to a rung, and only the cloud tier maps to the paid one")
-    func planTierRungMapping() {
-        #expect(PlanTier.onDevice.rung == .onDevice)
-        #expect(PlanTier.cloud.rung == .cloud)
-        // The deterministic tail is Rung 0, not a fourth thing: it is fact-fed template
-        // content, free and offline.
-        #expect(PlanTier.deterministic.rung == .facts)
-        // Exactly ONE paid tier. A second would mean two privacy stories and two
-        // failure modes behind one slot — the thing `CloudModelProvider` is singular to
-        // prevent — so a new tier mapping to `.cloud` should fail here first.
-        #expect(PlanTier.allCases.filter { $0.rung == .cloud }.count == 1)
-    }
 
     @Test("The cloud slot is unavailable until its provider is configured, and never traps")
     func cloudSlotIsClosedByDefault() {

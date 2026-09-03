@@ -44,7 +44,9 @@ enum Segmentation {
             guard trimmed.count > 1 else { continue }
             for sentence in sentences(in: trimmed) {
                 for clause in splitClauses(sentence) {
-                    items.append(contentsOf: splitCommaList(clause))
+                    for run in splitAfterTimeExpressions(clause) {
+                        items.append(contentsOf: splitCommaList(run))
+                    }
                 }
             }
         }
@@ -134,7 +136,7 @@ enum Segmentation {
     }
 
     /// Words that, immediately before an action verb, mean it isn't starting a new item.
-    private static let subordinatingWords: Set<String> = [
+    static let subordinatingWords: Set<String> = [
         // determiners → the "verb" is a noun
         "a", "an", "the", "my", "your", "his", "her", "its", "our", "their",
         "this", "that", "these", "those", "some", "any", "no", "one", "another",
@@ -152,11 +154,35 @@ enum Segmentation {
         tokenizer.string = line
         var result: [String] = []
         tokenizer.enumerateTokens(in: line.startIndex..<line.endIndex) { range, _ in
-            let sentence = trimItem(String(line[range]))
-            if !sentence.isEmpty { result.append(sentence) }
+            for sentence in splitAtSpokenPeriods(String(line[range])) {
+                let trimmed = trimItem(sentence)
+                if !trimmed.isEmpty { result.append(trimmed) }
+            }
             return true
         }
         return result.isEmpty ? [trimItem(line)] : result
+    }
+
+    /// Dictation writes "…for this Wednesday. take Micah to daycare…" — a period the
+    /// speech engine placed, followed by a lowercase verb, which `NLTokenizer` reads
+    /// as one sentence because it leans on capitalization. The period is the user's
+    /// own boundary and is honoured under the usual gate: ONLY when what follows
+    /// starts an item. "Tell Mr. Charles, what did…" and "9 p.m. No." stay whole.
+    static func splitAtSpokenPeriods(_ sentence: String) -> [String] {
+        var pieces: [String] = []
+        var start = sentence.startIndex
+        var searchFrom = sentence.startIndex
+        while let range = sentence.range(of: ". ", range: searchFrom..<sentence.endIndex) {
+            let right = sentence[range.upperBound...].drop(while: { $0 == " " })
+            let rightItem = strippedLeadIn(trimItem(String(right)))
+            if startsAnItem(rightItem), rightItem.split(separator: " ").count >= 2 {
+                pieces.append(String(sentence[start..<range.lowerBound]))
+                start = right.startIndex
+            }
+            searchFrom = range.upperBound
+        }
+        pieces.append(String(sentence[start...]))
+        return pieces
     }
 
     // MARK: - Clauses (spoken connectives, item-gated)
@@ -325,6 +351,14 @@ enum Segmentation {
     /// also need to" is several of these in a row. Ordered longest-first so
     /// "i need to" wins before "to".
     private static let leadIns: [String] = [
+        // Meta-narration — the act of capturing, spoken (P4, the real-utterance corpus
+        // 2026-09-02: "I want to add that I need to be ready to go to brunch",
+        // "Adding pickup shirt at 3 PM"). Longest first, ahead of the "i want to"
+        // they contain.
+        "i want to add that ", "i wanted to add that ", "i just want to add that ",
+        "adding that ", "adding ", "add that ", "note to self ", "note that ",
+        "remind me to ", "reminder to ", "reminder ", "don't let me forget to ",
+        "i keep forgetting to ",
         "i really need to ", "i also need to ", "i still need to ", "don't forget to ",
         "i've got to ", "i have to ", "i need to ", "i should probably ",
         "i want to ", "we need to ", "we have to ", "make sure to ",
@@ -352,6 +386,42 @@ enum Segmentation {
         }
         let trimmed = trimItem(String(remaining))
         return startsAnItem(trimmed) ? trimmed : trimItem(clause)
+    }
+
+    // MARK: - Time expressions ("…groceries at noon make a plan…")
+
+    /// A time expression followed directly by a fresh verb is where one spoken
+    /// outcome ends and the next begins: "pick up groceries at noon make an action
+    /// plan this Sunday" has no punctuation and no connective — the first real
+    /// unpunctuated run-on the corpus produced (2026-09-02), kept local as ONE task
+    /// by every other pass. Item-gated like every boundary here: the right side must
+    /// start an item of at least two words after its lead-in, so "walk the dog
+    /// monday and tuesday" ("and…" starts nothing) and "at 3 PM so this is where…"
+    /// stay whole. The vocabulary is the resolver's own
+    /// (`IntentResolver.timeExpressionPattern`) — a day word with its clock absorbed,
+    /// or a clock time alone.
+    static func splitAfterTimeExpressions(_ clause: String) -> [String] {
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: IntentResolver.timeExpressionPattern, options: [.caseInsensitive])
+        else { return [clause] }
+        var pieces: [String] = []
+        var start = clause.startIndex
+        for match in regex.matches(in: clause, range: NSRange(clause.startIndex..., in: clause)) {
+            guard let range = Range(match.range, in: clause), range.lowerBound >= start
+            else { continue }
+            let right = clause[range.upperBound...].drop(while: { $0 == " " })
+            guard !right.isEmpty else { continue }
+            let rightItem = strippedLeadIn(trimItem(String(right)))
+            guard startsAnItem(rightItem), rightItem.split(separator: " ").count >= 2
+            else { continue }
+            let leftItem = trimItem(String(clause[start..<range.upperBound]))
+            if !leftItem.isEmpty { pieces.append(leftItem) }
+            start = right.startIndex
+        }
+        let tail = trimItem(String(clause[start...]))
+        if !tail.isEmpty { pieces.append(tail) }
+        return pieces.isEmpty ? [clause] : pieces
     }
 
     // MARK: - Comma lists
@@ -423,5 +493,13 @@ enum Segmentation {
         "make", "set", "put", "sort", "update", "install", "print", "scan", "upload",
         "download", "water", "walk", "feed", "pack", "unpack", "move", "go", "do",
         "read", "sell", "donate", "vacuum", "mow", "shovel", "change", "replace",
+        // The real-utterance corpus (2026-09-02): "cook dinner at 3 PM, make a…" and
+        // "…clean my clothes and then eat breakfast" both failed to split for want
+        // of a verb the lexicon had never met. Everyday outcomes, all imperative.
+        "cook", "eat", "bake", "meet", "visit", "drive", "attend", "practice",
+        "study", "shop", "apply", "tidy", "wrap", "charge", "exercise",
+        // "be ready to go to brunch", "pickup shirt" — spoken imperatives the corpus
+        // produced that the list had no word for.
+        "be", "pickup", "stop", "reach",
     ]
 }

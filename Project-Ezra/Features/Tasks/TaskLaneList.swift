@@ -5,8 +5,13 @@
 //  The shared list machinery behind the "My Tasks" surface — extracted from the old
 //  per-slice list views so the Assigned (sectioned) and Created (flat) tabs, plus the
 //  search sheet, all render rows the same way and complete/cancel through one
-//  undo-aware path. Dependency-linked work still renders as the collapsible chain
-//  stack; everything else is a one-line `TaskRow`.
+//  undo-aware path. Dependency-linked work renders as the chain stack — a ROW that looks
+//  deeper, not a container: it stopped expanding in place on 2026-09-01, so every entry
+//  here now answers a tap the same way. Everything else is a one-line `TaskRow`.
+//
+//  This file owns the row gesture map, because the swipes belong to the ENTRY (a chain
+//  swipes as one thing, acting on its root) while the tap and long-press belong to the
+//  row — see `TaskLaneEntryView` and `TaskRow`'s header.
 //
 
 import CoreData
@@ -85,6 +90,92 @@ func cancelTask(
     }
 }
 
+/// The leading swipe's action — **the same move the detail's pinned CTA would make**,
+/// through the same seam (`performRecommendedAction`). That identity is the whole reason
+/// a swipe whose verb varies by row is safe to ship: the gesture is a faster entry point
+/// to an action the user already reads in the detail, not a second vocabulary.
+///
+/// `.resolve` detours through `completeTask` because resolving is the one arm that owes
+/// the user a way back, and that function already owns the undo pill and the resurfacing.
+@MainActor
+func performRecommended(
+    _ action: RecommendedAction, on task: TaskItem, in context: NSManagedObjectContext,
+    tasks: [TaskItem], notice: Binding<UndoNotice?>
+) {
+    if action == .resolve {
+        completeTask(task, in: context, tasks: tasks, notice: notice)
+        return
+    }
+    Motion.withMotion(Motion.decide) {
+        _ = task.performRecommendedAction(action, among: tasks, in: context)
+    }
+    context.saveChanges()
+}
+
+// MARK: - The row gesture map (swipes)
+
+/// The two swipes, applied to a ROW rather than to a lane entry — which matters for a
+/// chain: collapsed, only the root is on screen and swiping it acts on the root; expanded,
+/// every member is its own row and must swipe independently. Attaching this to the entry
+/// would have made an expanded member's swipe act on the root instead.
+struct TaskSwipeActions: ViewModifier {
+    let task: TaskItem
+    let allTasks: [TaskItem]
+    let currentUserID: UUID?
+    /// A collapsed chain root gives its LEADING edge to the pile — swipe right expands the
+    /// stack — so it suppresses this one and supplies its own. Every other row keeps the
+    /// lifecycle swipe. The meaning still doesn't vary per task: it varies by what the row
+    /// IS, a pile or a task, which is the same distinction the card already draws.
+    var includesLeading: Bool = true
+    @Binding var notice: UndoNotice?
+    @Environment(\.managedObjectContext) private var context
+
+    func body(content: Content) -> some View {
+        content
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                // Leading = advance the lifecycle, and it is the SAME move the detail's
+                // pinned CTA would make. Absent when `recommendedAction` returns nil,
+                // which is exactly someone else's task — "not yours to advance" becomes a
+                // gesture that isn't there rather than a button that lies.
+                if includesLeading,
+                    let action = task.recommendedAction(
+                        among: allTasks, currentUserID: currentUserID)
+                {
+                    Button {
+                        performRecommended(
+                            action, on: task, in: context, tasks: allTasks, notice: $notice)
+                    } label: {
+                        Label(action.title, systemImage: action.symbol)
+                    }
+                    .tint(Palette.accentFlat)
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                // Trailing = the reversible "not now". Absent on a resolved row: nothing
+                // left to cancel, and its leading swipe already offers Reopen.
+                if !task.status.isResolved {
+                    Button(role: .destructive) {
+                        cancelTask(task, in: context, tasks: allTasks, notice: $notice)
+                    } label: {
+                        Label("Cancel", systemImage: "xmark")
+                    }
+                }
+            }
+    }
+}
+
+extension View {
+    func taskSwipeActions(
+        task: TaskItem, allTasks: [TaskItem], currentUserID: UUID?,
+        includesLeading: Bool = true, notice: Binding<UndoNotice?>
+    ) -> some View {
+        modifier(
+            TaskSwipeActions(
+                task: task, allTasks: allTasks, currentUserID: currentUserID,
+                includesLeading: includesLeading, notice: notice))
+    }
+}
+
 // MARK: - One lane entry (single row or a chain stack)
 
 /// Renders a single `TaskLaneEntry`: a minimal `TaskRow` or the whole chain stack.
@@ -94,6 +185,10 @@ struct TaskLaneEntryView: View {
     let entry: TaskLaneEntry
     let allTasks: [TaskItem]
     let othersRoster: [FamilyMember]
+    /// Drives the leading swipe's verb. Defaults to nil, which `recommendedAction` treats
+    /// as "no profile yet" and falls through to the normal lifecycle — it never wrongly
+    /// suppresses the swipe, so a call site that hasn't threaded it stays correct.
+    var currentUserID: UUID? = nil
     @Binding var selectedTask: TaskItem?
     @Binding var notice: UndoNotice?
     @Environment(\.managedObjectContext) private var context
@@ -116,7 +211,11 @@ struct TaskLaneEntryView: View {
                     ? nil : { cancelTask(task, in: context, tasks: allTasks, notice: $notice) },
                 onOpen: { selectedTask = task }
             )
+            .taskSwipeActions(
+                task: task, allTasks: allTasks, currentUserID: currentUserID, notice: $notice)
         case .chain(let chain):
+            // The stack applies the swipes PER MEMBER itself — collapsed that is just the
+            // root, expanded it is each card — so this does not wrap them here.
             TaskChainStackView(
                 chain: chain,
                 allTasks: allTasks,
@@ -125,7 +224,9 @@ struct TaskLaneEntryView: View {
                 onOpen: { selectedTask = $0 },
                 blockerSummary: { $0.blockerSummary(among: allTasks) },
                 ownerDisplayName: { $0.ownerDisplayName(among: othersRoster) },
-                ownerPhotoData: { $0.ownerPhotoData(among: othersRoster) }
+                ownerPhotoData: { $0.ownerPhotoData(among: othersRoster) },
+                currentUserID: currentUserID,
+                notice: $notice
             )
             .padding(.vertical, Spacing.sm)
         }
@@ -138,6 +239,8 @@ struct AssignedSectionsView: View {
     let sections: [MyTasksSection]
     let allTasks: [TaskItem]
     let othersRoster: [FamilyMember]
+    /// Threaded to the rows so the leading swipe can name the right verb.
+    var currentUserID: UUID? = nil
     let searchIsActive: Bool
     /// "Show all N" on a capped ledger section — flips the STATUS FILTER to that
     /// section, the documented isolation path, rather than growing a second
@@ -170,6 +273,7 @@ struct AssignedSectionsView: View {
                             ForEach(section.entries) { entry in
                                 TaskLaneEntryView(
                                     entry: entry, allTasks: allTasks, othersRoster: othersRoster,
+                                    currentUserID: currentUserID,
                                     selectedTask: $selectedTask, notice: $notice)
                             }
                             if section.hiddenCount > 0 {
@@ -193,6 +297,11 @@ struct AssignedSectionsView: View {
                 }
                 .padding(Spacing.lg)
             }
+            // iOS 27's `swipeActionsContainer` is what lets rows carry `.swipeActions`
+            // OUTSIDE a `List`. Without it this surface would have had to become a `List`
+            // — losing the no-divider rhythm, the custom row backgrounds and the chain
+            // card chrome — or hand-roll a drag gesture.
+            .swipeActionsContainer()
         }
     }
 
@@ -220,6 +329,8 @@ struct CreatedFlatView: View {
     let entries: [TaskLaneEntry]
     let allTasks: [TaskItem]
     let othersRoster: [FamilyMember]
+    /// Threaded to the rows so the leading swipe can name the right verb.
+    var currentUserID: UUID? = nil
     let searchIsActive: Bool
     @Binding var selectedTask: TaskItem?
     @Binding var notice: UndoNotice?
@@ -244,11 +355,17 @@ struct CreatedFlatView: View {
                     ForEach(entries) { entry in
                         TaskLaneEntryView(
                             entry: entry, allTasks: allTasks, othersRoster: othersRoster,
+                            currentUserID: currentUserID,
                             selectedTask: $selectedTask, notice: $notice)
                     }
                 }
                 .padding(Spacing.lg)
             }
+            // iOS 27's `swipeActionsContainer` is what lets rows carry `.swipeActions`
+            // OUTSIDE a `List`. Without it this surface would have had to become a `List`
+            // — losing the no-divider rhythm, the custom row backgrounds and the chain
+            // card chrome — or hand-roll a drag gesture.
+            .swipeActionsContainer()
         }
     }
 }

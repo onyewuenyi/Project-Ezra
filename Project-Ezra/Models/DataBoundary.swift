@@ -42,7 +42,18 @@ struct DataBoundary: Equatable {
     /// answer. Note what is NOT a parameter: which provider, which model, how many calls
     /// remain. The user experiences "Ezra thought", never a vendor or a budget — v5 cuts
     /// provider names and usage mechanics from customer-facing language entirely.
-    static func current(cloudReachable: Bool) -> DataBoundary {
+    static func current(cloudReachable: Bool, posture: CapturePosture = .open) -> DataBoundary {
+        // The posture (F-03) is the person's own setting, so it is said first when it is
+        // on: what leaves the device is something they chose, in their words.
+        if posture == .onDevice {
+            return DataBoundary(
+                capture:
+                    "You've set captures to stay on this device. Everything you capture is understood here and never sent anywhere.",
+                judgment: cloudReachable
+                    ? "Advice may use the cloud, and sends only the task itself — never your captures."
+                    : "Nothing is sent anywhere to prepare your advice.",
+                never: "Your corrections and your history never leave this device.")
+        }
         guard cloudReachable else {
             return DataBoundary(
                 capture: "Everything you capture is understood on this device.",

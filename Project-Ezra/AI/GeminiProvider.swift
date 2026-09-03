@@ -86,7 +86,7 @@ enum GeminiProvider: CloudModelProvider {
     ) throws
         -> LanguageModelSession
     {
-        guard isAvailable else { throw PlanGenerationError.unavailable }
+        guard isAvailable else { throw ModelUnavailableError.unavailable }
         let model = FirebaseAI.firebaseAI(backend: .googleAI())
             .geminiLanguageModel(name: modelName)
         return CapabilityProfiles.session(

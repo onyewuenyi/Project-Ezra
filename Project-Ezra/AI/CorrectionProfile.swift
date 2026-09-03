@@ -31,6 +31,11 @@ enum LearnedRule: Equatable, Hashable {
     case ownerAlias(spoken: String, actual: String)
     /// A word the user consistently rewrites ("doctor" → "pediatrician").
     case titleRewrite(from: String, to: String)
+    /// Tasks mentioning `keyword` take about `minutes` — the user set the estimate on
+    /// similar tasks twice ("mow…" → 60 min). Fills an EMPTY estimate only. (F-05)
+    case effortForKeyword(keyword: String, minutes: Int)
+    /// Tasks mentioning `keyword` are urgent to this person — flagged twice. (F-05)
+    case urgentForKeyword(keyword: String)
 }
 
 enum CorrectionProfile {
@@ -38,76 +43,17 @@ enum CorrectionProfile {
     /// Aggregate raw correction rows into learned rules. `tasks` supplies titles
     /// for keyword extraction (a `Correction` links its task by uuid). Frequency-
     /// sorted, threshold ≥ 2, capped at `limit`.
+    /// Aggregate raw correction rows into learned rules — the capture-side entry point,
+    /// now an adapter: corrections become verdicts (`HumanVerdicts.collect`) and one
+    /// learner (`Learned.rules`) does the counting for capture and the Advisor alike.
     static func rules(
-        from corrections: [Correction], tasks: [TaskItem], limit: Int = 8
+        from corrections: [Correction], tasks: [TaskItem], limit: Int = Learned.cap
     ) -> [LearnedRule] {
-        let titlesByUUID = Dictionary(
-            uniqueKeysWithValues: tasks.compactMap { task in task.uuid.map { ($0, task.title) } })
-
-        // Each candidate rule accumulates (count, latest) so ties break by recency.
-        var counts: [LearnedRule: (count: Int, latest: Date)] = [:]
-        func bump(_ rule: LearnedRule, at date: Date) {
-            let prior = counts[rule] ?? (0, .distantPast)
-            counts[rule] = (prior.count + 1, max(prior.latest, date))
-        }
-
-        for correction in corrections {
-            switch correction.fieldCorrected {
-            case "category":
-                // The lesson isn't "Health ⇒ Personal" wholesale — it's keyed to the
-                // task's own words, so it only fires on similar tasks.
-                guard let uuid = correction.taskUUID, let title = titlesByUUID[uuid] else { continue }
-                for word in significantWords(title) {
-                    bump(
-                        .categoryOverride(keyword: word, category: correction.userValue),
-                        at: correction.createdAt)
-                }
-            case "owner":
-                let spoken = correction.aiValue.lowercased()
-                let actual = correction.userValue
-                // Only alias name→name; "you" isn't a person the engine heard.
-                guard spoken != "you", actual.lowercased() != "you", !actual.isEmpty else { continue }
-                bump(.ownerAlias(spoken: spoken, actual: actual), at: correction.createdAt)
-            case "title":
-                // Learn only the crisp case: a single-word substitution.
-                if let (from, to) = singleWordSubstitution(
-                    ai: correction.aiValue, user: correction.userValue)
-                {
-                    bump(.titleRewrite(from: from, to: to), at: correction.createdAt)
-                }
-            default:
-                continue
-            }
-        }
-
-        return
-            counts
-            .filter { $0.value.count >= 2 }
-            .sorted {
-                if $0.value.count != $1.value.count { return $0.value.count > $1.value.count }
-                if $0.value.latest != $1.value.latest { return $0.value.latest > $1.value.latest }
-                // Stable final tie-break — dictionary order must never decide.
-                return String(describing: $0.key) < String(describing: $1.key)
-            }
-            .prefix(limit)
-            .map(\.key)
+        Learned.rules(from: HumanVerdicts.collect(corrections: corrections), tasks: tasks, limit: limit)
     }
 
     /// The rules as instruction text for the on-device model; nil when empty.
-    static func instructionLines(_ rules: [LearnedRule]) -> String? {
-        guard !rules.isEmpty else { return nil }
-        let lines = rules.map { rule in
-            switch rule {
-            case .categoryOverride(let keyword, let category):
-                return "- Tasks mentioning “\(keyword)” belong in the \(category) category."
-            case .ownerAlias(let spoken, let actual):
-                return "- When the user says “\(spoken)”, the person they mean is \(actual)."
-            case .titleRewrite(let from, let to):
-                return "- The user prefers “\(to)” over “\(from)” in task titles."
-            }
-        }
-        return "Corrections this user has taught you — apply them:\n" + lines.joined(separator: "\n")
-    }
+    static func instructionLines(_ rules: [LearnedRule]) -> String? { Learned.instructionLines(rules) }
 
     // MARK: - Helpers
 

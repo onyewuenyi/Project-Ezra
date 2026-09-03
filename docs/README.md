@@ -1,13 +1,16 @@
 # Documentation map
 
-**The product spec is not in this repo.** It is *Ezra — Product Shape v6*, and it is the
+**The product spec is not in this repo.** It is *Ezra Product Shape v8* (2026-09-03), and it is the
 source of truth for what the product is, what each system is for, how the intelligence is
 paid for, and what the MVP cuts:
 
-> https://claude.ai/code/artifact/fbbfbae1-f7a5-4bdd-bd6f-19454dad89ad
+> https://claude.ai/code/artifact/aa4e89a0-a1ff-4ed2-b0f8-c6e227ed7014
+>
+> (v7 stays readable at https://claude.ai/code/artifact/fbbfbae1-f7a5-4bdd-bd6f-19454dad89ad as history.)
 
 Read it before changing product behaviour. Where anything in this repo disagrees with it,
 the artifact wins and the repo file is a bug.
+
 
 **This file deliberately contains no product claims.** That is the fix for what went wrong
 before: a `PRD.md` here restated the vision, the vision moved, and the restatement quietly
@@ -25,9 +28,19 @@ spec says *what* and *why*, and these say *how it is built* and *how it must loo
 |---|---|---|
 | `docs/task-model.md` | The four axes — lifecycle · type · flags · signal — and the rules that keep them unfused. The deep reference the code comments point at. | In force |
 | `docs/primitives.md` | The small durable core features compose, and the test a new primitive must pass. Cited by the spec's §05. | In force |
+| `docs/capture.md` | Ramble in full — the voice-first arc, routing history, the deleted confidence gate, the orb's tuning traps, the eval-instrument lessons. | In force |
+| `docs/advisor.md` | The Advisor in full — rung 0's floor, the fingerprint, the validation contract, the lift metric, per-rung deadlines. | In force |
+| `docs/surfaces.md` | The shell (one surface, two verbs — the tab bar, the Brief and the Ask tab are all gone as of 2026-09-02, with the archaeology kept), My Tasks, the parked-captures row, and the shape-driven task detail. | In force |
 | `prev-docs/design-system-managing-chaos.md` | Palette, type scale, spacing, motion, the calm-intelligence principle. | In force |
-| `prev-docs/product-guardrails.md` | What the product refuses to build, and the one notification carve-out. Cited by the spec's §09. | In force |
+| `prev-docs/product-guardrails.md` | What the product refuses to build. The one notification carve-out **closed** on 2026-09-02 when the Brief was cut — the product now sends zero notifications. Cited by the spec's §09. | In force |
+| `docs/platform-notes.md` | The iOS 27 beta specifics verified the hard way — the four capability/profile traps, Liquid Glass, guided generation. Extracted from `CLAUDE.md` 2026-09-03. | In force |
 | `prev-docs/household-architecture.md` | The identity/ownership substrate multiplayer will surface. | In force, dormant |
+
+`docs/capture.md`, `docs/advisor.md` and `docs/surfaces.md` were extracted verbatim from
+`CLAUDE.md` on 2026-09-02, when that file crossed its 150k-character limit. **CLAUDE.md keeps the invariants; these keep the
+reasoning, the measurements and the archaeology behind them** — so the rules stay in the
+always-loaded file and the evidence stays one hop away. A rule that changes in one changes
+in the other.
 
 `prev-docs/` keeps its name: it is the superseded *generation*, and these three are the
 parts of it that outlived the generation.

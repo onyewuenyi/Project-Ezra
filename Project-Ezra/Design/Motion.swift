@@ -103,10 +103,29 @@ enum Motion {
     /// gesture is imitating.
     static let orbBreathPeriod: Double = 3.2
 
-    /// Frame ceiling for the orb's timeline. The animation runs during exactly the window the
-    /// on-device model is generating, so it is capped rather than free-running at display
-    /// rate — a fluid gradient gains nothing visible above this and the ANE needs the room.
+    /// Frame ceiling for the CAPTURE orb's timeline — the screen-filling beat. It runs during
+    /// exactly the window the model is generating, so it is capped rather than free-running at
+    /// display rate: a fluid gradient gains nothing visible above this and the ANE needs the
+    /// room.
+    ///
+    /// That "exactly the window the model is generating" premise stopped being universal on
+    /// 2026-08-29, when a mini orb took up residence inside the Capture button beside the system
+    /// tab bar and began running for the whole app lifetime. This constant still describes the
+    /// capture beat; the always-on instance uses `orbBarFrameInterval` below.
     static let orbFrameInterval: Double = 1.0 / 30.0
+
+    /// Frame ceiling for the CHROME orb — the mini instance inside the Capture button beside
+    /// the system tab bar, which is mounted for as long as the app is.
+    ///
+    /// Half the capture orb's rate, because at that scale there is half as much to see: the
+    /// mesh's weather is sub-pixel at ~40pt (blur lands well under a point and the control
+    /// points travel a few), so what actually reads is the breath and the light riding it.
+    /// A 3.2s breath is indistinguishable at this rate and costs half as much to draw.
+    ///
+    /// That orb is additionally PAUSED whenever it is covered or the app is backgrounded
+    /// (`RambleOrb.paused`) — a permanently-mounted timeline should only run while someone can
+    /// actually see it.
+    static let orbBarFrameInterval: Double = 1.0 / 15.0
 
     /// How long the orb takes to gather — a slow, one-way settle from diffuse haze into a
     /// defined object.
@@ -139,6 +158,31 @@ enum Motion {
     /// wait anyone is actually feeling — the slow captures this product worries about are
     /// far past it and unaffected.
     static let orbMinimumDwellSeconds: Double = 1.1
+
+    /// The dwell floor for a VOICE capture the deterministic read answered (~2ms) —
+    /// where this floor IS the reveal latency, not a guard against one.
+    ///
+    /// **0.7 is a CANDIDATE UX dwell, not a number the animation was shrunk to** —
+    /// the distinction is the owner's (2026-08-29) and it decides how this constant
+    /// may ever change. The performance contract's 0.8s simple-tier p50 is a target
+    /// the experience should meet; it is not permission to damage the interaction to
+    /// meet it, and if a longer beat visibly feels better while the measured result
+    /// lands at 0.82s, the right move is to keep the better beat and note the miss —
+    /// never to sacrifice 20ms of feel for a row in a table.
+    ///
+    /// Why a shorter candidate is even plausible here: the 1.1s above was sized for
+    /// the cloud path's ARRIVAL — field morphs to orb, entrance spring, held
+    /// presence. On the voice-local path none of that entrance exists: the orb has
+    /// been on screen since listening, the phase change is same-branch (only the
+    /// status word animates, the orb decays from its listening floor), so the floor
+    /// buys only the acknowledgment beat — the 0.5s `heroSettle` on the status word
+    /// plus a moment of settled presence.
+    ///
+    /// **The VIDEO test decides, not the target** (the repo rule for every orb
+    /// beat): if the frame strip shows the listening orb still mid-decay when the
+    /// card morph begins, step this up until it reads as calm — and let the contract
+    /// report whatever number that produces.
+    static let orbLocalDwellSeconds: Double = 0.7
 
     /// The turbulence the orb HOLDS while listening — attentive, alive, and going nowhere.
     ///

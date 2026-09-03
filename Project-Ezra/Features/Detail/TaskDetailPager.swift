@@ -23,6 +23,12 @@
 import CoreData
 import SwiftUI
 
+extension EnvironmentValues {
+    /// Open the task chat for the page on screen. The pager owns the sheet (several
+    /// pages stay mounted; one sheet), and the page's bar line asks through this.
+    @Entry var openTaskChat: () -> Void = {}
+}
+
 struct TaskDetailPager: View {
     /// The task the user tapped — always the first page shown, and the fallback if the
     /// page list ever empties out from under us.
@@ -30,6 +36,10 @@ struct TaskDetailPager: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The whole set, for the Advisor facts a neighbour's precompute derives (blockers,
+    /// dependents, steps are all graph questions). Same idiom as `TaskDetailView`.
+    @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
+    private var allTasks: [TaskItem] { Array(allTasksResults) }
 
     /// Frozen in `init` — see the snapshot note above. Resolved as State (not a computed
     /// property) from the first render, so the initial `scrollPosition` lands on the
@@ -42,6 +52,10 @@ struct TaskDetailPager: View {
     /// (or dismisses the cover), so a page presenting its own notice would take it with
     /// it — exactly when the user most needs the way back.
     @State private var notice: UndoNotice?
+    /// The Advisor chat for the CURRENT page — presented by the pager, like the "…"
+    /// menu, because several pages stay mounted and each owning a sheet would mean
+    /// several sheets over one screen.
+    @State private var showChat = false
 
     /// `peers` is the presenting surface's on-screen order; empty (or missing `opened`)
     /// collapses to a single page — the pre-pager behaviour.
@@ -90,16 +104,97 @@ struct TaskDetailPager: View {
                                 .accessibilityLabel("Task \(index + 1) of \(livePages.count)")
                         }
                     }
+                    // "Ask" — the Advisor with the door open. Only where there is a
+                    // model to answer: an on-device capability that is absent should
+                    // never draw a button (`ModelResult.unavailable`'s rule). The
+                    // condition wraps the ITEM, not its content — an item holding an
+                    // empty view still reserves its slot in the trailing capsule.
+                    if AppBrain.onDeviceModelAvailable() || chatFixtureRequested {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                showChat = true
+                            } label: {
+                                Image(systemName: "text.bubble")
+                            }
+                            .accessibilityLabel("Ask about this task")
+                        }
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         TaskMoreMenu(
                             task: currentTask, onResolved: advanceAfterResolve, notice: $notice)
                     }
                 }
                 .undoNotice($notice)
+                .sheet(isPresented: $showChat) {
+                    TaskAdvisorChatView(
+                        task: currentTask, notice: $notice,
+                        onResolved: {
+                            showChat = false
+                            advanceAfterResolve()
+                        })
+                }
         }
+        .environment(\.openTaskChat, { showChat = true })
         .overlay(alignment: .leading) { edgeSwipeCatcher }
         .offset(x: dragOffset)
         .sensoryFeedback(.selection, trigger: currentID)
+        // Prime the two peers a swipe away. This is the highest-precision prediction of
+        // "what will the user look at next" in the product — better than the Brief's
+        // planned actions, which is what it replaced when the Brief was switched off:
+        // the pager is HOLDING the ordered list, and the neighbours are one gesture out.
+        //
+        // `initial: true` so opening the pager primes immediately; waiting for the first
+        // swipe would mean the first swipe is the one that pays. The CURRENT page is
+        // deliberately not primed here — `TaskDetailView` calls `ensure` for it at
+        // presence, which is the same work under the right budget.
+        .onChange(of: currentID, initial: true) { _, _ in primeNeighbours() }
+        .task { await openChatIfRequested() }
+    }
+
+    /// Deterministic verification seam. `-OpenAdvisorChat` presents the Advisor chat
+    /// over the opened page, so the sheet is screenshot-reachable without a tap; add
+    /// `-ChatFixture` to seed a canned thread (a question, an answer, a question
+    /// waiting) so the surface's states are reviewable on a host with no model. Pair
+    /// with `-OpenTaskDetail`. Never fires in normal runs.
+    private func openChatIfRequested() async {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("-OpenAdvisorChat") else { return }
+        if chatFixtureRequested {
+            TaskAdvisorChatStore.shared.seedFixture(taskID: opened.uuid)
+        }
+        // The pager is itself presented as a cover; a sheet requested while that
+        // transition is still running is silently dropped. Let it land first.
+        try? await Task.sleep(for: .seconds(0.8))
+        showChat = true
+        // `-AskAdvisor "question"` sends one real question through the live store, so
+        // the model's answer (or the honest failure line) is screenshot-reachable — the
+        // one check a fixture cannot make.
+        let args = ProcessInfo.processInfo.arguments
+        if let flag = args.firstIndex(of: "-AskAdvisor"), args.indices.contains(flag + 1) {
+            TaskAdvisorChatStore.shared.ask(args[flag + 1], task: opened, among: allTasks)
+        }
+        #endif
+    }
+
+    private var chatFixtureRequested: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-ChatFixture")
+        #else
+        false
+        #endif
+    }
+
+    /// Bounded to two calls per page turn, and `precompute` filters from there: the gate
+    /// makes a trivial task free, `.shallow` judgments are skipped entirely, and
+    /// `CloudBudget.allowsPrecompute` holds all speculative work to half the daily cap.
+    private func primeNeighbours() {
+        guard let index = currentIndex else { return }
+        let tasks = allTasks
+        for offset in [-1, 1] {
+            let neighbour = index + offset
+            guard livePages.indices.contains(neighbour) else { continue }
+            TaskAdvisorStore.shared.precompute(task: livePages[neighbour], among: tasks)
+        }
     }
 
     // MARK: - The paged stack

@@ -39,11 +39,6 @@ final class AppBrain {
     /// commit seam can stamp the first payoff wherever the capture came from.
     let metrics = MetricsRecorder()
 
-    /// The Today sequence's generation instrumentation (tier counts, latency,
-    /// tokens, skips, interruptions). Owned here because `todayPlan` is the one
-    /// place a generation completes — see `TodayPlanService`.
-    let planMetrics = PlanMetrics()
-
     /// Where committed captures' receipts are written (`CaptureProvenance`).
     ///
     /// A `var` so a test can point it at a throwaway file, for the same reason
@@ -51,15 +46,6 @@ final class AppBrain {
     /// FILE, so a suite reaching the shared instance would churn the developer's own
     /// capture history as a side effect of testing something else.
     var provenanceStore: CaptureProvenanceStore = .shared
-
-    /// The per-day advisor conversation (profile + tools + transcript) — created on
-    /// the day's first on-device generation, reused for recompose turns, replaced on
-    /// day change. Nil off-device and before the first generation. See
-    /// `BriefSession.swift`.
-    var briefSession: BriefSession?
-    /// Serializes Brief generation, because the on-device tier's `LanguageModelSession`
-    /// is cached per DAY and cannot be re-entered. See `SerialGate` and `todayPlan`.
-    let planGate = SerialGate()
 
     /// True while a triage call is in flight — drives the soft-glow processing UI.
     var isProcessing = false
@@ -240,6 +226,7 @@ final class AppBrain {
         ownership: OwnershipContext = .none,
         preparedCandidates: [RetrievalCandidate] = [],
         route: CaptureRoute = .cloud,
+        escalation: CaptureEscalationReason? = nil,
         onPartial: (@MainActor ([TaskDraft]) -> Void)? = nil
     ) async -> TriageRun {
         isProcessing = true
@@ -418,7 +405,10 @@ final class AppBrain {
             // hedge machinery stays built and tested (`CaptureHedgeTests`) for the day
             // a rung worth racing exists again.
             let raced = await CaptureTriageRace.hedged(
-                budget: ModelDeadline.captureSeconds,
+                // Sized by WHY the words left the device: a second opinion over a
+                // read already in hand gets the standby budget; a dump the local arm
+                // cannot represent gets the full one (`ModelDeadline.captureSeconds(for:)`).
+                budget: ModelDeadline.captureSeconds(for: escalation),
                 hedgeAfter: ModelDeadline.captureHedgeSeconds,
                 onPartial: partialHandler,
                 primary: { tee in
@@ -517,7 +507,16 @@ final class AppBrain {
             // which starts while the cloud arm is still stalling rather than after it has
             // finished failing, and shares the one budget. What remains below is the
             // deterministic read, which is instant and cannot fail.
-            if intents.isEmpty {
+            // The one case an EMPTY authority answer is the answer (F-02): a spoken
+            // capture the verifier read as a caught conversation, sent with permission to
+            // return nothing. A served empty is "nothing here", and the deterministic tail
+            // would only re-manufacture the dozen cards the escalation exists to prevent.
+            // A FAILED or timed-out call still falls to the tail — capture never blocks.
+            let authorityAnsweredNothing =
+                escalation == .conversation && intents.isEmpty
+                && (telemetry.outcome == Self.outcomeLabel(.success)
+                    || telemetry.outcome == Self.outcomeLabel(.salvaged))
+            if intents.isEmpty, !authorityAnsweredNothing {
                 intents = (try? await HeuristicEngine().triage(rawText: rawText)) ?? []
             }
         } else {
@@ -730,7 +729,7 @@ final class AppBrain {
     func householdNarrative(_ facts: HouseholdFacts) async -> String {
         let engine = self.engine
         let result = await ModelRun.perform(
-            .householdNarrative, deadline: ModelDeadline.backgroundSeconds
+            .householdNarrative, deadline: ModelDeadline.seconds(for: .background)
         ) {
             try await engine.householdNarrative(facts)
         }

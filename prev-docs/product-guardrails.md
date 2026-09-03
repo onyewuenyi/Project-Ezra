@@ -33,20 +33,29 @@ re-engagement loops (the PRD's V1 learning guardrail, promoted to a standing rul
 Optimize instead for: reduced interaction, faster completion, higher AI confidence,
 lower cognitive load. A feature that increases sessions but not trust is a regression.
 
-### The one carve-out: the daily briefing nudge (2026-07-26)
+### The one carve-out is CLOSED (opened 2026-07-26, closed 2026-09-02)
 
-`BriefingReminder` ships a single local notification, which reads against the
-"notification-driven re-engagement" refusal below. It is allowed as a **narrow, named
-exception**, not a softening of the rule, and only while all of these hold:
+**The product now sends zero notifications, and this rule has no exception.**
 
-- **One notification type.** A second one is the signal this was abused, not a precedent.
-- **Off by default, at a time the user picks.** An alarm they set, not a hook we cast.
-- **No badges, no counts, no "5 tasks overdue", no escalation, no streaks.**
-- **It never fires on a day the briefing already played** (`BriefingSchedule.occurrences`,
-  asserted in `BriefingScheduleTests`).
-- **It does not inflate the engagement metric.** An open the app solicited is excluded
-  from `Metrics.selfInitiatedOpens` — otherwise the one honest pull metric quietly
-  becomes the vanity number this section exists to refuse.
+`BriefingReminder` shipped a single local notification — "your briefing is ready", off by
+default, at a time the user picked, no badges or counts or escalation, never firing on a day
+the briefing already played, and excluded from `Metrics.selfInitiatedOpens` so it could not
+inflate the one honest pull metric. It was allowed as a narrow, named exception while all of
+those held.
+
+**Cutting the Brief on 2026-09-02 removed the thing it announced, so the exception retires
+rather than gets repointed.** That is the carve-out's own logic applied to itself: it named
+"a second notification type" as the signal it had been abused, and a notification searching
+for a new subject is the same failure wearing the first one's name. The refusal is stronger
+with no exception at all than with a well-behaved one.
+
+**What this costs, stated:** the product no longer has a daily return surface. That is
+consistent with never optimizing for engagement, not a gap to fill — people come back
+because they have something to capture or something to do, and if that is not enough, the
+answer is a better product, never a reminder.
+
+**Re-opening this requires a NEW carve-out argued from scratch here, with new evidence.**
+Repointing the retired one at a different subject is explicitly not allowed.
 
 The reasoning: the Today sequence is a once-a-day moment that only happens if you
 remember it, and a moment you have to remember is a chore. The rule is about not
@@ -96,6 +105,25 @@ user something they already had.
 Does it remove friction? · Does AI infer instead of ask? · Does it reduce future
 work? · Does it preserve user agency? · Can it be undone? · Does it simplify the UI?
 · Would we still build it if AI disappeared? — **Two "no"s = don't build it.**
+
+## The scoped-conversation fence (2026-09-02)
+
+"AI chat as the interface" stays refused below. The refusal was never about turns; it was
+about a **blank prompt as the front door** — exporting the system's job, deciding what
+matters, back onto the user. A conversation that satisfies all three of these is the
+Advisor with a follow-up, and belongs. One that fails any of them is the thing refused.
+
+1. **It always has a named scope.** There is no place in Ezra where you type into
+   nothing. (Structural: `InquiryScope` requires a key.)
+2. **A deterministic floor answers the closed questions** — instantly, exactly, with the
+   tasks as tappable rows — before any model may speak. (Structural: every shipped scope
+   answers at least one closed question from `floor(for:)`, pinned by `InquiryFenceTests`.)
+3. **It is never the only route to something you could reach directly.** A citation
+   opens the pager; a task is a tap away without asking. (`InquiryFenceTests` greps the
+   inquiry files for mutation seams — a conversation never acts.)
+
+The household scope's placement as a TAB is the condition closest to failing — a tab is
+a place you go to talk. F-12 makes Ask a verb summoned from where you are.
 
 ## Things We Refuse to Build
 

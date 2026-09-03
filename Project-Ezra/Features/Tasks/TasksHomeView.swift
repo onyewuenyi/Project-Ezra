@@ -25,6 +25,7 @@ struct TasksHomeView: View {
     /// Activity is the shell's screen, not this one's — it is reachable from the Brief
     /// too, so it has exactly one mount point and neither surface owns it.
     @Environment(\.openActivity) private var openActivity
+    @Environment(\.openAsk) private var openAsk
 
     @State private var tab: MyTasksTab = .assigned
     @State private var statusFilter: TaskStatus?
@@ -103,12 +104,17 @@ struct TasksHomeView: View {
                 headerRow
                     .padding(.horizontal, Spacing.lg)
                     .padding(.top, Spacing.xs)
+                // Unfinished captures are findable here, quietly (F-04). Renders nothing
+                // when nothing is parked.
+                ParkedCapturesRow()
+                    .padding(.horizontal, Spacing.lg)
 
                 Group {
                     switch slice {
                     case .assigned(let sections):
                         AssignedSectionsView(
                             sections: sections, allTasks: tasks, othersRoster: othersRoster,
+                            currentUserID: currentUserID,
                             searchIsActive: filtersActive,
                             onShowAll: { status in
                                 Motion.withMotion(Motion.settle) { statusFilter = status }
@@ -117,6 +123,7 @@ struct TasksHomeView: View {
                     case .created(let entries):
                         CreatedFlatView(
                             entries: entries, allTasks: tasks, othersRoster: othersRoster,
+                            currentUserID: currentUserID,
                             searchIsActive: filtersActive,
                             selectedTask: $selectedTask, notice: $notice)
                     }
@@ -129,6 +136,15 @@ struct TasksHomeView: View {
             .navigationTitle(title)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Ask, from where you are (F-12) — the same bubble the task pager
+                    // wears for its own scope. A verb beside the record, not a place.
+                    Button {
+                        openAsk()
+                    } label: {
+                        Image(systemName: "text.bubble")
+                    }
+                    .accessibilityLabel("Ask about your tasks")
+
                     Button {
                         showSearch = true
                     } label: {
@@ -267,6 +283,15 @@ struct TasksHomeView: View {
         .buttonStyle(.pressable)
         .padding(.horizontal, isSelected ? Spacing.sm : 0)
         .padding(.vertical, Spacing.xxs)
+        // Both this pill and the filter capsule take the ROW's height as a floor, which is
+        // what makes them the same size: each was otherwise as tall as its own content
+        // happened to be — `sectionHeader` text here, a `glyphSmall` icon there — which is
+        // why the filter sat visibly shorter beside it.
+        //
+        // A floor, not `maxHeight: .infinity`: the row is pinned with `minHeight` and so
+        // has no ceiling, and greedy children make the HStack itself greedy — tried, and
+        // both capsules stretched to fill the entire screen.
+        .frame(minHeight: LayoutMetrics.tasksHeaderRow)
         .background { pillBackground(isSelected: isSelected) }
     }
 
@@ -358,12 +383,17 @@ struct TasksHomeView: View {
                 }
             }
             .foregroundStyle(filtersActive ? Palette.accentFlat : Palette.secondaryText)
-            .padding(.horizontal, Spacing.xs)
+            .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xxs)
+            // The same row-height floor the tab pill takes, so the two capsules match
+            // rather than each being as tall as its own content: equal PADDING wasn't
+            // enough, because this control's content is a `glyphSmall` icon where the
+            // pill's is `sectionHeader` text.
+            .frame(minHeight: LayoutMetrics.tasksHeaderRow)
             .background(Palette.secondarySurface, in: Capsule())
-            // Visual size ≠ interaction size: the capsule stays compact so the header
-            // doesn't gain weight, while the touchable region reaches the 44pt minimum
-            // by growing into the surrounding padding and giving the layout size back.
+            // Interaction size still ≥ the visual size: the capsule now clears 44pt on
+            // neither axis by itself, so this keeps the touchable region honest by growing
+            // into the surrounding whitespace and giving the layout size back.
             .minimumHitTarget()
         }
         .accessibilityLabel(filtersActive ? "Filters, active" : "Filters")

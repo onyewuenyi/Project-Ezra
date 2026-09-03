@@ -87,12 +87,17 @@ enum CaptureRoute: String, Equatable, CaseIterable {
     /// a transmission — escalated captures that find no reachable provider fall to
     /// the deterministic tail in `AppBrain.triage`.
     static func route(
-        for text: String, localRead drafts: [TaskDraft]
+        for text: String, localRead drafts: [TaskDraft], fromVoice: Bool = false
     ) -> (route: CaptureRoute, escalation: CaptureEscalationReason?) {
         // An empty read can't be revealed whatever the structure said — this arm
         // predates the verifier (the composer's old `local.isEmpty ? .cloud`), and it
         // outranks the explicit short-circuit for the same reason it always did.
         guard !drafts.isEmpty else { return (.cloud, .emptyRead) }
+        // A SPOKEN capture that reads like a caught conversation escalates BEFORE the
+        // explicit short-circuit (F-02): dictated sentence punctuation is not structure
+        // the person drew, and only the authority may say "nothing here". Typed text
+        // never takes this arm — the rule that typed structure never transmits stands.
+        if fromVoice, CaptureEscalation.conversationSignal(in: text) { return (.cloud, .conversation) }
         guard !Segmentation.structure(of: text).isExplicit else { return (.local, nil) }
         if let reason = CaptureEscalation.reason(for: text, drafts: drafts) {
             return (.cloud, reason)
@@ -160,8 +165,19 @@ extension CaptureRoute {
     static func captureDepth(
         for text: String, itemCount: Int? = nil
     ) -> ContextOptions.ReasoningLevel? {
+        // `.deep` at capture projects to `.moderate`: the BUDGET says this dump deserves
+        // more thought than a card; the WORKLOAD decides how that is spent, and capture is
+        // Level 2–3 semantic parsing, not the multi-step judgment `.deep` exists for.
+        budget(for: text, itemCount: itemCount) == .deep ? .moderate : nil
+    }
+
+    /// How much cognition this capture deserves, in the product's ONE budget vocabulary
+    /// (`ReasoningBudget` — P-03). Capture used to speak a private dialect of the same
+    /// decision (`captureDepth` returning a reasoning level directly); now the policy is
+    /// stated in the shared unit and the level is derived from it. A big dump is `.deep`
+    /// for the same reason a multi-step task is: several things held at once.
+    static func budget(for text: String, itemCount: Int? = nil) -> ReasoningBudget {
         let items = itemCount ?? Segmentation.items(from: text).count
-        guard text.count >= depthCharacterFloor || items >= depthItemFloor else { return nil }
-        return .moderate
+        return (text.count >= depthCharacterFloor || items >= depthItemFloor) ? .deep : .shallow
     }
 }

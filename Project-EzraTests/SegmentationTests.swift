@@ -239,9 +239,13 @@ struct SegmentationTests {
         let ramble =
             "Cook dinner at 3PM make odd duck reservation tonight take my wife to dinner "
             + "next week book reservation at tiki tomorrow at 1pm"
-        // The splitter genuinely cannot cut this — no connectives, just juxtaposition.
-        #expect(Segmentation.items(from: ramble).count == 1)
-        // Which is precisely why it must NOT be revealed as the answer.
+        // The splitter could not cut this at all until 2026-09-02 (one draft, four
+        // errands); the time-expression boundary now reads every one of its four
+        // outcomes — each ends in a time phrase and the next starts with a verb.
+        #expect(Segmentation.items(from: ramble).count == 4)
+        // What is still pinned: INFERRED boundaries are never the user's structure.
+        // The read got better; it did not become "typed", and the two-state model
+        // keeps that unrepresentable rather than merely detected.
         #expect(Segmentation.structure(of: ramble) == .unstructured)
         #expect(CaptureRoute.route(for: ramble) == .cloud)
     }
@@ -261,4 +265,46 @@ struct SegmentationTests {
     /// floor scores exactly this, end to end, against labeled ground truth, on whichever
     /// arm actually runs.
 
+    // MARK: - Boundaries the real-utterance corpus taught (2026-09-02)
+
+    @Test("A time expression followed by a fresh verb ends the outcome")
+    func timeExpressionBoundary() {
+        let items = Segmentation.items(
+            from: "Pick up groceries at noon make an action plan this Sunday for the week")
+        #expect(items.count == 2)
+        #expect(items.first?.lowercased().contains("groceries") == true)
+        #expect(items.last?.lowercased().contains("plan") == true)
+        // The gate: what follows must START an item. A weekday enumeration, an ASR
+        // tail and narration all stay whole.
+        #expect(Segmentation.items(from: "walk the dog monday and tuesday").count == 1)
+        #expect(Segmentation.items(from: "Get Micah ready to go to the gym at 10 AM. be").count == 1)
+        #expect(
+            Segmentation.items(from: "Adding pickup shirt at 3 PM So this is where so this is where")
+                .count == 1)
+    }
+
+    @Test("A dictated period before a lowercase verb is the user's own boundary")
+    func spokenPeriodBoundary() {
+        let items = Segmentation.items(
+            from:
+                "Go to the car next week on Friday, make a plan for anniversary for this Wednesday. take Micah to daycare Monday at 8 AM"
+        )
+        #expect(items.count == 3)
+        // Abbreviations and non-verbs after a period never split.
+        #expect(Segmentation.splitAtSpokenPeriods("Tell Mr. Charles, what did you do").count == 1)
+        #expect(Segmentation.splitAtSpokenPeriods("Cook dinner at 9 p.m. No. No, Bubba.").count == 1)
+    }
+
+    @Test("Everyday verbs the lexicon had never met — cook, eat — verify a boundary")
+    func everydayVerbs() {
+        #expect(
+            Segmentation.items(
+                from: "Cook dinner at 3 PM, make a action blindness Sunday for the week."
+            ).count == 2)
+        #expect(
+            Segmentation.items(
+                from:
+                    "first So I need to go pick up my car at 3 PM, clean my clothes and then eat breakfast"
+            ).count == 3)
+    }
 }

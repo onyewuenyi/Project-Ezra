@@ -75,6 +75,12 @@ struct TaskAdvisorFacts: Sendable, Equatable {
     /// part of the fingerprint.
     var relatedLines: [String] = []
 
+    /// What this person has been declining lately, as INTERNAL guidance for the model —
+    /// enriched by the store before judging, never fingerprinted (a preference is not a
+    /// fact about the task, and it must not re-judge every task the moment it changes).
+    /// Built by `Learned.advisorPreferences(from:)` over `HumanVerdicts.collect` (F-10).
+    var advisorPreferences: [String] = []
+
     /// How many retrieved neighbours reach the prompt.
     static let relatedCap = 5
 
@@ -211,6 +217,7 @@ struct TaskAdvisorFacts: Sendable, Equatable {
             lines.append("RELATED OPEN TASKS: " + relatedLines.joined(separator: " · "))
         }
         if workIntent == .planning { lines.append("INTERNAL: planning work") }
+        for preference in advisorPreferences { lines.append("INTERNAL: \(preference)") }
         return lines.joined(separator: "\n")
     }
 

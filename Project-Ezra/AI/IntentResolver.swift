@@ -298,6 +298,19 @@ enum IntentResolver {
                 break  // highest-frequency matching override wins
             }
         }
+        // F-05: the estimate and the flag the person keeps setting on similar tasks.
+        // Effort fills an EMPTY estimate only — a spoken "two hours" beats a learned
+        // default; urgency is additive, never cleared by a rule.
+        if intent.effortMinutes == nil {
+            for case let .effortForKeyword(keyword, minutes) in rules where words.contains(keyword.lowercased()) {
+                intent.effortMinutes = minutes
+                break
+            }
+        }
+        for case let .urgentForKeyword(keyword) in rules where words.contains(keyword.lowercased()) {
+            intent.isUrgent = true
+            break
+        }
 
         return intent
     }
@@ -506,9 +519,20 @@ enum IntentResolver {
     /// a named weekday before any bare week reference (so "next week friday" is Friday,
     /// not Monday), and "weekend" before "this week" (which "this weekend" contains).
     ///
-    /// Everything resolves to a start-of-day. There is no time-of-day parsing: the
-    /// prompt sends the model no clock, and every consumer of `dueDate` treats it as a
-    /// day.
+    /// Everything resolves to a start-of-day. A clock time is read for WHICH DAY it
+    /// implies, never as a time: the prompt sends the model no clock, and every
+    /// consumer of `dueDate` treats it as a day.
+    ///
+    /// **A bare clock time means today** (2026-09-02, the first real-utterance corpus:
+    /// 8 of 26 captures pulled from the device store were "cook dinner at 3", "make
+    /// lunch at noon", "clean up room at 3 PM" — every one meant today, and every one
+    /// landed undated with a "When?" chip because this resolver read days only). The
+    /// arm sits LAST, so a spoken day always wins over the clock beside it —
+    /// "tomorrow at 3 PM" is tomorrow, "Friday at noon" is Friday — and it can only
+    /// fire when no day word matched at all. Deterministic over clever: a clock time
+    /// already past ("at 3 PM", said at 10 PM) still reads as today, because "due
+    /// today" is one tap to move and a guessed "tomorrow" is a task the user did not
+    /// describe.
     static func resolveDate(expression: String?, now: Date = Date()) -> Date? {
         guard let raw = expression?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             !raw.isEmpty
@@ -523,7 +547,11 @@ enum IntentResolver {
         if raw.contains("day after tomorrow") {
             return cal.date(byAdding: .day, value: 2, to: today)
         }
-        if raw.contains("today") || raw == "tonight" { return today }
+        if raw.contains("today") || raw.contains("tonight")
+            || todayDaypartSignals.contains(where: raw.contains)
+        {
+            return today
+        }
         if raw.contains("tomorrow") {
             return cal.date(byAdding: .day, value: 1, to: today)
         }
@@ -582,8 +610,54 @@ enum IntentResolver {
             }
             return cal.date(byAdding: .day, value: 7, to: today)
         }
+
+        // LAST, deliberately: a clock time with no day word anywhere in the phrase
+        // reached this far without one matching, and a bare clock time means today.
+        if clockTimeRange(in: raw) != nil { return today }
         return nil
     }
+
+    /// "this morning" / "this afternoon" / "this evening" — a part of TODAY, spoken
+    /// the way people actually name it. Shadowed by `CaptureEscalation.timeSignals`.
+    static let todayDaypartSignals = ["this morning", "this afternoon", "this evening"]
+
+    /// The one clock-time vocabulary, shared by every reader that must agree on what
+    /// a clock time IS: this resolver (which day it implies), `HeuristicEngine`'s
+    /// extractor (hands the phrase over verbatim) and `CaptureEscalation.timeSignals`
+    /// (counts it as one occasion). Three copies of this regex would be three places
+    /// for "9 p.m." to be a time in one and noise in another.
+    ///
+    /// Forms: "at 3 PM" · "3PM" · "at 3:30 pm" · "9 p.m." · "at noon" · "midnight" ·
+    /// and "at 5" — a bare hour after "at", 1–12 only, because "at 20" is not how the
+    /// hour is spoken in English and a street number should not become a deadline.
+    static let clockTimePattern =
+        #"\b(?:at\s+)?(?:noon|midnight|(?:1[0-2]|0?[1-9])(?::[0-5][0-9])?\s?(?:am|pm|a\.m\.|p\.m\.))(?![a-z0-9])"#
+        + #"|\bat\s+(?:1[0-2]|[1-9])(?::[0-5][0-9])?(?![a-z0-9:])"#
+
+    /// Where a clock time sits in a lowercased phrase, or nil when it holds none.
+    static func clockTimeRange(in lowered: String) -> Range<String.Index>? {
+        lowered.range(of: clockTimePattern, options: .regularExpression)
+    }
+
+    /// One TIME EXPRESSION = one occasion: a day word with the clock time beside it
+    /// absorbed ("tomorrow at 3 PM" is a single deadline), or a clock time on its own.
+    /// The day vocabulary shadows this resolver's arms — bare weekdays included,
+    /// because `expand` fans them out. Shared by `CaptureEscalation.timeSignals`
+    /// (counts occasions) and `Segmentation` (a time expression followed by a fresh
+    /// verb is where one spoken outcome ends and the next begins). Case-insensitive
+    /// callers must say so; the pattern is written lowercase.
+    static let timeExpressionPattern: String = {
+        let dayWords =
+            "today|tonight|tomorrow"
+            + "|next (?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+            + "|this (?:weekend|week|month|morning|afternoon|evening"
+            + "|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+            + "|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+        // Day-then-clock ("tomorrow at 3 PM"), clock-then-day ("3PM today"), or either
+        // alone — each ONE occasion.
+        return #"\b(?:"# + dayWords + #")\b(?:\s*(?:"# + clockTimePattern + "))?"
+            + "|(?:" + clockTimePattern + #")(?:\s+(?:"# + dayWords + #")\b)?"#
+    }()
 
     /// Weekday names in a fixed order — an array, not a dictionary, because a
     /// dictionary's iteration order is unspecified and a phrase naming two days would

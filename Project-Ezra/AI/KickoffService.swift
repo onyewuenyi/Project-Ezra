@@ -69,7 +69,7 @@ struct KickoffService {
     /// tapped Start and is looking at the button that changed under their thumb. Any
     /// non-success renders nothing: silence is the fallback, not an error state.
     func firstStep(_ facts: KickoffFacts) async -> ModelResult<String> {
-        let outcome = await ModelRun.perform(.kickoff, deadline: ModelDeadline.cardSeconds) {
+        let outcome = await ModelRun.perform(.kickoff, deadline: ModelDeadline.seconds(for: .card)) {
             let session = CapabilityProfiles.session(
                 instructions: Self.instructions, config: CapabilityProfiles.kickoff)
             return try await session.respond(

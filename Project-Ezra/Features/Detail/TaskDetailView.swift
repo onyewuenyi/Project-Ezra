@@ -88,6 +88,8 @@ struct TaskDetailView: View {
     @State private var decisionChoice = ""
     /// The Advisor's judgment cache — ambient, fingerprint-keyed, shared across pages.
     @ObservedObject private var advisorStore = TaskAdvisorStore.shared
+    /// The pager owns the task chat sheet; the bar's advisor line opens it.
+    @Environment(\.openTaskChat) private var openTaskChat
     /// A related task opened from this page — a blocker from the waiting spine or
     /// the Advisor's openBlocker move, or a step from the container spine. A nested
     /// single-page detail, because the pager's peer list is snapshotted and the
@@ -128,38 +130,72 @@ struct TaskDetailView: View {
     /// Whether the Advisor section occupies any geometry at all. Hoisted out of
     /// `AdvisorView` so a quiet task — the common case — has NO advisor slot in the
     /// stack, instead of an empty view silently doubling the section gap.
-    /// The tasks the current reading cites, resolved against the live set. A cited
-    /// id that no longer resolves renders nothing — a dead reference must not become
-    /// a dead row.
-    private var citedTasks: [TaskItem] {
-        let ids: [UUID]
-        switch advisorStore.state(for: task) {
-        case .revealed(let reading): ids = reading.citedTaskIDs
-        case .fallback(let reading): ids = reading?.citedTaskIDs ?? []
-        default: ids = []
-        }
-        guard !ids.isEmpty else { return [] }
-        return ids.compactMap { id in allTasks.first { $0.uuid == id } }
-    }
-
-    /// What bears on the choice, for the obligation block — only on the deciding
-    /// page, and only when no decide reading below is already showing its own
-    /// what-matters lines (the same fact twice in two boxes is worse than either).
+    /// What bears on the choice, for the obligation block — the deciding page's
+    /// what-matters lines. Always the page's to show now: the decide reading's own
+    /// lines live in the chat, so there is no second box to duplicate.
     private var obligationContextLines: [String] {
         guard shape == .deciding else { return [] }
-        if case .revealed(let reading) = advisorStore.state(for: task),
-            reading.move == .decide, !reading.evidence.isEmpty
-        {
-            return []
-        }
         return TaskAdvisorFacts.make(task: task, among: allTasks).decisionContextLines
     }
 
+    /// The page's Advisor section is the OBLIGATION block only (2026-09-02). The
+    /// reading itself never enters the body: it reaches the page as one line in the
+    /// pinned bar (`advisorLine`) and opens into the task chat.
     private var advisorVisible: Bool {
         AdvisorView.isVisible(
             state: advisorStore.state(for: task),
             flagged: task.needsDecision && !task.status.isResolved,
-            diagnosis: StallDetector.diagnose(task, among: allTasks))
+            diagnosis: StallDetector.diagnose(task, among: allTasks),
+            readingRendered: false)
+    }
+
+    /// The one sentence the bar carries under the CTA. Rung 0 first: a `.doing`
+    /// task's kickoff step (the first move, stored or generated); otherwise the
+    /// reading's observation — model or floor. Nil renders nothing; the bar never
+    /// reserves a blank line.
+    /// The bar's one line: a kickoff step, a reading, or — new with F-09 — SILENCE that
+    /// can be felt. A model-judged "nothing" used to render as nothing at all, which is
+    /// indistinguishable from the Advisor not being there; now it renders as evidence
+    /// that Ezra looked, and when. Muted, never a badge, and it still opens the chat —
+    /// asking is the natural follow-up to silence.
+    struct BarLine: Equatable {
+        enum Kind: Equatable {
+            case kickoff
+            case reading
+            case silence
+        }
+        let text: String
+        let kind: Kind
+        var opensChat: Bool { kind != .kickoff }
+    }
+
+    private var advisorLine: BarLine? {
+        if task.status == .doing, let step = kickoffStep { return BarLine(text: step, kind: .kickoff) }
+        switch advisorStore.state(for: task) {
+        case .revealed(let reading): return BarLine(text: reading.observation, kind: .reading)
+        case .fallback(let reading):
+            if let reading, !reading.observation.isEmpty { return BarLine(text: reading.observation, kind: .reading) }
+            return nil
+        case .quiet(.model):
+            return BarLine(text: Self.silenceLine(judgedAt: advisorStore.judgedAt(for: task)), kind: .silence)
+        default: return nil
+        }
+    }
+
+    /// "Looked just now — nothing to add." The timestamp is the fact that makes silence
+    /// legible: the fingerprint means Ezra knows exactly when it last considered this.
+    static func silenceLine(judgedAt: Date?, now: Date = Date()) -> String {
+        guard let judgedAt else { return "Looked — nothing to add." }
+        let seconds = now.timeIntervalSince(judgedAt)
+        let when: String
+        if seconds < 90 {
+            when = "just now"
+        } else {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .short
+            when = formatter.localizedString(for: judgedAt, relativeTo: now)
+        }
+        return "Looked \(when) — nothing to add."
     }
 
     var body: some View {
@@ -176,6 +212,12 @@ struct TaskDetailView: View {
                 }
                 if shape == .container {
                     stepsSpine.rise(1, appeared, reduceMotion)
+                }
+                // The forward direction — shares slot 1 with the spines because it lives
+                // in the same "relations, under the title" band, and a task can be both
+                // blocked and blocking. Rises with them rather than after.
+                if !dependents.isEmpty {
+                    dependentsSection.rise(1, appeared, reduceMotion)
                 }
                 if advisorVisible {
                     advisorSection.rise(2, appeared, reduceMotion)
@@ -691,6 +733,57 @@ struct TaskDetailView: View {
         .accessibilityLabel("Step: \(step.title), \(done ? "done" : "open")")
     }
 
+    // MARK: - What this frees up (the FORWARD direction)
+
+    /// The still-open tasks waiting on THIS one, tappable through to each.
+    ///
+    /// The page was navigable in three directions — DOWN via the container spine's steps,
+    /// SIDEWAYS via the waiting spine's blockers, UP via the "Part of …" caption — and not
+    /// forward. That was survivable while the list's chain stack expanded in place; when
+    /// the expander was removed (2026-09-01) it became a hole, because **the common chain
+    /// is rooted on the task that unblocks the others**: "Renew passport" has no blockers
+    /// and no steps, so it drew no spine at all, and its three dependents had nowhere to
+    /// be seen. Verified in the sim before this existed — the root's page was chips and
+    /// nothing else.
+    ///
+    /// Not a `TaskShape`: blocking others is a RELATION, not a shape of the work, and the
+    /// four shapes are pinned. So it renders whenever the relation exists, alongside
+    /// whatever spine the shape picked — a task can be both blocked and blocking.
+    ///
+    /// The glyph is deliberately an INDICATOR here, unlike the blocker and step spines.
+    /// Their glyphs are interactive because clearing them is the useful next act; a
+    /// dependent is blocked BY this task, so completing it from here would be finishing
+    /// work out of the order the graph says it runs in. You go there to look, and act there.
+    private var dependentsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text(dependents.count == 1 ? "Frees up 1 task" : "Frees up \(dependents.count) tasks")
+                .sectionHeaderStyle()
+            ForEach(dependents) { dependent in
+                Button {
+                    openedRelated = dependent
+                } label: {
+                    HStack(spacing: Spacing.sm) {
+                        StatusGlyphView(task: dependent, allTasks: allTasks, interactive: false)
+                        Text(dependent.title)
+                            .font(.supporting)
+                            .foregroundStyle(Palette.primaryText)
+                            .lineLimit(1)
+                        Spacer(minLength: Spacing.sm)
+                        Image(systemName: "chevron.right")
+                            .font(.glyphCaption())
+                            .foregroundStyle(Palette.mutedText)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressableLink)
+                .accessibilityLabel("\(dependent.title), waiting on this task")
+            }
+        }
+    }
+
+    /// The reverse `.blocks` edge, walked in the one place that owns that walk.
+    private var dependents: [TaskItem] { task.dependents(among: allTasks) }
+
     // MARK: - The waiting spine (shape == .waiting)
 
     /// The blocker IS the page. What this task waits on, directly under the title:
@@ -716,8 +809,24 @@ struct TaskDetailView: View {
             // motion" and "not started" are different chases, and the fact was one
             // lookup away the whole time. External waits keep the hourglass — they
             // have no lifecycle to show.
+            //
+            // INTERACTIVE, mirroring the container spine's step glyph. It was read-only
+            // while the step glyph next door was not, which no user could have explained
+            // — and it became a real gap when the list's chain expander was removed
+            // (2026-09-01): clearing a prerequisite from the list used to be expand-then-
+            // act, and without this it would be tap, tap, act. Resolving a blocker changes
+            // THIS page's shape (the waiting spine may empty), so it re-judges here, the
+            // same way the step glyph refreshes the container.
             if let target {
-                StatusGlyphView(task: target, allTasks: allTasks, interactive: false)
+                StatusGlyphView(
+                    task: target, allTasks: allTasks,
+                    onPick: { state in
+                        actionPulse += 1
+                        Motion.withMotion(Motion.decide) { target.setStatus(state, in: context) }
+                        context.saveChanges()
+                        advisorStore.ensure(task: task, among: allTasks)
+                    }
+                )
             } else {
                 Image(systemName: "hourglass")
                     .font(.glyphCaption())
@@ -882,8 +991,8 @@ struct TaskDetailView: View {
             diagnosis: StallDetector.diagnose(task, among: allTasks),
             blockers: task.activeBlockerTasks(among: allTasks),
             blockersRenderedElsewhere: shape == .waiting,
-            citedTasks: citedTasks,
             contextLines: obligationContextLines,
+            showsReading: false,
             onDecide: { choice in
                 if let choice {
                     advisorActed(.decide) { markDecided(choice: choice) }
@@ -909,19 +1018,7 @@ struct TaskDetailView: View {
                     context.saveChanges()
                 }
             },
-            onCreateSteps: { accepted, proposed in
-                advisorActed(.createSteps) { accept(accepted, proposed: proposed) }
-            },
-            onOpenBlocker: { blocker in
-                advisorActed(.openBlocker) { openedRelated = blocker }
-            },
-            onDoItNow: { advisorActed(.advise) { applyStatus(.doing) } },
-            onDefer: { advisorActed(.advise) { setDue(dayOffset: 7) } },
-            onKill: { advisorActed(.advise) { applyStatus(.canceled) } },
-            onDismiss: { advisorStore.dismiss(taskID: task.uuid) },
-            onOpenCited: { cited in
-                advisorActed(.advise) { openedRelated = cited }
-            }
+            onDismiss: { advisorStore.dismiss(taskID: task.uuid) }
         )
     }
 
@@ -937,54 +1034,6 @@ struct TaskDetailView: View {
         }
         actionPulse += 1
         action()
-    }
-
-    /// Accept a breakdown: create the selected steps as real child tasks.
-    ///
-    /// `proposed` is the full set the model offered, so each deselection is recorded as
-    /// a `Correction` — the user telling the model it over-reached is exactly the
-    /// signal the correction loop wants, and it exists nowhere else.
-    private func accept(_ steps: [BreakdownStep], proposed: [BreakdownStep]) {
-        guard !steps.isEmpty else { return }
-        actionPulse += 1
-        Motion.withMotion(Motion.decide) {
-            task.splitInto(steps, in: context)
-        }
-        let kept = Set(steps.map(\.title))
-        for declined in proposed where !kept.contains(declined.title) {
-            context.insert(
-                Correction(
-                    taskUUID: task.uuid, captureID: task.captureID,
-                    fieldCorrected: "split", aiValue: declined.title, userValue: "declined",
-                    in: context))
-        }
-        // A task that has just become a container is a different kind of work than it
-        // was a moment ago — see `reclassifyWorkIntent`.
-        reclassifyWorkIntent()
-        context.saveChanges()
-        // The same pill a resolution gets. An AI-authored structural act with no
-        // in-place receipt made the page reshape FEEL unilateral — the steps appeared,
-        // the reading vanished, and the way back lived two screens away in Activity.
-        // Undo routes through `ChangeLogUndo.revert` (the split entry's own arm), so
-        // there is exactly one revert path and this pill cannot drift from it.
-        let count = steps.count
-        let taskUUID = task.uuid
-        let undoContext = context
-        notice = UndoNotice(
-            message: "Split into \(count) step\(count == 1 ? "" : "s")"
-        ) {
-            let request = NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry")
-            request.predicate = NSPredicate(
-                format: "action == %@ AND taskUUID == %@ AND undone == NO",
-                "split", (taskUUID ?? UUID()) as CVarArg)
-            request.sortDescriptors = [
-                NSSortDescriptor(keyPath: \ChangeLogEntry.timestamp, ascending: false)
-            ]
-            request.fetchLimit = 1
-            guard let entry = try? undoContext.fetch(request).first else { return }
-            ChangeLogUndo.revert(entry, in: undoContext)
-            undoContext.saveChanges()
-        }
     }
 
     private func markDecided(choice: String? = nil) {
@@ -1146,19 +1195,45 @@ struct TaskDetailView: View {
             .buttonStyle(.pressableProminent)
             .disabled(isPerformingPrimary)
 
-            // The kickoff line: the one concrete first move, under the button that just
-            // relabeled — the moment of commitment is when activation energy is highest.
-            // Shown only while the commitment is live; silence is the fallback.
-            if task.status == .doing, let step = kickoffStep {
-                HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
-                    Image(systemName: "arrow.turn.down.right")
+            // The Advisor's ONE line on this page, under the button — the kickoff step
+            // while the commitment is live, otherwise the reading's observation. A
+            // reading is tappable and opens the task chat, where the guidance and the
+            // move (options, steps, the blocker) live as the conversation's opener. It
+            // lands in a fixed place with a fade: the bar is where the eyes already are,
+            // and nothing above it moves.
+            if let line = advisorLine {
+                Button {
+                    guard line.opensChat else { return }
+                    openTaskChat()
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                        Image(
+                            systemName: line.kind == .kickoff
+                                ? "arrow.turn.down.right" : line.kind == .silence ? "circle" : "text.bubble"
+                        )
                         .font(.glyphCaption())
-                        .foregroundStyle(Palette.accentFlat)
-                    Text(step)
-                        .supportingStyle()
-                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(line.kind == .silence ? Palette.mutedText : Palette.accentFlat)
+                        Text(line.text)
+                            .supportingStyle()
+                            .foregroundStyle(line.kind == .silence ? Palette.mutedText : Palette.secondaryText)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if line.opensChat {
+                            Spacer(minLength: Spacing.xs)
+                            Image(systemName: "chevron.right")
+                                .font(.glyphCaption())
+                                .foregroundStyle(Palette.mutedText)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.pressableLink)
+                .disabled(!line.opensChat)
+                .accessibilityLabel(line.kind == .kickoff ? "First step: \(line.text)" : "Ezra: \(line.text)")
+                .accessibilityHint(line.opensChat ? "Opens the conversation about this task" : "")
                 .transition(.opacity)
+                .animation(reduceMotion ? nil : Motion.settle, value: line.text)
             }
         }
         .padding(.horizontal, Spacing.lg)

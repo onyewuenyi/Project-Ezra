@@ -63,6 +63,80 @@ enum RambleEval {
         var isAtomic: Bool { (expectedIntents ?? expected.count) == 1 }
     }
 
+    // MARK: - The routing quadrant
+
+    /// One escalation-policy decision, scored against the labels.
+    ///
+    /// Three definitions are pinned here because each is a place the quadrant could
+    /// otherwise overclaim:
+    ///
+    /// **Universe = UNSTRUCTURED cases only.** An explicit-structure capture never
+    /// reaches `CaptureEscalation` — the user drew the boundaries, so there is no
+    /// routing decision to score. `routingRows` filters accordingly, and the four
+    /// verdict cells MUST sum to the unstructured count (test-pinned): a future
+    /// special-case branch may not silently drop a case from the quadrant.
+    ///
+    /// **The oracle is `drafts.count` vs `expected.count` — POST-EXPANSION** — the same
+    /// comparison the false-keep line has always used. Case 50 labels 9 drafts against
+    /// 8 intents (`expand` fans the dog walk); swapping `expectedIntents` in here would
+    /// silently shift every verdict, so the choice is stated rather than implied.
+    ///
+    /// **"justified", not "necessary".** With a count-only oracle and zero cloud calls,
+    /// "escalated AND the local count was wrong" proves the LOCAL READ fell short — it
+    /// cannot prove the cloud does better. The cell claims the escalation DECISION was
+    /// justified by the read's failure, nothing more.
+    enum RoutingVerdict: String, CaseIterable {
+        case keptCorrect = "kept-correct"
+        case falseKeep = "false-keep"
+        case escalatedJustified = "escalated-justified"
+        case escalatedUnnecessary = "escalated-unnecessary"
+    }
+
+    struct RoutingRow {
+        var utterance: String
+        var draftCount: Int
+        var expectedCount: Int
+        var reason: CaptureEscalationReason?
+        var verdict: RoutingVerdict
+    }
+
+    /// The verdict for one decision — pure, so the quadrant math is testable without
+    /// running a pipeline.
+    static func routingVerdict(
+        reason: CaptureEscalationReason?, draftCount: Int, expectedCount: Int
+    ) -> RoutingVerdict {
+        let countRight = draftCount == expectedCount
+        switch (reason, countRight) {
+        case (nil, true): return .keptCorrect
+        case (nil, false): return .falseKeep
+        case (.some, false): return .escalatedJustified
+        case (.some, true): return .escalatedUnnecessary
+        }
+    }
+
+    /// Score a corpus's UNSTRUCTURED cases through the escalation policy. The resolve
+    /// closure is the deterministic pipeline (the read the verifier judges); a throw
+    /// counts as an empty read, which is what production would see.
+    static func routingRows(
+        over cases: [EvalCase],
+        resolve: (String) async throws -> [TaskDraft]
+    ) async -> [RoutingRow] {
+        var rows: [RoutingRow] = []
+        for evalCase in cases
+        where !Segmentation.structure(of: evalCase.utterance).isExplicit {
+            let drafts = (try? await resolve(evalCase.utterance)) ?? []
+            let reason = CaptureEscalation.reason(for: evalCase.utterance, drafts: drafts)
+            rows.append(
+                RoutingRow(
+                    utterance: evalCase.utterance, draftCount: drafts.count,
+                    expectedCount: evalCase.expected.count, reason: reason,
+                    verdict: routingVerdict(
+                        reason: reason, draftCount: drafts.count,
+                        expectedCount: evalCase.expected.count)))
+        }
+        return rows
+    }
+
     // MARK: - The adversarial near-miss suite
 
     /// Decomposition near-misses, in matched pairs — the hardest corpus in the product.
@@ -136,6 +210,167 @@ enum RambleEval {
         EvalCase(
             utterance: "sort out the passport it expires in march",
             expected: [ExpectedTask(titleContains: ["passport"], expectDue: true)]),
+    ]
+
+    // MARK: - The real-utterance corpus (quarantined)
+
+    /// What people ACTUALLY said to the orb: every capture in the owner's device store
+    /// from 2026-08-27 to 08-30, verbatim (ASR errors and all), labeled blind by one
+    /// labeler and ruled row-by-row by the owner on 2026-09-02. Kept APART from
+    /// `evalSet` — it is scored against `Floors.real`, never folded into the authored
+    /// floors, because reality is messier than authored fixtures and a floor that
+    /// moves to admit it has stopped measuring anything.
+    ///
+    /// What this corpus has that the authored one never did: bare clock times ("cook
+    /// dinner at 3"), fragments cut by the silence window ("Have"), the mic catching a
+    /// room ("You just ate sand. Cook dinner at 9 p.m. No. No, Bubba…"), retry
+    /// siblings, and meta-narration ("Adding pickup shirt…"). The four policy rulings
+    /// it forced, each a product decision rather than a label:
+    ///
+    ///  P1 · A bare clock time implies TODAY — `IntentResolver.resolveDate`'s last arm.
+    ///  P2 · Ambient/conversation captures label the buried task when one exists and
+    ///       ZERO tasks when none — the first labeled anti-invention rows (18, 24, 28).
+    ///  P3 · A truncated capture with a verb and an object is ONE task, unresolved
+    ///       details welcome ("Take something to my" keeps the words: a task you delete
+    ///       costs a swipe, a thought the system dropped costs the thought); a bare
+    ///       word is zero ("Have").
+    ///  P4 · Meta-narration is stripped — the capture is the content, not the act of
+    ///       capturing ("Adding pickup shirt at 3 PM" is a shirt pickup).
+    ///
+    /// Row-level rulings: #39's "action blindness" is an ASR error for "action plan"
+    /// and the title carries the words as said (the product does not fix speech
+    /// recognition); #41's "eat breakfast" is a task because the person enumerated it
+    /// with "and then"; #43 "today as Sunday" is dated (which day is the resolver's
+    /// today-wins arm, and `expectDue` asks only whether a date landed). A child's
+    /// name is replaced by "Micah" consistently — same syllable shape, so
+    /// segmentation and title behaviour are unchanged and no real name sits in a
+    /// public repository.
+    ///
+    /// **Categories, owners and kinds are deliberately unlabeled** here: this corpus
+    /// measures the three things the device evidence questioned — count, title and
+    /// date — and a label nobody can rule on with confidence is noise wearing a
+    /// floor.
+    static let realSet: [EvalCase] = [
+        // 18 · P2: pure conversation the mic caught. Zero tasks.
+        EvalCase(
+            utterance:
+                "Hello, what are you doing? Just taking my time, talking, seeing different stuff. What are your thoughts? Turn up for a check. Yep, you still listening? This probably looks good and then that's it.",
+            expected: []),
+        // 19 · P1: bare clock time → today.
+        EvalCase(
+            utterance: "Clean up room at 3 PM.",
+            expected: [ExpectedTask(titleContains: ["clean", "room"], expectDue: true)]),
+        // 20 · day + time: the day wins, the clock never shadows it.
+        EvalCase(
+            utterance: "Clean up my room tomorrow at 3 PM.",
+            expected: [ExpectedTask(titleContains: ["clean", "room"], expectDue: true)]),
+        // 21 · "today" spoken, "3PM" glued.
+        EvalCase(
+            utterance: "Cook at 3PM today",
+            expected: [ExpectedTask(titleContains: ["cook"], expectDue: true)]),
+        // 22 · P3: a bare word. Zero tasks.
+        EvalCase(utterance: "Have", expected: []),
+        // 23 · "tonight".
+        EvalCase(
+            utterance: "Plan what to make for dinner tonight!",
+            expected: [ExpectedTask(titleContains: ["dinner"], expectDue: true)]),
+        // 24 · P2 flagship: ONE task buried in child-wrangling. The anti-invention row.
+        EvalCase(
+            utterance:
+                "You just ate sand. Cook dinner at 9 p.m. No. No, Bubba. No, we boy. No! That's yuppie. Is he being too great? Tell Mr. Charles, what did you guys do today at school? Hey, I want all that sand back in the bucket. We've wasted all the sand. Put it back in the bucket. Oh, I hate God. It's not gonna come off for a while. You had to wash it to get it off. It's glitter stuff. No, you're still playing with it",
+            expected: [ExpectedTask(titleContains: ["cook", "dinner"], expectDue: true)]),
+        // 25/26 · retry siblings, kept both — real retry behaviour.
+        EvalCase(
+            utterance: "Cook some dinner for tomorrow",
+            expected: [ExpectedTask(titleContains: ["cook", "dinner"], expectDue: true)]),
+        EvalCase(
+            utterance: "Cook dinner for tomorrow",
+            expected: [ExpectedTask(titleContains: ["cook", "dinner"], expectDue: true)]),
+        // 27 · vague but actionable.
+        EvalCase(
+            utterance: "I wanna take this back to the house",
+            expected: [ExpectedTask(titleContains: ["house"])]),
+        // 28 · P2: musing, no outcome. Zero tasks.
+        EvalCase(
+            utterance:
+                "I thought people are like, you know what? I wanna go a few more house. You know what I mean? So",
+            expected: []),
+        // 29 · P1: a bare hour after "at".
+        EvalCase(
+            utterance: "Cook dinner at 5",
+            expected: [ExpectedTask(titleContains: ["cook", "dinner"], expectDue: true)]),
+        // 30 · P3 boundary, ruled ONE: verb + object, destination cut. The words stay.
+        EvalCase(
+            utterance: "Take something to my",
+            expected: [ExpectedTask(titleContains: ["take"])]),
+        // 31 · P3 + P4: narration stripped, cut at the time — "When?" is the right ask.
+        EvalCase(
+            utterance: "I want to add that I need to be ready to go to brunch at",
+            expected: [ExpectedTask(titleContains: ["brunch"])]),
+        // 32 · P1: "noon".
+        EvalCase(
+            utterance: "Make lunch at noon",
+            expected: [ExpectedTask(titleContains: ["lunch"], expectDue: true)]),
+        // 33 · trailing comma from ASR.
+        EvalCase(
+            utterance: "Clean my car tomorrow,",
+            expected: [ExpectedTask(titleContains: ["clean", "car"], expectDue: true)]),
+        // 34 · P1 + a person + an ASR tail ("be").
+        EvalCase(
+            utterance: "Get Micah ready to go to the gym at 10 AM. be",
+            expected: [ExpectedTask(titleContains: ["micah", "gym"], expectDue: true)]),
+        // 35 · the real multi-intent flagship; "next week on Friday" tests arm order.
+        EvalCase(
+            utterance:
+                "Go to the car next week on Friday, make a plan for anniversary for this Wednesday. take Micah to daycare Monday at 8 AM",
+            expected: [
+                ExpectedTask(titleContains: ["car"], expectDue: true),
+                ExpectedTask(titleContains: ["anniversary"], expectDue: true),
+                ExpectedTask(titleContains: ["daycare"], expectDue: true),
+            ]),
+        // 36 · P1: bare hour.
+        EvalCase(
+            utterance: "Cook dinner at 3",
+            expected: [ExpectedTask(titleContains: ["cook", "dinner"], expectDue: true)]),
+        // 37 · "next week".
+        EvalCase(
+            utterance: "Take car to the shop next week",
+            expected: [ExpectedTask(titleContains: ["car", "shop"], expectDue: true)]),
+        // 38 · unpunctuated boundary — a segmentation test on real speech.
+        EvalCase(
+            utterance: "Pick up groceries at noon make an action plan this Sunday for the week",
+            expected: [
+                ExpectedTask(titleContains: ["groceries"], expectDue: true),
+                ExpectedTask(titleContains: ["plan"], expectDue: true),
+            ]),
+        // 39 · ASR error kept as said ("action blindness" = "action plan").
+        EvalCase(
+            utterance: "Cook dinner at 3 PM, make a action blindness Sunday for the week.",
+            expected: [
+                ExpectedTask(titleContains: ["cook", "dinner"], expectDue: true),
+                ExpectedTask(titleContains: ["action"], expectDue: true),
+            ]),
+        // 40 · P4: narration stripped.
+        EvalCase(
+            utterance: "Adding pickup shirt at 3 PM So this is where so this is where",
+            expected: [ExpectedTask(titleContains: ["shirt"], expectDue: true)]),
+        // 41 · "then" boundary; breakfast is a task because it was enumerated.
+        EvalCase(
+            utterance:
+                "first So I need to go pick up my car at 3 PM, clean my clothes and then eat breakfast",
+            expected: [
+                ExpectedTask(titleContains: ["car"], expectDue: true),
+                ExpectedTask(titleContains: ["clothes"]),
+                ExpectedTask(titleContains: ["breakfast"]),
+            ]),
+        // 42 · P3: outcome discernible.
+        EvalCase(
+            utterance: "We go to the bank to pick up",
+            expected: [ExpectedTask(titleContains: ["bank"])]),
+        // 43 · ASR ambiguity ("today as Sunday"): dated; today wins in the resolver.
+        EvalCase(
+            utterance: "Plan meeting today as Sunday.",
+            expected: [ExpectedTask(titleContains: ["meeting"], expectDue: true)]),
     ]
 
     // MARK: - The labeled set (count printed at runtime — never trust a comment)
@@ -567,6 +802,19 @@ enum RambleEval {
         /// across the labeled set including the dictated run-on cases.
         static let standard = Floors()
 
+        /// The floors for `realSet`, calibrated just under the DETERMINISTIC arm's
+        /// observed numbers on 2026-09-02: segmentation 22/26 (85%), title 28/28, due
+        /// 28/28, judgment 28/28, blocked 28/28 (category/owner/kind are unlabeled
+        /// there, so those entries hold nothing). The four segmentation misses are
+        /// the rows the deterministic arm CANNOT get by construction — the three
+        /// anti-invention rows (it splits conversation into sentences; only the
+        /// authority can say "nothing here") and the bare word "Have" (it cannot tell
+        /// a fragment from a one-word task like "groceries"). Every other real row
+        /// segments, including the three that needed new boundaries (a dictated
+        /// period, a time expression before a verb, "cook"/"eat" in the lexicon).
+        /// Re-calibrate only DOWNWARD from observed numbers, like every other floor.
+        static let real = Floors(segmentation: 0.80, due: 0.95)
+
         // The gate's ceilings lived here; deleted with the gate (2026-08-22).
 
         /// End-to-end time to a settled interpretation, p90, per arm.
@@ -603,11 +851,19 @@ enum RambleEval {
         /// This is the pipeline's own cost with no presentation floor in it. When the two
         /// diverge on a local read, the difference is the dwell — by design.
         var settledMs: [Int] = []
+        /// The same samples bucketed by `CapturePerformanceContract.Tier`, so the
+        /// contract's per-tier ceilings can be checked here against the SAME corpus
+        /// that holds the accuracy floors — a latency pass with a broken floor is a
+        /// FAIL, and putting both in one table is what makes that unmissable.
+        var settledByTier: [String: [Int]] = [:]
         var settledP90Ms: Double {
-            guard !settledMs.isEmpty else { return 0 }
-            let sorted = settledMs.sorted()
-            let index = min(sorted.count - 1, Int((Double(sorted.count - 1) * 0.9).rounded()))
-            return Double(sorted[index])
+            CapturePerformanceContract.nearestRank(settledMs, quantile: 0.9)
+        }
+        var settledP50Ms: Double {
+            CapturePerformanceContract.nearestRank(settledMs, quantile: 0.5)
+        }
+        var settledP95Ms: Double {
+            CapturePerformanceContract.nearestRank(settledMs, quantile: 0.95)
         }
 
         /// Every field paired with its name and floor, so callers iterate rather than
@@ -642,6 +898,23 @@ enum RambleEval {
                 broken.append(
                     "settled p90 \(Int(settledP90Ms))ms > ceiling \(Int(floors.settledRevealP90Ms))ms")
             }
+            // The performance contract's per-tier p95 ceilings, beside the accuracy
+            // floors — the single 3000ms row above stays as the per-ARM regression
+            // guard (it is what makes the retired on-device arm's 21s scream FAIL).
+            // Eval samples are PIPELINE-ONLY (no dwell, by the settledMs design), so a
+            // tier passing here and failing in the live report means the dwell is the
+            // gap — the table's job is to make that comparison possible, not hide it.
+            let contract = CapturePerformanceContract.standard
+            for tier in CapturePerformanceContract.Tier.allCases {
+                guard let samples = settledByTier[tier.rawValue], !samples.isEmpty
+                else { continue }
+                let p95 = CapturePerformanceContract.nearestRank(samples, quantile: 0.95)
+                let ceiling = contract.targets(for: tier).p95Ms
+                if p95 > ceiling {
+                    broken.append(
+                        "\(tier.rawValue) p95 \(Int(p95))ms > contract \(Int(ceiling))ms")
+                }
+            }
             return broken
         }
 
@@ -671,11 +944,35 @@ enum RambleEval {
                     + "\(Int(settledP90Ms))ms".padding(toLength: 12, withPad: " ", startingAt: 0)
                     + "ceiling \(Int(floors.settledRevealP90Ms))ms  "
                     + (settledP90Ms > floors.settledRevealP90Ms ? "FAIL" : "pass")
+            // The contract's tiers, with the informational "+dwell" column for the
+            // local tiers: eval samples carry no presentation floor, so the shipped
+            // number for a voice-local reveal is ≈ sample + orbLocalDwellSeconds —
+            // printed so "is the dwell the gap?" is answerable from the table alone.
+            let contract = CapturePerformanceContract.standard
+            let tierRows = CapturePerformanceContract.Tier.allCases.compactMap {
+                tier -> String? in
+                guard let samples = settledByTier[tier.rawValue], !samples.isEmpty
+                else { return nil }
+                let p50 = CapturePerformanceContract.nearestRank(samples, quantile: 0.5)
+                let p95 = CapturePerformanceContract.nearestRank(samples, quantile: 0.95)
+                let targets = contract.targets(for: tier)
+                let verdict = p95 > targets.p95Ms ? "FAIL" : "pass"
+                let dwell =
+                    tier == .complex
+                    ? ""
+                    : "  (+dwell → shipped ≈ \(Int(p50 + Motion.orbLocalDwellSeconds * 1000))ms)"
+                return "\(tier.rawValue) (n=\(samples.count))"
+                    .padding(toLength: 16, withPad: " ", startingAt: 0)
+                    + "p50 \(Int(p50))ms · p95 \(Int(p95))ms  "
+                    + "contract \(Int(targets.p50Ms))/\(Int(targets.p95Ms))ms  \(verdict)"
+                    + dwell
+            }
             return """
 
                 ── \(title) ──
                 \(rows.joined(separator: "\n"))
                 \(latency)
+                \(tierRows.joined(separator: "\n"))
                 ── \(verdict) ──
 
                 """
@@ -687,16 +984,60 @@ enum RambleEval {
     /// the IDENTICAL scoring body. Misses are named through `log` as they happen —
     /// the aggregates say a floor moved; only the named case says why.
     static func score(
+        over corpus: [EvalCase] = evalSet,
         resolve: (String) async throws -> [TaskDraft],
+        repeats: Int = 1,
+        reversed: Bool = false,
+        limit: Int? = nil,
+        heartbeat: Bool = false,
         log: (String) -> Void = { print($0) }
     ) async throws -> Report {
         var report = Report()
-        report.caseCount = evalSet.count
 
-        for evalCase in evalSet {
+        // `reversed` is Session B's flake instrument: two device passes, forward then
+        // reverse, and the DIFF of named misses is the per-case flake rate — a miss
+        // that appears in one order and not the other is scheduling/thermal noise, not
+        // a model finding, and must not spend a cloud call on revalidation.
+        //
+        // `limit` is the smoke-test dial (`-EvalCaseLimit N`): a 3–5 case pass that
+        // answers "is the model arm ALIVE on this host?" in a couple of minutes before
+        // anyone commits to a 52-case sitting.
+        //
+        // `heartbeat` is Session B's other lesson: the report used to print only
+        // MISSES, so twenty-five consecutive clean cases and a suspended app produced
+        // the same silence, and a human spent an hour telling them apart. On a model
+        // arm every case now announces itself BEFORE the inference (line-buffered, so
+        // a hang reads as "start" with no "done" — the liveness signal itself) and
+        // reports its outcome and cost after.
+        var cases = reversed ? Array(corpus.reversed()) : corpus
+        if let limit { cases = Array(cases.prefix(limit)) }
+        report.caseCount = cases.count
+        for (index, evalCase) in cases.enumerated() {
+            let tier = CapturePerformanceContract.Tier.tier(for: evalCase.utterance).rawValue
+            if heartbeat {
+                log("  case \(index + 1)/\(cases.count) → \(evalCase.utterance.prefix(44))")
+            }
             let started = Date()
             let drafts = try await resolve(evalCase.utterance)
-            report.settledMs.append(Int(Date().timeIntervalSince(started) * 1000))
+            let firstMs = Int(Date().timeIntervalSince(started) * 1000)
+            if heartbeat {
+                let verdict = drafts.count == evalCase.expected.count ? "ok" : "MISS"
+                log(
+                    "  case \(index + 1)/\(cases.count) \(verdict) · \(firstMs)ms · "
+                        + "\(drafts.count) draft\(drafts.count == 1 ? "" : "s")")
+            }
+            report.settledMs.append(firstMs)
+            report.settledByTier[tier, default: []].append(firstMs)
+            // Extra timing-only repeats for stabler percentiles (`-CaptureRepeats`).
+            // Accuracy is scored ONCE, on the first run: re-scoring identical inputs
+            // would only multiply every hit and miss by N and change no rate.
+            for _ in 1..<max(1, repeats) {
+                let repeatStarted = Date()
+                _ = try await resolve(evalCase.utterance)
+                let ms = Int(Date().timeIntervalSince(repeatStarted) * 1000)
+                report.settledMs.append(ms)
+                report.settledByTier[tier, default: []].append(ms)
+            }
 
             report.segmentation.record(drafts.count == evalCase.expected.count)
             // Field scoring pairs in order and only when segmentation matched —

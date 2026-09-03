@@ -40,6 +40,42 @@ struct RambleEvalTests {
         #expect(broken.isEmpty, "floors broken: \(broken.joined(separator: " · "))")
     }
 
+    // MARK: - The real-utterance corpus (quarantined)
+
+    @Test("The heuristic arm holds the real corpus's OWN floors — never the authored ones")
+    func realUtterancesHoldTheirFloors() async throws {
+        let report = try await RambleEval.score(over: RambleEval.realSet) { utterance in
+            let intents = try await HeuristicEngine().triage(rawText: utterance)
+            return IntentResolver.resolve(intents)
+        }
+        print(report.table(against: .real, arm: "heuristic · real utterances"))
+        let broken = report.failures(against: .real)
+        #expect(broken.isEmpty, "real floors broken: \(broken.joined(separator: " · "))")
+    }
+
+    @Test("The real corpus is quarantined: no utterance is shared with an authored set")
+    func realCorpusIsDisjoint() {
+        // One text, two labels across corpora is the drift the quarantine exists to
+        // prevent — the authored floors must not move because reality is messier.
+        let authored = Set(
+            (RambleEval.evalSet + RambleEval.gateAdversarialSet).map {
+                $0.utterance.lowercased()
+            })
+        let shared = RambleEval.realSet.filter { authored.contains($0.utterance.lowercased()) }
+        #expect(shared.isEmpty, "shared: \(shared.map(\.utterance))")
+        // And it carries the first labeled anti-invention rows: captures whose right
+        // answer is NOTHING. A corpus with none of these cannot measure invention.
+        #expect(RambleEval.realSet.filter { $0.expected.isEmpty }.count >= 2)
+        // The P1 population — bare clock times — resolves to a date on every row that
+        // spoke one, so the "When?" ask has retired from exactly those captures.
+        let clockRows = RambleEval.realSet.filter {
+            $0.expected.count == 1
+                && IntentResolver.clockTimeRange(in: $0.utterance.lowercased()) != nil
+        }
+        #expect(clockRows.count >= 8)
+        #expect(clockRows.allSatisfy { $0.expected.allSatisfy(\.expectDue) })
+    }
+
     @Test("Every scored field has a floor — no field may be measured and left unheld")
     func everyFieldIsHeld() {
         // The structural guard behind the test above. A new scored field added to
@@ -61,6 +97,24 @@ struct RambleEvalTests {
 
         // And "not measured" must never read as "fast": no samples, no verdict.
         #expect(RambleEval.Report().failures().isEmpty)
+    }
+
+    @Test("The contract's per-tier ceilings are held in failures(), beside the floors")
+    func perTierCeilingsAreHeld() {
+        // A tier list past its contract p95 must be NAMED — a per-tier row reported in
+        // the table and checked nowhere would be the exact rot `everyFieldIsHeld`
+        // exists to prevent, one indirection later.
+        var report = RambleEval.Report()
+        let ceiling = Int(CapturePerformanceContract.standard.simple.p95Ms)
+        report.settledByTier["simple"] = [ceiling + 500]
+        report.settledMs = [ceiling + 500]  // keeps the arm ceiling quiet (2000 < 3000)
+        #expect(report.failures().contains { $0.contains("simple p95") })
+
+        // And a tier inside its ceiling adds nothing.
+        var held = RambleEval.Report()
+        held.settledByTier["simple"] = [ceiling - 500]
+        held.settledMs = [ceiling - 500]
+        #expect(!held.failures().contains { $0.contains("simple p95") })
     }
 
     // The gate scorer's tests lived here until 2026-08-22, deleted with the gate. They

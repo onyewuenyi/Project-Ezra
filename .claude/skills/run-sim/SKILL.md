@@ -54,21 +54,25 @@ The reliable loop for building and visually verifying this app. Requires the **X
 
 Append to the `simctl launch` line:
 - `-SeedSampleData` — populate real tasks via the AI engine and skip onboarding (the sim uses the heuristic engine; Foundation Models isn't available there).
-- `-SeedFlowFixtures` — populate deterministic fixture data covering every core user flow except onboarding (Daily Brief, Needs Decision Resolution, Weekly Retro, Dependency Chain Resurfacing), bypassing the AI engine so results are exact and identical every run. See `docs/mock-data-user-flows.md` for what each fixture produces.
-- `-InitialTab N` — start on tab N: `0` Brief, `1` Tasks. (The Inbox and Household tabs were cut in the v2 collapse; the Activity screen is reachable with `-OpenActivity`.)
+- `-SeedFlowFixtures` — populate deterministic fixture data covering the core user flows (Needs Decision resolution, a dependency chain, owned tasks), bypassing the AI engine so results are exact and identical every run.
+- `-InitialTab N` — a no-op since 2026-09-02: there is no tab bar. `RootTabView` shows Tasks directly, with the capture orb bottom-trailing; Ask is a sheet from the Tasks header's bubble (`-AskHousehold "question"` / `-HouseholdChatFixture` present it). The Activity screen is reachable with `-OpenActivity`.
 - `-OpenCapture ["text"]` — present the capture composer at launch; with a text argument it parks + resumes that text and auto-submits (add `-NoSubmit` to hold the canvas). A BARE `-OpenCapture` lands on the listening orb — or the typed canvas wherever the mic can't lead, which on the sim (no SpeechTranscriber) proves the degrade chain for free.
 - `-HoldListening` — hold the Ramble arc on the Listening beat without starting the mic, so the listening surface is screenshot-reachable. Pair with a bare `-OpenCapture`.
 - `-DriveListeningLevel` — `-HoldListening` plus a canned reception-test envelope (silence → whisper → conversational → emphatic → pause) fed to the level monitor: record video of this run to judge the audio-reactive orb with no microphone.
 - `-HoldUnderstanding` — hold the arc on the thinking orb instead of parsing. Pair with `-OpenCapture "text"`.
+- `-OpenTaskDetail [N]` — open the full-screen detail pager on the Nth visible row. 
+- `-OpenAdvisorChat` — present the Advisor chat sheet over the opened detail; add `-ChatFixture` to seed a canned thread (question · answer · reply in flight) so the surface is reviewable with no model; or `-AskAdvisor "question"` to send one live question. Pair with `-InitialTab 1 -OpenTaskDetail 0`.
+- `-AskHousehold "question"` sends one question through the live store (floor questions answer with rows even with no model — try `"What's overdue?"` with `-SeedTodayFixtures`); `-HouseholdChatFixture` seeds a canned thread. `-HouseholdChatEval -EvalToFile` writes the eval report to the app container's Documents.
+- `-FocusAsk` — raise the Ask tab's keyboard at launch (with the Simulator's hardware keyboard OFF: `defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false`, then restart Simulator) to check the composer and the orb against it. NOTE: two devices named "iPhone 17 Pro" (iOS 26.4 and 27.0) may both be booted; `simctl launch` by NAME then hangs — use the iOS 27 device's UDID.
 
 Example — land on the seeded Tasks surface:
 ```bash
-xcrun simctl launch "$SIM" "$BID" -SeedFlowFixtures -InitialTab 1
+xcrun simctl launch "$SIM" "$BID" -SeedFlowFixtures
 ```
 
-Example — land on the Brief with the full flow-fixture set:
+Example — land on Tasks with the full flow-fixture set:
 ```bash
-xcrun simctl launch "$SIM" "$BID" -SeedFlowFixtures -InitialTab 0
+xcrun simctl launch "$SIM" "$BID" -SeedFlowFixtures
 ```
 
 ## Notes

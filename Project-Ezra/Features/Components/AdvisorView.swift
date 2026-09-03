@@ -59,15 +59,24 @@ struct AdvisorView: View {
     /// facts' `decisionContextLines` when no reading is carrying them, so the
     /// deciding body has its what-matters lines with or without a model.
     var contextLines: [String] = []
+    /// Whether the flagged-decision block renders here. The detail page: yes — a
+    /// standing human obligation belongs on the page. The chat opener: no, the page
+    /// underneath already holds it.
+    var showsObligation = true
+    /// Whether the READING (observation · guidance · move) renders here. The chat
+    /// opener: yes. The detail page: NO, since 2026-09-02 — the reading reaches the
+    /// page as ONE line in the pinned bar and opens into the chat. A paragraph
+    /// arriving mid-read into the body was the "info that pops up out of nowhere".
+    var showsReading = true
 
     let onDecide: (String?) -> Void
     let onEscalate: () -> Void
-    let onCreateSteps: (_ accepted: [BreakdownStep], _ proposed: [BreakdownStep]) -> Void
-    let onOpenBlocker: (TaskItem) -> Void
-    let onDoItNow: () -> Void
-    let onDefer: () -> Void
-    let onKill: () -> Void
-    let onDismiss: () -> Void
+    var onCreateSteps: (_ accepted: [BreakdownStep], _ proposed: [BreakdownStep]) -> Void = { _, _ in }
+    var onOpenBlocker: (TaskItem) -> Void = { _ in }
+    var onDoItNow: () -> Void = {}
+    var onDefer: () -> Void = {}
+    var onKill: () -> Void = {}
+    var onDismiss: () -> Void = {}
     /// Open a cited task — same nested detail the blocker rows use.
     var onOpenCited: (TaskItem) -> Void = { _ in }
 
@@ -81,13 +90,16 @@ struct AdvisorView: View {
     @State private var showEvidence = false
 
     var body: some View {
-        if Self.isVisible(state: state, flagged: flagged, diagnosis: diagnosis) {
+        if Self.isVisible(
+            state: state, flagged: flagged && showsObligation, diagnosis: diagnosis,
+            readingRendered: showsReading)
+        {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 // The obligation leads: a standing human duty outranks an
                 // interpretation of it, and on a DECIDING page this block is the
                 // spine the rest of the reading hangs under.
-                if flagged { obligationBlock }
-                if showsReading { readingSection }
+                if flagged && showsObligation { obligationBlock }
+                if showsReading && readingHasContent { readingSection }
             }
             .animation(reduceMotion ? nil : Motion.settle, value: state)
             .onChange(of: state) { _, _ in
@@ -104,9 +116,11 @@ struct AdvisorView: View {
     /// stack reads as a mysterious double gap on exactly the tasks the Advisor is
     /// quiet about — which is most of them, by design.
     static func isVisible(
-        state: AdvisorState, flagged: Bool, diagnosis: StallDiagnosis?
+        state: AdvisorState, flagged: Bool, diagnosis: StallDiagnosis?,
+        readingRendered: Bool = true
     ) -> Bool {
         if flagged { return true }
+        guard readingRendered else { return false }
         switch state {
         case .unevaluated, .quiet, .dismissed: return false
         // A fallback with neither a diagnosis template nor a rung-0 reading has
@@ -123,7 +137,7 @@ struct AdvisorView: View {
     /// Silence occupies zero visual attention. `.unevaluated` (no judgment yet) and
     /// `.quiet` (a judgment OF silence) render identically here and mean opposite
     /// things — the distinction lives in the store, where it is load-bearing.
-    private var showsReading: Bool {
+    private var readingHasContent: Bool {
         switch state {
         case .unevaluated, .quiet, .dismissed, .failed: return false
         case .fallback(let reading): return diagnosis != nil || reading != nil
@@ -633,8 +647,10 @@ struct AdvisorView: View {
     }
 
     private var offersOptions: Bool {
-        if case .revealed(let reading) = state { return !reading.options.isEmpty }
-        return false
+        // Options are only "here" when the reading itself is — on the page the reading
+        // lives in the chat, so the block keeps its full-width Mark decided.
+        guard showsReading, case .revealed(let reading) = state else { return false }
+        return !reading.options.isEmpty
     }
 
     // MARK: - Shared secondary control

@@ -63,7 +63,7 @@ struct SyncGateTests {
 
         // The pre-sync guarantee: work owned by someone with no device in the graph must
         // NOT leave your briefing, or it lands nowhere anyone can act on it.
-        let candidates = BriefSequenceModel.candidates(
+        let candidates = TodayQueries.candidates(
             from: [mine, theirs], currentUserID: me, syncIsLive: false, now: Date())
         #expect(Set(candidates.compactMap(\.uuid)) == Set([mine, theirs].compactMap(\.uuid)))
     }
@@ -75,7 +75,7 @@ struct SyncGateTests {
 
         // The Brief is *my* execution; coordination is a different surface. This is the
         // behaviour that has been waiting behind the gate, running for the first time.
-        let candidates = BriefSequenceModel.candidates(
+        let candidates = TodayQueries.candidates(
             from: [mine, theirs], currentUserID: me, syncIsLive: true, now: Date())
         #expect(candidates.compactMap(\.uuid) == [mine].compactMap(\.uuid))
     }

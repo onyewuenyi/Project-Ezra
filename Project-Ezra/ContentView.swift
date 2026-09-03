@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  Project-Ezra
 //
-//  App root. Delegates to the four-tab shell.
+//  App root. Delegates to the shell.
 //
 
 import SwiftUI
@@ -17,6 +17,5 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environment(AppBrain())
-        .environment(BriefingReminder())
         .environment(\.managedObjectContext, PersistenceStack.scratch)
 }

@@ -74,6 +74,25 @@ struct RambleOrb: View {
 
     var mode: Mode = .thinking
 
+    /// The PRIVATE CAPTURE identity, expressed the only way the two-hue rule permits:
+    /// VALUE, not hue. 0 = the shipped Ramble orb, byte-identical. 1 = the same object
+    /// drawn deeper — pools slightly dimmer, shadows slightly deeper — so the private
+    /// orb reads as the Ramble orb turned inward rather than a different creature.
+    /// Motion, breath, and both hues are untouched: same species, quieter light.
+    var depth: Double = 0
+
+    /// The timeline's frame ceiling. Defaults to the capture beat's rate; the mini orb inside
+    /// the Capture button beside the system tab bar passes `Motion.orbBarFrameInterval`
+    /// instead, because at that size the mesh's weather is sub-pixel and only the breath reads.
+    var frameInterval: Double = Motion.orbFrameInterval
+
+    /// Suspended by the host. The capture orb never sets this — it exists for as long as the
+    /// beat does. The CHROME orb (the Capture button's) is mounted for the whole app lifetime,
+    /// so it stops whenever it is covered (a sheet, a cover) or the app is backgrounded: a
+    /// timeline nobody can see should not be running. Composes with `reduceMotion`, which
+    /// pauses unconditionally.
+    var paused: Bool = false
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// When this orb appeared — the clock every drift period is measured from, so the motion
     /// starts at a known phase rather than wherever the wall clock happens to be. Never reset
@@ -86,7 +105,7 @@ struct RambleOrb: View {
 
     var body: some View {
         TimelineView(
-            .animation(minimumInterval: Motion.orbFrameInterval, paused: reduceMotion)
+            .animation(minimumInterval: frameInterval, paused: reduceMotion || paused)
         ) { timeline in
             let elapsed = reduceMotion ? 0 : timeline.date.timeIntervalSince(startedAt)
             // Gather: 1 → 0 across `orbGatherSeconds` (held at the floor while listening).
@@ -141,7 +160,7 @@ struct RambleOrb: View {
         MeshGradient(
             width: 4, height: 4,
             points: Self.points(elapsed: elapsed, unsettled: unsettled, energy: energy),
-            colors: Self.colors(energy: energy),
+            colors: Self.colors(energy: energy, depth: depth),
             smoothsColors: true
         )
         // Drawn LARGER than the circle it is clipped to: a mesh's own corners are its flattest,
@@ -229,15 +248,16 @@ struct RambleOrb: View {
     /// two-hue rule permits. Deliberately small travel: the pools brighten by at most
     /// 0.14 of a mix and the shadows deepen by 0.05, so full voice reads as the same
     /// object more alive, never a different object.
-    static func colors(energy: Double) -> [Color] {
+    static func colors(energy: Double, depth: Double = 0) -> [Color] {
         let cobalt = Palette.accentStart
         let cyan = Palette.accentEnd
         let e = min(max(energy, 0), 1)
+        let d = min(max(depth, 0), 1)
         func shade(_ base: Color, _ towardBlack: Double) -> Color {
-            base.mix(with: .black, by: towardBlack, in: .perceptual)
+            base.mix(with: .black, by: min(0.92, towardBlack + 0.06 * d), in: .perceptual)
         }
         func light(_ base: Color, _ towardWhite: Double) -> Color {
-            base.mix(with: .white, by: towardWhite, in: .perceptual)
+            base.mix(with: .white, by: max(0, towardWhite - 0.10 * d), in: .perceptual)
         }
         // Pool centers gain heat; the deepest corners gain depth. Everything else holds.
         func pool(_ base: Color, _ towardWhite: Double) -> Color {

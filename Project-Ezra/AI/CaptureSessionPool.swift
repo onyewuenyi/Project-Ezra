@@ -4,8 +4,9 @@
 //
 //  Prewarmed, single-use model sessions for the capture parse. Sessions were built
 //  cold inside every triage call — and the rolling cadence chains a parse per
-//  ~1.2s of continuous input, each paying construction plus prefill of a ~2.5KB
-//  instruction block the anonymous `ModelWarmup` session never warmed.
+//  ~1.2s of continuous input, each paying construction plus prefill of a ~7.4KB
+//  instruction block (measured 2026-08-29; this header long said "~2.5KB", stale
+//  by 3×) the anonymous `ModelWarmup` session never warmed.
 //
 //  The shape is a one-deep pool, NOT a continuous session (deliberate:
 //  `LanguageModelSession` accrues transcript across turns, so re-sending the
@@ -82,4 +83,49 @@ final class CaptureSessionPool<Session> {
         hits = 0
         misses = 0
     }
+
+    #if DEBUG
+    /// `take`, with the two costs it normally hides made separately visible — the
+    /// FM-diagnosis seam's window into what a production parse actually waits for.
+    ///
+    /// The attribution is DIRECTIONAL and must stay that way in any report:
+    /// `takeMs` is what THIS invocation waited for (spare lookup, plus the cold
+    /// build on a miss); `prepareMs` is the NEXT invocation's warmth being paid
+    /// now — the cost `take`'s `defer` buries inside every production call. Summing
+    /// them into "current invocation latency" would be a lie in both directions.
+    ///
+    /// Behaviourally IDENTICAL to `take` by construction — same selection order,
+    /// same counter movement, same end state (spare consumed, next spare prepared
+    /// under the requested fingerprint) — and pinned so by
+    /// `CaptureSessionPoolTests`; the only difference is that the prepare runs
+    /// timed-inline instead of in a `defer`.
+    struct TakeReceipt {
+        let session: Session
+        let poolHit: Bool
+        let takeMs: Int
+        let prepareMs: Int
+    }
+
+    func takeTimed(context: TriageContext, fingerprint: Fingerprint) -> TakeReceipt {
+        let takeStarted = Date()
+        let session: Session
+        let poolHit: Bool
+        if let spare, spare.fingerprint == fingerprint {
+            self.spare = nil
+            hits += 1
+            session = spare.session
+            poolHit = true
+        } else {
+            misses += 1
+            session = build(context)
+            poolHit = false
+        }
+        let takeMs = Int(Date().timeIntervalSince(takeStarted) * 1000)
+        let prepareStarted = Date()
+        prepare(context: context, fingerprint: fingerprint)
+        let prepareMs = Int(Date().timeIntervalSince(prepareStarted) * 1000)
+        return TakeReceipt(
+            session: session, poolHit: poolHit, takeMs: takeMs, prepareMs: prepareMs)
+    }
+    #endif
 }

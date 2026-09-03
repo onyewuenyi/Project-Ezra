@@ -63,6 +63,27 @@ enum ModelDeadline {
     /// — not a bigger number here.
     static let captureSeconds: Double = 30
 
+    /// The capture budget when the local read is ALREADY IN HAND and escalation was a
+    /// verifier's doubt, not an absence: `underSegmented` / `unresolvedDetail` /
+    /// `lowCoverage` sent the words to the authority as a second opinion over a
+    /// read that exists and is plausibly right. A cloud that answers a median ramble
+    /// in about a second has nothing to offer at second nine; a cloud that stalls
+    /// (dead quota, captive Wi-Fi, a tunnel that hangs instead of failing) was
+    /// making a three-item capture wait the full big-dump budget behind "that was a
+    /// big one" — the deterministic read that finally revealed had been ready for
+    /// 30 seconds (seen on the simulator, 2026-09-02). `bigDump` and `emptyRead`
+    /// keep the full budget: there the local arm has nothing worth revealing, and
+    /// generation genuinely scales with what was dumped.
+    static let captureStandbySeconds: Double = 10
+
+    /// The budget for one capture, by why it left the device. Nil (no escalation —
+    /// an explicit-structure local read, or a direct cloud call) keeps the full
+    /// budget; the router's reason is the only input, so a diagnostic seam that
+    /// calls the cloud arm directly measures the same clock the composer waits on.
+    static func captureSeconds(for escalation: CaptureEscalationReason?) -> Double {
+        seconds(for: .capture(escalation: escalation))
+    }
+
     /// How long the paid capture arm gets to itself before the free one starts alongside
     /// it (`CaptureTriageRace.hedged`).
     ///
@@ -111,8 +132,7 @@ enum ModelDeadline {
     ///   should end in a cheaper answer rather than a longer wait, and the salvage path
     ///   re-reads on-device rather than surfacing a failure.
     static func advisorSeconds(rung: IntelligenceRung, presenceTime: Bool) -> Double {
-        guard rung == .cloud else { return cardSeconds }
-        return presenceTime ? advisorDeepPresenceSeconds : advisorDeepPrecomputeSeconds
+        seconds(for: .advisor(rung: rung, presenceTime: presenceTime))
     }
 
     /// Deep reasoning with nobody waiting. Long enough that a hard judgment finishes;
@@ -123,6 +143,42 @@ enum ModelDeadline {
     /// purpose — see `advisorSeconds`. A hit here is not a failure: it salvages down to an
     /// on-device read, which is a real judgment, just a cheaper one.
     static let advisorDeepPresenceSeconds: Double = 25
+
+    // MARK: - ONE deadline function (P-03)
+
+    /// Every deadline in the product, derived from the three facts that actually decide
+    /// one — **who is waiting, how much thought was budgeted, how much output is
+    /// coming** — plus one flag: is a deterministic answer already in hand.
+    ///
+    /// This replaced a table of seven constants and three selector functions that grew
+    /// by one entry per surface. The constants survive as the VALUES of the table's
+    /// cells (each one was measured; see its doc); this function is the table itself,
+    /// so a new scope inherits a predictable deadline instead of choosing a number.
+    ///
+    ///     answer in hand           → 10s   nothing on screen is lost on a hit
+    ///     deep · unattended        → 60s   correctness beats speed; nobody is waiting
+    ///     deep · watched/requested → 25s   a watched wait should end in a cheaper answer
+    ///     shallow · a token        → 10s   one word, nothing blocked
+    ///     shallow · a card         → 20s   absorbs a cold model load
+    ///     shallow · a dump         → 30s   generation scales with what was dumped
+    ///
+    /// Presence does NOT move the shallow rows — the local model is fast and its first
+    /// call is dominated by model load, not patience — which is why an on-device
+    /// Advisor read gets the same budget precomputed as watched (pinned by
+    /// `ReasoningBudgetTests`).
+    static func seconds(for wait: WaitContext) -> Double {
+        if wait.answerInHand { return captureStandbySeconds }
+        switch wait.budget {
+        case .deep:
+            return wait.presence == .unattended ? advisorDeepPrecomputeSeconds : advisorDeepPresenceSeconds
+        case .shallow, .none:
+            switch wait.output {
+            case .token: return backgroundSeconds
+            case .card: return cardSeconds
+            case .dump: return captureSeconds
+            }
+        }
+    }
 
     /// The deadline fired. Distinct from the operation's own errors so a caller can tell
     /// "the model refused" from "the model never answered" — different fixes.
@@ -154,5 +210,67 @@ enum ModelDeadline {
             group.cancelAll()
             return result
         }
+    }
+}
+
+// MARK: - The wait, as a value
+
+/// Who is waiting, how much thought was budgeted, how much output is coming. The three
+/// facts every deadline derives from (`ModelDeadline.seconds(for:)`), stated once per
+/// call site instead of a constant chosen per surface.
+struct WaitContext: Equatable, Sendable {
+
+    enum Presence: Equatable, Sendable {
+        /// The person is looking at the surface the answer lands on, but did not ask
+        /// for it — the ambient Advisor.
+        case watching
+        /// The person explicitly asked: tapped, spoke, sent.
+        case requested
+        /// Nobody is waiting: precompute, sweeps, re-classification.
+        case unattended
+    }
+
+    enum Output: Equatable, Sendable {
+        /// A word or a label — a classification, a duplicate verdict.
+        case token
+        /// One bounded answer — a reading, a reply, a kickoff line.
+        case card
+        /// A structured set whose size scales with the input — a capture.
+        case dump
+    }
+
+    var presence: Presence
+    var budget: ReasoningBudget
+    var output: Output
+    /// A deterministic answer already exists and this call is a second opinion over
+    /// it. A hit costs nothing the person would miss.
+    var answerInHand = false
+
+    /// An ambient on-device card nobody asked for: the reading, the kickoff line.
+    static let card = WaitContext(presence: .watching, budget: .shallow, output: .card)
+    /// A card the person requested: a chat turn.
+    static let reply = WaitContext(presence: .requested, budget: .shallow, output: .card)
+    /// Background inference producing a word: re-classification, the duplicate sweep.
+    static let background = WaitContext(presence: .unattended, budget: .shallow, output: .token)
+
+    /// A capture, by why the words left the device. `underSegmented` / `unresolvedDetail`
+    /// / `lowCoverage` are a second opinion over a read already in hand; `bigDump` /
+    /// `emptyRead` / nil have nothing local worth revealing and generation scales with
+    /// the dump.
+    static func capture(escalation: CaptureEscalationReason?) -> WaitContext {
+        let inHand: Bool
+        switch escalation {
+        case .underSegmented, .unresolvedDetail, .lowCoverage, .conversation: inHand = true
+        case .bigDump, .emptyRead, nil: inHand = false
+        }
+        return WaitContext(presence: .requested, budget: .shallow, output: .dump, answerInHand: inHand)
+    }
+
+    /// An Advisor judgment: the rung says how much thought, presence says who waits.
+    static func advisor(rung: IntelligenceRung, presenceTime: Bool) -> WaitContext {
+        WaitContext(
+            presence: presenceTime ? .watching : .unattended,
+            budget: rung == .cloud ? .deep : .shallow,
+            output: .card)
     }
 }

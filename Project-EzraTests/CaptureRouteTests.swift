@@ -64,14 +64,29 @@ struct CaptureRouteTests {
         // transcript — the founding failure. The verifier catches it the deterministic
         // way: one draft against multiple time signals is the least certain outcome a
         // splitter can produce, so it escalates to Gemini rather than revealing.
+        //
+        // Since 2026-09-02 the splitter reads this one itself: every outcome ends in a
+        // time expression and the next starts with a verb, and that boundary is now
+        // deterministic. The founding INVARIANT is unchanged and pinned twice below —
+        // this capture is never revealed as one task titled with its own transcript:
+        // either the read has all four and stays local (today), or it falls short and
+        // the verifier sends it to the authority (the one-draft read, constructed).
         let runOn =
             "Cook dinner at 3PM make odd duck reservation tonight take my wife to "
             + "dinner next week book reservation at tiki tomorrow at 1pm"
         let read = IntentResolver.resolve(
             (try? await HeuristicEngine().triage(rawText: runOn)) ?? [])
+        #expect(read.count == 4, "the four errands: \(read.map(\.title))")
         let decision = CaptureRoute.route(for: runOn, localRead: read)
-        #expect(decision.route == .cloud)
-        #expect(decision.escalation != nil)
+        #expect(decision.route == .local)
+        #expect(decision.escalation == nil)
+
+        // The failure this test was written against, replayed: ONE draft out of this
+        // dictation must still escalate — the verifier judges the read it is given.
+        let oneDraft = IntentResolver.resolve([HeuristicEngine.intent(from: runOn)])
+        let shortRead = CaptureRoute.route(for: runOn, localRead: Array(oneDraft.prefix(1)))
+        #expect(shortRead.route == .cloud)
+        #expect(shortRead.escalation == .underSegmented)
     }
 
     @Test("Raw text leaves the device only on evidence, and never for typed structure")

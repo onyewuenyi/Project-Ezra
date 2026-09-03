@@ -140,7 +140,7 @@ enum DuplicateSweep {
             // The counter is here so that stays a measured fact rather than an intention.
             IntelligenceLedger.shared.record(.onDevice, for: .sweeps)
             let result = await ModelRun.perform(
-                .duplicateSweep, deadline: ModelDeadline.backgroundSeconds
+                .duplicateSweep, deadline: ModelDeadline.seconds(for: .background)
             ) {
                 let session = LanguageModelSession(instructions: Self.judgeInstructions)
                 return try await session.respond(

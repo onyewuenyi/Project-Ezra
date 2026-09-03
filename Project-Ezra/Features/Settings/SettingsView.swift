@@ -28,7 +28,6 @@ struct SettingsView: View {
     /// confirmed task. Write-only as a learning signal; read here only to count.
     @FetchRequest(sortDescriptors: []) private var correctionsResults: FetchedResults<Correction>
 
-    @Environment(BriefingReminder.self) private var briefing
 
     @State private var photoItem: PhotosPickerItem?
     @State private var pendingReset: StoreResetRecord?
@@ -51,7 +50,6 @@ struct SettingsView: View {
                     // user did not choose and needs to know about.
                     if let reset = pendingReset { resetCard(reset) }
                     profileCard
-                    briefingCard
                     dataBoundaryCard
                     dataCard
                     diagnosticsCard
@@ -77,7 +75,6 @@ struct SettingsView: View {
                 // Built once per open, so what you share is what you have. Small enough
                 // (a personal store, no photo blobs) that this is imperceptible.
                 exportURL = try? DataExport.writeTemporaryFile(in: context)
-                await briefing.refreshAuthorizationState()
             }
         }
     }
@@ -187,8 +184,6 @@ struct SettingsView: View {
                 // developer's line, and this is where developer lines live.
                 Text(brain.status.description)
                     .metadataStyle()
-                Text(planDiagnosticsLine)
-                    .metadataStyle()
                 // Where intelligent moments actually resolved, per workload, plus the
                 // one number the cloud rung's economics turn on: paid calls today.
                 // Read this before arguing about model spend.
@@ -208,6 +203,17 @@ struct SettingsView: View {
                 // provider that never fails.
                 Text(CloudHealth.shared.statusLine())
                     .metadataStyle()
+                // The Ramble performance contract, live from this device's committed
+                // captures: per-tier p50/p95 (capture-end → reveal, dwell counted)
+                // against the targets, plus the local-share band. The verdicts here are
+                // the phone's own receipts, never the simulator's.
+                ForEach(
+                    CapturePerformanceReport.measure(CaptureProvenanceStore.shared.all)
+                        .footerLines(), id: \.self
+                ) { line in
+                    Text(line)
+                        .metadataStyle()
+                }
                 // THE MASTER METRIC: four dimensions that must fall and one that must
                 // rise. Read this before believing any single-stage improvement — the unit
                 // of optimization is effort reduction across the whole loop, and a feature
@@ -247,7 +253,13 @@ struct SettingsView: View {
     /// from today's cached briefing — the set the Brief actually surfaced — so the
     /// orientation dimension measures what the user had to find for themselves.
     private var requiredAttention: RequiredAttention {
-        let planned = Set(TodayPlanStore().cache(for: Date())?.actions.map(\.taskID) ?? [])
+        // Orientation is re-owned by the day answer (F-11): the set is what the floor
+        // surfaced TODAY (`lastSurfacedAt`). Nil — never an empty set — when nothing was
+        // surfaced today, so the row reads `—` rather than a perfect score.
+        let surfacedToday = Set(
+            tasks.filter { task in task.lastSurfacedAt.map { Calendar.current.isDateInToday($0) } ?? false }
+                .compactMap(\.uuid))
+        let planned: Set<UUID>? = surfacedToday.isEmpty ? nil : surfacedToday
         return RequiredAttention.measure(
             tasks: tasks, entries: Array(changesResults),
             corrections: Array(correctionsResults), plannedTaskIDs: planned,
@@ -265,23 +277,6 @@ struct SettingsView: View {
         return parts.joined(separator: " · ")
     }
 
-    #if DEBUG
-    private var planDiagnosticsLine: String {
-        let m = brain.planMetrics
-        var parts = [
-            "plan: on-device \(m.onDeviceCount) · cloud \(m.cloudCount) · rules \(m.deterministicCount)"
-        ]
-        if m.lastLatencyMs >= 0 { parts.append("last \(m.lastLatencyMs)ms") }
-        if m.lastPromptTokens >= 0 || m.lastOutputTokens >= 0 {
-            parts.append("tok \(max(m.lastPromptTokens, 0))/\(max(m.lastOutputTokens, 0))")
-        }
-        if let tier = m.lastTier { parts.append("via \(tier)") }
-        if m.lastTurn > 0 { parts.append("turn \(m.lastTurn) · tools \(m.lastToolCalls)") }
-        if let err = m.lastError { parts.append("err \(err)") }
-        if let avail = m.lastAvailability { parts.append("ai \(avail)") }
-        return parts.joined(separator: " · ")
-    }
-    #endif
 
     private func percent(_ value: Double?) -> String {
         guard let value else { return "—" }
@@ -352,77 +347,6 @@ struct SettingsView: View {
                 .frame(minHeight: LayoutMetrics.hitTarget, alignment: .leading)
             }
         }
-    }
-
-    // MARK: - Briefing nudge
-
-    /// The ONE notification this app sends. See `BriefingReminder` for why this is a
-    /// carve-out from the "no notification-driven re-engagement" guardrail, and what
-    /// keeps it honest.
-    private var briefingCard: some View {
-        @Bindable var briefing = briefing
-        return settingsCard(title: "Daily briefing") {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Toggle(isOn: $briefing.isEnabled) {
-                    Text("Remind me")
-                        .font(.supporting)
-                        .foregroundStyle(Palette.primaryText)
-                }
-                .tint(Palette.accentFlat)
-                .onChange(of: briefing.isEnabled) { _, enabled in
-                    Task {
-                        if enabled {
-                            // Permission is asked for here and nowhere else — never at
-                            // launch, where it would be a demand before any value.
-                            guard await briefing.requestAuthorization() else {
-                                briefing.isEnabled = false
-                                return
-                            }
-                            await briefing.reschedule(
-                                briefingPlayedToday: TodayPlanStore.sequencePlayedToday())
-                        } else {
-                            await briefing.cancelAll()
-                        }
-                    }
-                }
-
-                if briefing.isEnabled && !briefing.isDenied {
-                    DatePicker(
-                        "Time", selection: briefingTime, displayedComponents: .hourAndMinute
-                    )
-                    .font(.supporting)
-                    .foregroundStyle(Palette.primaryText)
-                }
-
-                if briefing.isDenied {
-                    Text("Notifications are turned off for Ezra in iOS Settings.")
-                        .metadataStyle()
-                }
-
-                Text("One a day, at a time you pick. Nothing if you've already looked.")
-                    .metadataStyle()
-            }
-        }
-    }
-
-    /// Bridges the reminder's hour/minute to a `DatePicker`, rescheduling on change.
-    private var briefingTime: Binding<Date> {
-        Binding(
-            get: {
-                Calendar.current.date(
-                    bySettingHour: briefing.hour, minute: briefing.minute, second: 0,
-                    of: Date()) ?? Date()
-            },
-            set: { newValue in
-                let parts = Calendar.current.dateComponents([.hour, .minute], from: newValue)
-                briefing.hour = parts.hour ?? briefing.hour
-                briefing.minute = parts.minute ?? briefing.minute
-                Task {
-                    await briefing.reschedule(
-                        briefingPlayedToday: TodayPlanStore.sequencePlayedToday())
-                }
-            }
-        )
     }
 
     // MARK: - Data (export, and the two clears)
@@ -533,7 +457,7 @@ struct SettingsView: View {
     /// would read. One reporting path, two readers.
     private func performClear(_ scope: DataReset.Scope) {
         let record = DataReset.clear(
-            scope, in: context, metrics: brain.metrics, planMetrics: brain.planMetrics,
+            scope, in: context, metrics: brain.metrics,
             provenance: .shared)
         pendingScope = nil
         pendingReset = record
@@ -541,12 +465,6 @@ struct SettingsView: View {
         // The offered export was built at open, from data that no longer exists — sharing
         // it after a clear would hand back the very thing the user just deleted.
         exportURL = try? DataExport.writeTemporaryFile(in: context)
-        if scope == .everything {
-            // The one preference with a side effect outside the store: a scheduled nudge
-            // for a briefing that no longer has anything to brief about.
-            briefing.isEnabled = false
-            Task { await briefing.cancelAll() }
-        }
     }
 
     // MARK: - Shared card chrome
@@ -577,6 +495,5 @@ struct SettingsView: View {
 #Preview {
     SettingsView()
         .environment(AppBrain())
-        .environment(BriefingReminder())
         .environment(\.managedObjectContext, PersistenceStack.scratch)
 }

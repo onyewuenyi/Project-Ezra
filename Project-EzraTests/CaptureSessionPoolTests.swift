@@ -88,4 +88,63 @@ struct CaptureSessionPoolTests {
         pool.prepare(context: TriageContext(), fingerprint: print)
         #expect(builds == 1)
     }
+
+    // MARK: - takeTimed ≡ take (the FM-diagnosis seam's window must not change the pool)
+
+    @Test("takeTimed's hit path is behaviourally identical to take's")
+    func takeTimedHitMatchesTake() {
+        var builds = 0
+        let pool = CaptureSessionPool<DummySession> { _ in
+            builds += 1
+            return DummySession()
+        }
+        let print = fingerprint("instructions v1")
+        pool.prepare(context: TriageContext(), fingerprint: print)
+        #expect(builds == 1)
+
+        let receipt = pool.takeTimed(context: TriageContext(), fingerprint: print)
+        #expect(receipt.poolHit)
+        #expect(pool.hits == 1)
+        #expect(pool.misses == 0)
+        // Spare consumed, replacement built — exactly one build, same as take.
+        #expect(builds == 2)
+        // And the re-prepare landed under the right fingerprint: the next take hits.
+        _ = pool.take(context: TriageContext(), fingerprint: print)
+        #expect(pool.hits == 2)
+    }
+
+    @Test("takeTimed's miss path builds cold + prepare, exactly like take")
+    func takeTimedMissMatchesTake() {
+        var builds = 0
+        let pool = CaptureSessionPool<DummySession> { _ in
+            builds += 1
+            return DummySession()
+        }
+        let receipt = pool.takeTimed(
+            context: TriageContext(), fingerprint: fingerprint("instructions v1"))
+        #expect(!receipt.poolHit)
+        #expect(pool.misses == 1)
+        #expect(pool.hits == 0)
+        // Cold build + the prepared next spare = two builds, same as take on empty.
+        #expect(builds == 2)
+    }
+
+    @Test("Interleaving take and takeTimed never serves a stale fingerprint")
+    func interleavingStaysFingerprintSafe() {
+        var builds = 0
+        let pool = CaptureSessionPool<DummySession> { _ in
+            builds += 1
+            return DummySession()
+        }
+        let v1 = fingerprint("instructions v1")
+        let v2 = fingerprint("instructions v2")
+        _ = pool.take(context: TriageContext(), fingerprint: v1)  // miss, prepares v1
+        let receipt = pool.takeTimed(context: TriageContext(), fingerprint: v2)
+        // The v1 spare must not be served for a v2 request.
+        #expect(!receipt.poolHit)
+        #expect(pool.misses == 2)
+        // And takeTimed's re-prepare is v2, so a v2 take now hits.
+        _ = pool.take(context: TriageContext(), fingerprint: v2)
+        #expect(pool.hits == 1)
+    }
 }

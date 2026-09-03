@@ -23,17 +23,6 @@ struct HouseholdTests {
 
     // MARK: - Singletons
 
-    @Test("Household.current creates one and is idempotent")
-    func householdSingleton() throws {
-        let context = try makeContext()
-        let first = Household.current(in: context)
-        first.name = "The Onyewuenyis"
-        let second = Household.current(in: context)
-
-        #expect(second.name == "The Onyewuenyis")
-        #expect(try context.fetch(NSFetchRequest<Household>(entityName: "Household")).count == 1)
-    }
-
     @Test("UserProfile.current creates one and is idempotent")
     func profileSingleton() throws {
         let context = try makeContext()
@@ -45,15 +34,17 @@ struct HouseholdTests {
         #expect(try context.fetch(NSFetchRequest<UserProfile>(entityName: "UserProfile")).count == 1)
     }
 
-    // MARK: - Greeting name
+    @Test("Household.current creates one and is idempotent")
+    func householdSingleton() throws {
+        let context = try makeContext()
+        let first = Household.current(in: context)
+        first.name = "The Onyewuenyis"
+        let second = Household.current(in: context)
 
-    @Test("firstName takes the leading token of the display name")
-    func firstNameToken() {
-        let ctx = TestStore.makeContext()
-        #expect(UserProfile(displayName: "Charles Onyewuenyi", in: ctx).firstName == "Charles")
-        #expect(UserProfile(displayName: "Maya", in: ctx).firstName == "Maya")
-        #expect(UserProfile(displayName: "  Ezra  Onyewuenyi ", in: ctx).firstName == "Ezra")
+        #expect(second.name == "The Onyewuenyis")
+        #expect(try context.fetch(NSFetchRequest<Household>(entityName: "Household")).count == 1)
     }
+
 
     @Test("firstName is nil when there's no name yet")
     func firstNameAbsent() {
@@ -62,27 +53,7 @@ struct HouseholdTests {
         #expect(UserProfile(displayName: "   ", in: ctx).firstName == nil)
     }
 
-    @Test("Greeting personalizes only when a name exists")
-    func greetingPersonalization() {
-        let morning = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 17, hour: 9))!
-        #expect(Greeting.make(firstName: "Charles", date: morning).primary == "Good morning, Charles")
-        #expect(Greeting.make(firstName: nil, date: morning).primary == "Good morning")
-        #expect(Greeting.make(firstName: "  ", date: morning).primary == "Good morning")
-        // The context lines are the reserved seam — empty until the household fills them.
-        #expect(Greeting.make(firstName: "Charles", date: morning).lines.isEmpty)
-    }
 
-    @Test("Greeting follows the time of day")
-    func greetingTimeOfDay() {
-        func at(_ hour: Int) -> String {
-            let date = Calendar.current.date(
-                from: DateComponents(year: 2026, month: 7, day: 17, hour: hour))!
-            return Greeting.make(firstName: nil, date: date).primary
-        }
-        #expect(at(9) == "Good morning")
-        #expect(at(14) == "Good afternoon")
-        #expect(at(21) == "Good evening")
-    }
 
     // MARK: - Soft delete
 

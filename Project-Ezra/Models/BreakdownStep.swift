@@ -13,7 +13,7 @@
 
 import Foundation
 
-struct BreakdownStep: Sendable, Equatable, Hashable {
+struct BreakdownStep: Sendable, Equatable, Hashable, Codable {
     let title: String
     let effortMinutes: Int
 }

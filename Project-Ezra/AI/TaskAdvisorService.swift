@@ -46,10 +46,25 @@ struct TaskAdvisorService {
             .taskAdvisor,
             deadline: ModelDeadline.advisorSeconds(rung: rung, presenceTime: presenceTime)
         ) {
-            let session = try Self.session(for: rung)
-            return try await session.respond(
-                to: Self.prompt(for: facts), generating: TaskAdvisorReading.self
-            ).content
+            switch rung {
+            case .cloud:
+                // Per call, no pool: a warm spare buys a hot LOCAL prefix, and there is
+                // no local prefix on a network call. Throws surface through `ModelRun`.
+                let session = try CloudModel.provider.session(
+                    instructions: Self.instructions, config: CapabilityProfiles.taskAdvisor)
+                return try await session.respond(
+                    to: Self.prompt(for: facts), generating: TaskAdvisorReading.self
+                ).content
+            case .onDevice, .facts, .memory:
+                // The ZERO-TURN inquiry (G2): the reading is generated over the task's own
+                // scope in `.reading` mode — the same session home the chat uses, keyed
+                // by (task, fingerprint), adopting the spare `prewarm()` left. `.facts` /
+                // `.memory` never reach here — they are answered before a judge is called
+                // — so treating them as on-device is a total switch, not a fallback.
+                let scope = TaskInquiryScope(taskID: facts.id ?? UUID(), facts: facts, mode: .reading)
+                return try await InquiryService.shared.respond(
+                    scope, prompt: Self.prompt(for: facts), generating: TaskAdvisorReading.self)
+            }
         }
         // **Salvage down a rung rather than surfacing a failure.** A deep read that ran out
         // of time has not shown there is nothing to say — it has shown THIS rung could not
@@ -76,43 +91,11 @@ struct TaskAdvisorService {
         }
     }
 
-    /// The session for one reading.
-    ///
-    /// On device: the warm spare when one is waiting, a cold build otherwise, and either
-    /// way the next spare starts warming so a pager swipe lands on a hot prefix. On the
-    /// cloud rung: constructed per call and no pool — a prewarmed spare buys a hot LOCAL
-    /// prefix, and there is no local prefix on a network call. It can throw, and that
-    /// surfaces through `ModelRun` as an ordinary failure, which is what the Advisor's
-    /// `.failed`/retry path already handles.
-    private static func session(for rung: IntelligenceRung) throws -> LanguageModelSession {
-        switch rung {
-        case .cloud:
-            return try CloudModel.provider.session(
-                instructions: Self.instructions, config: CapabilityProfiles.taskAdvisor)
-        case .onDevice, .facts, .memory:
-            // `.facts`/`.memory` never reach here — they are answered before a judge is
-            // ever called — so treating them as on-device is a total switch rather than a
-            // silent fallback with meaning attached to it.
-            return Self.sessionPool.take(instructions: Self.instructions)
-        }
-    }
-
-    /// Prewarmed sessions. The builder constructs the real profile — instructions and
-    /// config both — so the prefix being warmed is the prefix that will be sent, which is
-    /// the whole difference between this and the anonymous warm-up it replaces.
-    static let sessionPool = TaskAdvisorSessionPool<LanguageModelSession> { instructions in
-        let session = CapabilityProfiles.session(
-            instructions: instructions, config: CapabilityProfiles.taskAdvisor)
-        session.prewarm()
-        return session
-    }
-
-    /// Warm the Advisor's prefix while a detail page settles. A no-op off-device and
-    /// under tests; safe to call on every page activation because `prepare` skips when a
-    /// matching spare is already waiting.
+    /// Warm the Advisor's prefix while a detail page settles — a spare for the static
+    /// instructions, adopted by the first task judged. A no-op off-device and under tests;
+    /// safe to call on every page activation because a waiting spare is not rebuilt.
     static func prewarm() {
-        guard AppBrain.onDeviceModelAvailable() else { return }
-        sessionPool.prepare(instructions: instructions)
+        InquiryService.shared.prewarmSpare(instructions: instructions, config: CapabilityProfiles.taskAdvisor)
     }
 
     /// The related-work package, computed at generation time (never in `make` — the

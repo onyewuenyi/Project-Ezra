@@ -141,6 +141,31 @@ struct BlockedIndicator: View {
     }
 }
 
+/// The chain marker: how many tasks are linked into this row's dependency chain, in the
+/// same row slot the blocked hourglass and the step count use.
+///
+/// **Deliberately not a button.** It replaced a 44pt expander that toggled the chain open
+/// in the list, which gave a stack row two tap targets and put a control exactly where
+/// `TaskRow` draws the due label. The pile's depth is already drawn — the peek slivers
+/// behind the card — so this states the number and nothing more; opening the row and
+/// paging is how you reach the members (`TaskDetailPeers.flatten` unrolls a chain
+/// root-first). Silent to VoiceOver: the row announces the chain in words.
+struct ChainDepthIndicator: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: Spacing.xxs) {
+            Image(systemName: "square.stack.3d.up.fill")
+                .font(.glyphNano())
+            Text("\(count)")
+                .font(.chipLabel)
+                .monospacedDigit()
+        }
+        .foregroundStyle(Palette.mutedText)
+        .accessibilityHidden(true)
+    }
+}
+
 /// The container marker: "1/3" beside a broken-down task, in the same row slot the
 /// blocked hourglass uses.
 ///

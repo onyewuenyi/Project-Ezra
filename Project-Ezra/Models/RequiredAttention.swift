@@ -84,11 +84,18 @@ struct RequiredAttention: Equatable {
     /// `plannedTaskIDs` is the set the Brief surfaced (today's cached plan). Passing it in
     /// rather than reading the cache here keeps this a pure function over values, which is
     /// what makes every row testable without standing up a day.
+    ///
+    /// **Nil means nothing surfaced anything today** (the day answer — `HouseholdChatFloor`'s
+    /// `.today` shape — stamps `lastSurfacedAt` on what it names; the Brief used to),
+    /// which leaves orientation unread rather than perfect. An EMPTY set says "the answer ran
+    /// and surfaced nothing", so every worked task counts as unsurfaced and the dimension
+    /// reads 100% — a true and damning result. Nil says "nothing was measured", and the
+    /// scorecard's own rule is that those two must never print the same.
     static func measure(
         tasks: [TaskItem],
         entries: [ChangeLogEntry],
         corrections: [Correction],
-        plannedTaskIDs: Set<UUID>,
+        plannedTaskIDs: Set<UUID>?,
         advisor: AdvisorMetrics,
         now: Date = Date()
     ) -> RequiredAttention {
@@ -102,17 +109,21 @@ struct RequiredAttention: Equatable {
         // "Worked" is deliberately lifecycle movement rather than opens: opening a task to
         // look at it is not work, and counting it would reward a Brief that made people
         // browse.
-        let calendar = Calendar.current
-        let workedToday = tasks.filter { task in
-            guard let touched = task.lastHumanTouchAt else { return false }
-            return calendar.isDate(touched, inSameDayAs: now) && task.status != .todo
+        //
+        // No Brief at all leaves this at its zero-denominator default, which reads `—`.
+        if let plannedTaskIDs {
+            let calendar = Calendar.current
+            let workedToday = tasks.filter { task in
+                guard let touched = task.lastHumanTouchAt else { return false }
+                return calendar.isDate(touched, inSameDayAs: now) && task.status != .todo
+            }
+            let unsurfaced = workedToday.filter { task in
+                guard let id = task.uuid else { return false }
+                return !plannedTaskIDs.contains(id)
+            }
+            scorecard.orientation = Reading(
+                numerator: unsurfaced.count, denominator: workedToday.count)
         }
-        let unsurfaced = workedToday.filter { task in
-            guard let id = task.uuid else { return false }
-            return !plannedTaskIDs.contains(id)
-        }
-        scorecard.orientation = Reading(
-            numerator: unsurfaced.count, denominator: workedToday.count)
 
         // ── Execution: interventions per advised task ──
         let advisedTaskCount = Set(advisor.actedEvents.map(\.taskID)).count

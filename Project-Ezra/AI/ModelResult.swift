@@ -42,6 +42,17 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// Start — the execution system's activation-energy remover. Silence on any
     /// non-success; the button behaves identically without it.
     case kickoff
+    /// Private Capture's single-thought FM read — device-only by construction (the
+    /// mode never touches `CloudModel`). Recorded per capture: perceived
+    /// capture-end→reveal latency and whether the speculative run was used.
+    case privateCapture
+    /// The Advisor chat — one reply per question the person asks inside a task
+    /// (`InquiryService`, task scope). On-device only; recorded per turn, salvage
+    /// counted apart from a clean success so the deadline is tuned on evidence.
+    case advisorChat
+    /// The household chat — the Ask tab's model arm (`InquiryService`, household scope). Floor
+    /// answers never reach here: only questions the model actually took.
+    case householdChat
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -52,6 +63,9 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .householdNarrative: return "narrative"
         case .duplicateSweep: return "dupSweep"
         case .kickoff: return "kickoff"
+        case .privateCapture: return "privCapture"
+        case .advisorChat: return "chat"
+        case .householdChat: return "askChat"
         }
     }
 }

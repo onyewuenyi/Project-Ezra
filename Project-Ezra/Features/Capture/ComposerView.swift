@@ -5,8 +5,12 @@
 //  RAMBLE — the core loop, and the product's wow moment. Opening capture is opening a
 //  listening intelligence, not filling a form:
 //
-//      LISTENING → (silence) → UNDERSTANDING → REVEAL/CONFIRM → CREATE
+//      LISTENING → (silence) → UNDERSTANDING → REVEAL/CONFIRM → CREATE → (dismiss)
 //                ↘ CAPTURE — the typed escape hatch (Type instead / no mic) → (submit) ↗
+//
+//  CREATE dismisses immediately. A ✓ "N tasks added" receipt phase used to sit between
+//  the commit and the dismiss for 0.9s; it was removed 2026-08-30 because it read as an
+//  extra screen. Confirmation is the success haptic and the tasks appearing in the list.
 //
 //  **The governing invariant for the voice surface:** the orb never asks the user to
 //  understand the system; it only reflects that the system is present and receiving
@@ -121,9 +125,15 @@ struct ComposerView: View {
     /// offset from this, so the composition arrives as one thing with a rhythm rather
     /// than appearing all at once or animating per-card forever after.
     @State private var revealedAt: Date?
-    /// When the orb took the screen. Backs `Motion.orbMinimumDwellSeconds` — the floor
-    /// that stops a fast parse from flashing the hero morph. Nil off the model routes.
+    /// When the orb took the screen. Backs the dwell floor that stops a fast parse
+    /// from flashing the hero morph. Nil off the model routes.
     @State private var understandingSince: Date?
+    /// Voice only: how long the user's last word had been hanging when the capture
+    /// finished — ≈5000ms when the silence window fired, less on an orb/Done tap.
+    /// Captured in `finishListening` (the one place the deadline is still alive) and
+    /// stamped onto the receipt at reveal. The contract's clock deliberately EXCLUDES
+    /// this: it is the UX parameter the silence window is tuned on, not a pipeline cost.
+    @State private var pendingSinceLastWordMs: Int?
 
     @State private var text = ""
     /// The card set and the reveal boundary that protects it. All AI-originated writes go
@@ -164,6 +174,12 @@ struct ComposerView: View {
     /// The capture this session restored from, if any — so reopening resumes rather
     /// than starting a second parked row for the same thought.
     private let resuming: Capture?
+    /// The intent path (F-01): the words arrived from Siri or the Action Button, so the
+    /// composer submits them on arrival and the person lands on the confirm card.
+    private let autoSubmit: Bool
+    /// The privacy posture (F-03) — a control beside the one door, persisted.
+    @AppStorage(CapturePosture.storageKey) private var postureRaw = CapturePosture.open.rawValue
+    private var posture: CapturePosture { CapturePosture(rawValue: postureRaw) ?? .open }
     @State private var showDiscardConfirm = false
     /// Set when `brain.commit`'s own save reported a dropped write. The created
     /// `TaskItem`s stay pending in the context either way (`saveChanges` never
@@ -216,8 +232,9 @@ struct ComposerView: View {
     /// fault, not as "there is more below this".
     @State private var transcriptLineHeight: CGFloat = 0
 
-    init(resuming: Capture? = nil) {
+    init(resuming: Capture? = nil, autoSubmit: Bool = false) {
         self.resuming = resuming
+        self.autoSubmit = autoSubmit
         _phase = State(initialValue: Self.initialPhase(resuming: resuming))
     }
 
@@ -250,7 +267,6 @@ struct ComposerView: View {
                 // swap must be a parameter change, never an identity change.
                 case .listening, .understanding: orbSurface
                 case .confirm: confirmSurface
-                case .created(let count): createdSurface(count)
                 }
             }
             .padding(Spacing.lg)
@@ -308,8 +324,6 @@ struct ComposerView: View {
                         // right there, editable — so there is nothing to go back to.
                         // Leaving parks the capture; nothing is lost.
                         Button("Close") { dismiss() }
-                    case .created:
-                        EmptyView()
                     }
                 }
                 ToolbarItem(placement: .destructiveAction) {
@@ -336,20 +350,22 @@ struct ComposerView: View {
                     // entry is the orb.
                     focused = true
                 }
-                // Verification seam: a resumed capture from `-OpenCapture` submits itself
-                // so the understanding/reveal phases are screenshot-reachable headlessly
-                // (synthetic taps are blocked on this host). `-NoSubmit` stays on the
-                // canvas for the capture-phase shot. Never fires in normal runs.
+                // Two callers may submit on arrival: the `-OpenCapture` seam (DEBUG, and
+                // only when that argument is actually present — a resumed capture from
+                // the Tasks row must land on the canvas, not re-parse itself) and the
+                // intent path (F-01), where the words came from Siri or the Action Button
+                // and the person expects the confirm card, not a canvas.
+                var submitsOnArrival = autoSubmit
                 #if DEBUG
-                if resuming != nil, !text.isEmpty,
-                    !ProcessInfo.processInfo.arguments.contains("-NoSubmit")
-                {
+                let args = ProcessInfo.processInfo.arguments
+                if args.contains("-OpenCapture"), !args.contains("-NoSubmit") { submitsOnArrival = true }
+                #endif
+                if submitsOnArrival, resuming != nil, !text.isEmpty {
                     Task {
                         try? await Task.sleep(for: .milliseconds(250))
                         submit()
                     }
                 }
-                #endif
             }
             // The orb's reassurance line — long work must read as calm, never as stuck.
             .onChange(of: phase) { _, newPhase in
@@ -517,7 +533,6 @@ struct ComposerView: View {
         case capture
         case understanding
         case confirm
-        case created(Int)
     }
 
     /// What finishing the listening tenure does with what it heard. Pure, so the finish
@@ -539,8 +554,6 @@ struct ComposerView: View {
         trimmed.isEmpty ? .toCanvas : .submit
     }
 
-    /// How long the ✓ receipt holds before the sheet closes.
-    private static let createdReceiptSeconds: TimeInterval = 0.9
     /// When "still working" reassurance joins the orb, so a long ramble reads as calm
     /// rather than stuck. Deliberately not a progress affordance.
     static let reassuranceAfterSeconds: TimeInterval = 8
@@ -569,6 +582,10 @@ struct ComposerView: View {
         focused = false
         speech.stop()
         submittedAt = Date()
+        // A typed submit is not a voice one, however the words first arrived: without
+        // this, a voice capture followed by a typed Re-read would stamp the earlier
+        // run's silence-window measurement onto the typed receipt.
+        if !fromVoice { pendingSinceLastWordMs = nil }
 
         let localStarted = Date()
         let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
@@ -579,7 +596,13 @@ struct ComposerView: View {
         // a big dump, one draft against many boundary signals, an unresolved spoken
         // detail, dropped content. Most captures reveal this read directly: instant,
         // private, free. The check itself is microseconds of string work.
-        let decision = CaptureRoute.route(for: captured, localRead: local)
+        // The decision is a VALUE (`CaptureFlow.plan`, test-pinned): the posture outranks
+        // the router, one thought on an on-device posture runs the private engine, and
+        // otherwise the device-first router decides, voice-aware.
+        let plan = CaptureFlow.plan(
+            text: captured, localRead: local, fromVoice: fromVoice, posture: posture,
+            privateModelAvailable: PrivateCaptureEngine.modelAvailable())
+        let decision = (route: plan.route, escalation: plan.escalation)
         let route = decision.route
         structureSource = route.metricName
 
@@ -603,6 +626,38 @@ struct ComposerView: View {
         // version of this and double-counted every model parse.
         switch route {
         case .local:
+            // On-device posture + one thought + a model present: the single-thought
+            // envelope the local model was measured to win (Private Capture's engine),
+            // behind the same orb, landing on the same confirm card. Several things, or
+            // no model, fall to the deterministic read exactly as before.
+            if plan.arm == .privateEngine {
+                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
+                understandingSince = .now
+                Motion.withMotion(Motion.heroSettle) { phase = .understanding }
+                parkIfUnfinished(force: true)
+                parse.parseTask?.cancel()
+                parse.parseTask = Task {
+                    let learned = sessionRules()
+                    let outcome = await PrivateCaptureEngine().finish(text: captured, learned: learned)
+                    guard !Task.isCancelled else { return }
+                    var run = CaptureRunTelemetry.local(
+                        segmentation: Segmentation.structure(of: captured).label,
+                        cloudAvailable: CloudModel.isReachable)
+                    run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
+                    run.rung = IntelligenceRung.onDevice.rawValue
+                    lastRun = run
+                    await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
+                    guard !Task.isCancelled else { return }
+                    parse.parseTask = nil
+                    if interpretation.propose([outcome.draft]) {
+                        reveal()
+                    } else {
+                        ModelMetrics.shared.recordRefusedProposal()
+                    }
+                    parkIfUnfinished(force: true)
+                }
+                return
+            }
             IntelligenceLedger.shared.record(route.rung, for: .ramble)
             // The deterministic arm is measured too. It is the baseline the authority has
             // to beat, and a baseline with no number can't be one. Measured p50: 3ms.
@@ -627,7 +682,10 @@ struct ComposerView: View {
                 parkIfUnfinished(force: true)
                 parse.parseTask?.cancel()
                 parse.parseTask = Task {
-                    await holdOrbToMinimumDwell()
+                    // The LOCAL floor: the read is ~2ms, so this dwell IS the reveal
+                    // latency. A candidate UX beat judged on video, not a number the
+                    // animation was shrunk to — see `Motion.orbLocalDwellSeconds`.
+                    await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
                     guard !Task.isCancelled else { return }
                     parse.parseTask = nil
                     if interpretation.propose(local) {
@@ -664,8 +722,22 @@ struct ComposerView: View {
     /// been the one moment in the app with no feedback of any kind.
     private func reveal() {
         revealedAt = .now
+        // The contract's clock, computed ONCE and fed to both consumers — the receipt
+        // (per-capture, persisted, what `CapturePerformanceReport` folds) and
+        // `ModelMetrics` (the last-write footer scalar) — so the two can never
+        // disagree about what the number means. Dwell is INSIDE it by owner decision:
+        // perceived latency is honest latency. `parsedText` is the exact words this
+        // card set was read from, so the tier describes what was actually parsed.
+        if let submittedAt {
+            let confirmMs = Int(Date().timeIntervalSince(submittedAt) * 1000)
+            lastRun?.confirmMs = confirmMs
+            lastRun?.tier = CapturePerformanceContract.Tier.tier(for: parsedText).rawValue
+            lastRun?.sinceLastWordMs = pendingSinceLastWordMs
+            lastRun?.fromVoice = pendingSinceLastWordMs != nil
+            ModelMetrics.shared.recordConfirmReached(
+                latencyMs: confirmMs, source: structureSource)
+        }
         Motion.withMotion(Motion.heroSettle) { phase = .confirm }
-        recordConfirmReached()
         announceReveal()
     }
 
@@ -696,7 +768,8 @@ struct ComposerView: View {
             // the reveal.
             let result = await brain.triage(
                 captured, roster: roster, learned: learned, openTasks: openTasks,
-                suppressions: suppressions, ownership: ownership, route: route)
+                suppressions: suppressions, ownership: ownership, route: route,
+                escalation: escalation)
             guard !Task.isCancelled else { return }
             parse.parseTask = nil
             EmbeddingStore.persistFresh(openTasks: openTasks, in: context)
@@ -707,6 +780,20 @@ struct ComposerView: View {
             receipt.escalationReason = escalation?.rawValue
             lastRun = receipt
 
+            // The authority said "nothing here" (F-02): a spoken capture the verifier read
+            // as a caught conversation, and the model — allowed to return nothing —
+            // did. Settle to the canvas with the words, no cards, no error: the person can
+            // read what was heard and type, or close and let it park.
+            if result.drafts.isEmpty, escalation == .conversation,
+                result.telemetry.outcome == "success" || result.telemetry.outcome == "salvaged"
+            {
+                await holdOrbToMinimumDwell(floor: Motion.orbMinimumDwellSeconds)
+                guard !Task.isCancelled else { return }
+                Motion.withMotion(Motion.heroSettle) { phase = .capture }
+                focused = true
+                parkIfUnfinished(force: true)
+                return
+            }
             // The model decides the structure; if it found nothing, the deterministic
             // read is the honest fallback rather than an empty screen.
             let final =
@@ -716,7 +803,7 @@ struct ComposerView: View {
             // floor BEFORE proposing, so the reveal and the morph-out happen on the same
             // frame — waiting after the propose would leave the cards built and hidden,
             // and any cancellation in between would strand a revealed set behind an orb.
-            await holdOrbToMinimumDwell()
+            await holdOrbToMinimumDwell(floor: Motion.orbMinimumDwellSeconds)
             guard !Task.isCancelled else { return }
             // Refused if the user somehow got to a reveal first (a race we don't expect,
             // but the guard is the point — it can't be argued with).
@@ -734,22 +821,17 @@ struct ComposerView: View {
 
     /// Wait out whatever is left of the orb's minimum presence, if anything.
     ///
-    /// Almost always a no-op: it returns immediately for every capture slower than
-    /// roughly a second, which is the population this product was built around. It exists
-    /// for the fast tail the cloud rung introduced — see `Motion.orbMinimumDwellSeconds`.
-    private func holdOrbToMinimumDwell() async {
+    /// The floor is a PARAMETER because the two routes deserve different beats (see
+    /// `Motion.orbLocalDwellSeconds` vs `orbMinimumDwellSeconds`) and the call site is
+    /// the only place that knows which path this is — an explicit argument beats the
+    /// function sniffing route state. Almost always a no-op on the cloud path: it
+    /// returns immediately for every capture slower than the floor, which is the
+    /// population this product was built around.
+    private func holdOrbToMinimumDwell(floor: TimeInterval) async {
         guard let understandingSince else { return }
-        let remaining =
-            Motion.orbMinimumDwellSeconds - Date().timeIntervalSince(understandingSince)
+        let remaining = floor - Date().timeIntervalSince(understandingSince)
         guard remaining > 0 else { return }
         try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-    }
-
-    private func recordConfirmReached() {
-        guard let submittedAt else { return }
-        ModelMetrics.shared.recordConfirmReached(
-            latencyMs: Int(Date().timeIntervalSince(submittedAt) * 1000),
-            source: structureSource)
     }
 
     /// Back to the canvas with the words intact — nothing has been committed. The
@@ -760,6 +842,7 @@ struct ComposerView: View {
         parse.parseTask = nil
         interpretation.reopen()
         understandingSince = nil
+        pendingSinceLastWordMs = nil
         Motion.withMotion(Motion.settle) { phase = .capture }
         focused = true
     }
@@ -907,6 +990,7 @@ struct ComposerView: View {
                 micButton(canSubmit ? "Speak instead" : "Speak")
                 imageButton
                 Spacer(minLength: 0)
+                postureChip
             }
             // Ramble appears only once there is something to ramble about. A disabled
             // primary button on an empty canvas is a dead affordance occupying the
@@ -927,6 +1011,33 @@ struct ComposerView: View {
         .padding(.top, Spacing.sm)
         .padding(.bottom, Spacing.xs)
         .background(Palette.background)
+    }
+
+    /// The privacy posture, as a control beside the door (F-03). Bordered secondary,
+    /// never the gradient; the accent marks the ON state only. Its state is also what
+    /// `DataBoundary` says in Settings, so the sentence and the switch cannot disagree.
+    private var postureChip: some View {
+        Button {
+            postureRaw = posture.toggled.rawValue
+        } label: {
+            HStack(spacing: Spacing.xxs) {
+                Image(systemName: posture.glyph)
+                    .font(.glyphCaption())
+                Text(posture.label)
+                    .font(.chipLabel)
+            }
+            .foregroundStyle(posture == .onDevice ? Palette.accentFlat : Palette.secondaryText)
+            .padding(.horizontal, Spacing.sm)
+            .frame(height: 32)
+            .background(
+                Capsule().strokeBorder(
+                    posture == .onDevice ? Palette.accentFlat.opacity(0.6) : Palette.border, lineWidth: 1))
+        }
+        .buttonStyle(.pressable)
+        .minimumHitTarget()
+        .accessibilityLabel(posture == .onDevice ? "Captures stay on this device" : "Captures may use the cloud")
+        .accessibilityHint("Switches the capture privacy posture")
+        .accessibilityAddTraits(posture == .onDevice ? .isSelected : [])
     }
 
     /// The submit affordance — the deliberate handoff, wearing the design system's
@@ -1145,9 +1256,16 @@ struct ComposerView: View {
         if phase == .listening {
             listeningCountdown
         } else if showReassurance {
-            Text("Still working — that was a big one.")
-                .metadataStyle()
-                .transition(.opacity)
+            // Honest about WHY it is still working: "a big one" was the only copy, and
+            // it read under a three-item capture stalled on a dead network (2026-09-02).
+            // The dump's size is a fact the router already computed; the stall is not
+            // something the orb should explain.
+            Text(
+                CaptureRoute.captureDepth(for: text) != nil
+                    ? "Still working — that was a big one." : "Still working on it."
+            )
+            .metadataStyle()
+            .transition(.opacity)
         }
     }
 
@@ -1436,23 +1554,6 @@ struct ComposerView: View {
         }
     }
 
-    /// DONE — a short, satisfying receipt, then back to whatever the user was doing.
-    @ViewBuilder private func createdSurface(_ count: Int) -> some View {
-        Spacer(minLength: 0)
-        VStack(spacing: Spacing.md) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.glyphDisplay(.semibold))
-                .foregroundStyle(Palette.accentFlat)
-                .transition(.scale.combined(with: .opacity))
-            Text(count == 1 ? "1 task added" : "\(count) tasks added")
-                .font(.sectionHeader)
-                .foregroundStyle(Palette.primaryText)
-        }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-        Spacer(minLength: 0)
-    }
-
     /// Speak the settled interpretation, once, at the reveal.
     ///
     /// **The arrival is the whole emotional beat of the arc**, and it was silent to a
@@ -1606,13 +1707,20 @@ struct ComposerView: View {
         text = ""
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         parse.cachedRules = nil  // likewise new corrections
-        // A short, satisfying receipt, then back to whatever the user was doing —
-        // capture is something you do mid-life, not a place you go.
-        Motion.withMotion(Motion.heroSettle) { phase = .created(count) }
-        Task {
-            try? await Task.sleep(for: .seconds(Self.createdReceiptSeconds))
-            dismiss()
-        }
+        // Straight back to whatever the user was doing — capture is something you do
+        // mid-life, not a place you go.
+        //
+        // There was a ✓ "N tasks added" receipt here, held for 0.9s before dismissing, and
+        // it was REMOVED (2026-08-30, owner's call): it read as an extra screen standing
+        // between Create and getting on with things. Confirmation now comes from the two
+        // things that were always the stronger signals anyway — the success haptic
+        // (`sensoryFeedback(.success, trigger: committed)`) and the tasks themselves,
+        // visible in the list the moment the sheet is gone.
+        //
+        // The count is deliberately no longer stated anywhere. A merge still speaks,
+        // because that is the one outcome the list cannot show you: `RootTabView`'s
+        // `presentCommitNotice` pill fires on `CommitSummary.messageBeyondReceipt`.
+        dismiss()
     }
 
     /// "Try Again" on the save-failed alert. The composer's own state (drafts,
@@ -1895,6 +2003,10 @@ struct ComposerView: View {
     /// already stopped and bails on the guard.
     private func finishListening() {
         guard phase == .listening, speech.state == .listening else { return }
+        // The silence-window measurement, read while the deadline is still alive: how
+        // long the last word had been hanging when the capture finished. ≈5000 when
+        // the timer fired this; less when a tap did. The receipt's UX parameter.
+        pendingSinceLastWordMs = Self.sinceLastWord(deadline: silenceDeadline, now: Date())
         // Cancel FIRST: the tap/timer race must not double-finish, and a submit below
         // must not leave a live timer behind the understanding beat.
         parse.silenceTask?.cancel()
@@ -1930,6 +2042,16 @@ struct ComposerView: View {
     /// gone. A DELIBERATE fixed five seconds: deterministic and understandable beats
     /// adaptive — make it energy-aware only if real usage shows cut-offs.
     private static let silenceStopSeconds: Double = 5
+
+    /// Milliseconds from the last transcript delta to `now`. The deadline is armed at
+    /// last-delta + `silenceStopSeconds`, so the delta's instant is recoverable from it
+    /// without a second clock — nil deadline (no words ever armed it) → nil. Pure, so
+    /// the arithmetic is testable without a mic.
+    static func sinceLastWord(deadline: Date?, now: Date) -> Int? {
+        guard let deadline else { return nil }
+        let lastDelta = deadline.addingTimeInterval(-silenceStopSeconds)
+        return Int(now.timeIntervalSince(lastDelta) * 1000)
+    }
 
     /// "Getting the mic ready…" appears only past this — the same progressive
     /// disclosure as the 8s reassurance line.
