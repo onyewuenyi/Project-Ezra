@@ -362,6 +362,15 @@ struct TaskMoreMenu: View {
                     Label("Cancel task", systemImage: "xmark.circle")
                 }
             }
+            Divider()
+            // The task, out of the app: a text a person can paste into Messages or a
+            // note for someone who is not in the household — plain words, the due date
+            // if there is one, the description if there is one. Nothing about Ezra,
+            // nothing about the score. Sync will carry a task to a household member; a
+            // share carries it to anyone else, which is the more common ask today.
+            ShareLink(item: Self.shareText(for: task)) {
+                Label("Share…", systemImage: "square.and.arrow.up")
+            }
         } label: {
             Image(systemName: "ellipsis")
         }
@@ -371,6 +380,24 @@ struct TaskMoreMenu: View {
 
     /// Same contract as `completeTask`/`cancelTask` on the record surfaces: name what
     /// happened, name what it freed, and reopen to the live status the task left.
+    /// The plain-text shape of a task for the share sheet: the title, "Due …" on its
+    /// own line when dated, the description after a blank line when present.
+    static func shareText(for task: TaskItem) -> String {
+        shareText(title: task.title, dueDate: task.dueDate, notes: task.notes)
+    }
+
+    static func shareText(title: String, dueDate: Date?, notes: String?) -> String {
+        var lines = [title.trimmingCharacters(in: .whitespacesAndNewlines)]
+        if let dueDate {
+            lines.append("Due " + dueDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+        }
+        if let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+            lines.append("")
+            lines.append(notes)
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func offerUndo(verb: String, unblocked: [TaskItem]) {
         let task = self.task
         let context = self.context

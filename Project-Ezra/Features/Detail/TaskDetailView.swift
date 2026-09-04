@@ -774,40 +774,15 @@ struct TaskDetailView: View {
     }
 
     /// A tracked dependency (title from the graph) or an untracked wait (user's words).
+    ///
+    /// THE SAME ROW THE WAITING SPINE DRAWS (2026-09-04). It used to be a lesser copy —
+    /// a static glyph, an untappable title — so a deciding page with a blocker could
+    /// see the wait but not act on it or go to it, while the identical wait one shape
+    /// over was a cockpit. One row, one set of affordances, wherever a wait renders:
+    /// the blocker's own lifecycle glyph (resolve it here, with the way back), the
+    /// title through to its page, the age, and the release.
     private func blockerChipRow(_ blocker: Blocker) -> some View {
-        let title: String
-        switch blocker.kind {
-        case .task:
-            title = blocker.taskID.flatMap { id in allTasks.first { $0.uuid == id }?.title } ?? "Another task"
-        case .external:
-            title = blocker.note ?? "Something else"
-        }
-        return HStack(spacing: Spacing.sm) {
-            Image(systemName: blocker.kind == .task ? "arrow.turn.down.right" : "hourglass")
-                .font(.glyphCaption())
-                .foregroundStyle(Palette.mutedText)
-            Text(title)
-                .font(.supporting)
-                .foregroundStyle(Palette.primaryText)
-                .lineLimit(1)
-            // The wait's age, everywhere a wait renders — the spine taught the
-            // vocabulary; the card keeps it.
-            if let label = sinceLabel(blocker.since) {
-                Text(label)
-                    .font(.chipLabel)
-                    .foregroundStyle(Palette.mutedText)
-            }
-            Spacer(minLength: Spacing.sm)
-            Button {
-                removeBlocker(blocker.id)
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.glyphCaption())
-                    .foregroundStyle(Palette.mutedText)
-            }
-            .buttonStyle(.pressableIcon)
-            .accessibilityLabel("Stop waiting on \(title)")
-        }
+        spineBlockerRow(blocker)
     }
 
     /// The steps this task was broken into, with how far they have got.
@@ -833,20 +808,40 @@ struct TaskDetailView: View {
         }
     }
 
+    /// A step row on the card — a deciding or waiting page that also has steps. The
+    /// glyph is the list's one-tap fast path (resolve the step here, with the way
+    /// back) and the title opens the step, exactly as the container spine's rows do:
+    /// the card used to render the same step read-only, so which affordances a step
+    /// had depended on which SHAPE its parent happened to be.
     private func stepRow(_ step: TaskItem) -> some View {
         let done = step.status.isResolved
         return HStack(spacing: Spacing.sm) {
-            StatusGlyphView(task: step, allTasks: allTasks, interactive: false)
-            Text(step.title)
-                .font(.supporting)
-                .foregroundStyle(Palette.primaryText)
-                .strikethrough(done, color: Palette.mutedText)
-                .lineLimit(1)
-                .recessed(done)
-            Spacer(minLength: Spacing.sm)
+            StatusGlyphView(
+                task: step, allTasks: allTasks,
+                onPick: { state in pickStepStatus(step, state) }
+            )
+            Button {
+                openedRelated = step
+            } label: {
+                HStack(spacing: Spacing.sm) {
+                    Text(step.title)
+                        .font(.supporting)
+                        .foregroundStyle(Palette.primaryText)
+                        .strikethrough(done, color: Palette.mutedText)
+                        .lineLimit(1)
+                        .recessed(done)
+                    Spacer(minLength: Spacing.sm)
+                    Image(systemName: "chevron.right")
+                        .font(.glyphCaption())
+                        .foregroundStyle(Palette.mutedText)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Step: \(step.title), \(done ? "done" : "open")")
+            .accessibilityHint("Open this step")
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Step: \(step.title), \(done ? "done" : "open")")
     }
 
     // MARK: - What this frees up (the FORWARD direction)
@@ -948,12 +943,7 @@ struct TaskDetailView: View {
             if let target {
                 StatusGlyphView(
                     task: target, allTasks: allTasks,
-                    onPick: { state in
-                        actionPulse += 1
-                        Motion.withMotion(Motion.decide) { target.setStatus(state, in: context) }
-                        context.saveChanges()
-                        advisorStore.ensure(task: task, among: allTasks)
-                    }
+                    onPick: { state in pickBlockerStatus(target, state) }
                 )
             } else {
                 Image(systemName: "hourglass")
@@ -1513,6 +1503,59 @@ struct TaskDetailView: View {
         }
     }
 
+    /// The way back from a CLEARING edit — clear due, clear effort, stop waiting. Every
+    /// setting edit is one tap to redo from the same chip; a clearing edit is not: the
+    /// value is gone from the screen and the person has to remember it (or, for a wait,
+    /// re-find the task). Same pill, same four seconds, as a resolution's — a mis-tap
+    /// on a small × must cost a tap, never a memory. The restore re-runs the mutation
+    /// through the logging seam, so the Activity trail shows the round trip honestly
+    /// (`logHumanEdit` coalesces a same-field round trip into nothing net changed).
+    private func offerEditUndo(_ message: String, restore: @escaping () -> Void) {
+        notice = UndoNotice(message: message, undoAction: restore)
+    }
+
+    /// A blocker's status picked from ITS glyph on this page (the waiting spine, or the
+    /// card's wait row). Mirrors the glyph's own seam, re-judges this page (resolving a
+    /// blocker is the "you're ready to continue" moment), and — new — offers the same
+    /// way back a row resolution does. Resolving the last wait names THIS task as the
+    /// one freed, which is what the person came here to make happen.
+    private func pickBlockerStatus(_ target: TaskItem, _ state: TaskStatus) {
+        guard state != target.status else { return }
+        if state.isResolved { resolvePulse += 1 } else { actionPulse += 1 }
+        Motion.withMotion(Motion.decide) { target.setStatus(state, in: context) }
+        context.saveChanges()
+        advisorStore.ensure(task: task, among: allTasks)
+        guard state.isResolved else { return }
+        let freed = task.hasActiveBlockers(among: allTasks) ? [] : [task]
+        let context = self.context
+        notice = .resolution(
+            state == .canceled ? "Canceled" : "Completed", target.title, unblocked: freed
+        ) {
+            target.reopenAndReblock(in: context)
+            context.saveChanges()
+        }
+    }
+
+    /// A step's status picked from its glyph on this page (the card's step row; the
+    /// container spine's rows may share it). The container's derivations — progress
+    /// header, next-step pointer, kickoff line — all move because they read the same
+    /// fact; a child's clock never bumps the parent's, so the bar is refreshed here.
+    /// A resolved step offers the way back.
+    private func pickStepStatus(_ step: TaskItem, _ state: TaskStatus) {
+        guard state != step.status else { return }
+        if state.isResolved { resolvePulse += 1 } else { actionPulse += 1 }
+        Motion.withMotion(Motion.decide) { step.setStatus(state, in: context) }
+        context.saveChanges()
+        advisorStore.ensure(task: task, among: allTasks)
+        refreshContainerKickoff()
+        guard state.isResolved else { return }
+        let context = self.context
+        notice = .resolution(state == .canceled ? "Canceled" : "Completed", step.title) {
+            step.reopenAndReblock(in: context)
+            context.saveChanges()
+        }
+    }
+
     private func setOwner(_ id: UUID?) {
         guard id != task.ownerID else { return }
         actionPulse += 1
@@ -1554,6 +1597,17 @@ struct TaskDetailView: View {
             field: "effortMinutes", oldValue: old.map(String.init),
             newValue: minutes.map(String.init), summary: summary, in: context)
         context.saveChanges()
+        if minutes == nil, let old {
+            let task = self.task
+            let context = self.context
+            offerEditUndo("Cleared effort") {
+                task.effortMinutes = old
+                task.logHumanEdit(
+                    field: "effortMinutes", oldValue: nil, newValue: String(old),
+                    summary: "Restored effort", in: context)
+                context.saveChanges()
+            }
+        }
     }
 
     private func effortText(_ minutes: Int) -> String {
@@ -1590,6 +1644,8 @@ struct TaskDetailView: View {
     }
 
     private func removeBlocker(_ blockerID: UUID) {
+        // Read the wait BEFORE the edge goes, so the way back can rebuild it exactly.
+        let removed = task.activeBlockers(among: allTasks).first { $0.id == blockerID }
         actionPulse += 1
         Motion.withMotion(Motion.decide) { task.removeBlocker(blockerID, among: allTasks) }
         task.logHumanEdit(
@@ -1597,6 +1653,35 @@ struct TaskDetailView: View {
             summary: "Removed blocker", reversible: false, coalescable: false, in: context)
         context.saveChanges()
         reclassifyWorkIntent()  // losing a blocker is a structural change
+        // The release is one tap on a small ×, and the Activity row it writes is not
+        // reversible (the edge is gone). So the way back lives here instead: the pill
+        // re-adds the same wait — the task edge, or the external note in the person's
+        // own words.
+        guard let removed else { return }
+        let title: String
+        switch removed.kind {
+        case .task:
+            title = removed.taskID.flatMap { id in allTasks.first { $0.uuid == id }?.title } ?? "another task"
+        case .external:
+            title = removed.note ?? "something else"
+        }
+        let task = self.task
+        let context = self.context
+        let tasks = allTasks
+        offerEditUndo("Stopped waiting on “\(title)”") {
+            switch removed.kind {
+            case .task:
+                guard let id = removed.taskID else { return }
+                task.addTaskBlocker(id, among: tasks)
+            case .external:
+                task.addExternalBlocker(removed.note, among: tasks)
+            }
+            task.logHumanEdit(
+                field: "blockers", oldValue: nil,
+                newValue: removed.taskID?.uuidString ?? removed.note ?? "something else",
+                summary: "Restored blocker", reversible: false, coalescable: false, in: context)
+            context.saveChanges()
+        }
     }
 
     private func setDue(dayOffset: Int) {
@@ -1614,6 +1699,17 @@ struct TaskDetailView: View {
             field: "dueDate", oldValue: ChangeLogEntry.encodeDate(old),
             newValue: ChangeLogEntry.encodeDate(date), summary: summary, in: context)
         context.saveChanges()
+        if date == nil, let old {
+            let task = self.task
+            let context = self.context
+            offerEditUndo("Cleared due date") {
+                task.dueDate = old
+                task.logHumanEdit(
+                    field: "dueDate", oldValue: ChangeLogEntry.encodeDate(nil),
+                    newValue: ChangeLogEntry.encodeDate(old), summary: "Restored due date", in: context)
+                context.saveChanges()
+            }
+        }
     }
 
     private var dueBinding: Binding<Date> {
