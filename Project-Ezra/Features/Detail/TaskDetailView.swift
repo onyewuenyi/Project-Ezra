@@ -106,7 +106,9 @@ struct TaskDetailView: View {
 
     /// Freely-typed fields diff on focus loss (title/description) — snapshots of what they
     /// held when editing began, so a change logs exactly one "edited" row per commit.
-    private enum EditField { case title, notes }
+    private enum EditField { case title, notes, newStep }
+    /// The container spine's inline "Add a step" field. Cleared on commit.
+    @State private var newStepTitle = ""
     @FocusState private var focusedField: EditField?
     @State private var originalTitle = ""
     @State private var originalNotes: String?
@@ -319,6 +321,9 @@ struct TaskDetailView: View {
             // appears while the user is still on the page.
             if previous == .title { commitTitleEdit() }
             if previous == .notes { commitNotesEdit() }
+            // Leaving the add-step field with words in it adds the step — the keyboard
+            // Done and a tap elsewhere both mean "that's the step", never "forget it".
+            if previous == .newStep { commitNewStep() }
         }
         // Return in the title means "done", never a line break. The field wraps
         // (`axis: .vertical`) so a long title is readable, but a task title is one
@@ -422,9 +427,7 @@ struct TaskDetailView: View {
 
     private var titleSection: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            Text(task.category.uppercased())
-                .metadataStyle()
-                .tracking(0.8)
+            categoryKicker
             TextField("Task title", text: $task.title, axis: .vertical)
                 .font(.screenTitle)
                 .tracking(-0.4)
@@ -436,6 +439,41 @@ struct TaskDetailView: View {
             lifecycleLine
             parentLine
         }
+    }
+
+    /// The kicker IS the category editor. It used to be a static label above the title
+    /// with an identical "Finance" chip in the card below — the same fact twice, one of
+    /// them dead. Linear's breadcrumb kicker is the model: the small caps line names
+    /// where the task lives and opens the menu that moves it. The chevron is the only
+    /// tell that it is a control, sized so it never competes with the title.
+    private var categoryKicker: some View {
+        Menu {
+            ForEach(TaskCategory.all, id: \.self) { cat in
+                Button {
+                    setCategory(cat)
+                } label: {
+                    Label {
+                        Text(cat)
+                    } icon: {
+                        Image(systemName: cat == task.category ? "checkmark" : TaskCategory.symbol(for: cat))
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: Spacing.xxs) {
+                Text(task.category.uppercased())
+                    .metadataStyle()
+                    .tracking(0.8)
+                Image(systemName: "chevron.down")
+                    .font(.glyphMicro(.semibold))
+                    .foregroundStyle(Palette.mutedText)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .minimumHitTarget(around: IconSize.caption)
+        .accessibilityLabel("Category: \(task.category)")
+        .accessibilityHint("Change category")
     }
 
     /// A title edit that contains a line break is a return key pressed: the title
@@ -535,7 +573,7 @@ struct TaskDetailView: View {
                 ownerChip
                 urgentChip
                 dueChip
-                categoryChip
+                // No category chip: the kicker above the title is the category editor.
                 effortChip
                 addBlockerChip
             }
@@ -725,23 +763,6 @@ struct TaskDetailView: View {
         return label.isOverdue ? "Overdue, \(label.text)" : "Due \(label.text)"
     }
 
-    private var categoryChip: some View {
-        Menu {
-            ForEach(TaskCategory.all, id: \.self) { cat in
-                Button {
-                    setCategory(cat)
-                } label: {
-                    Label(cat, systemImage: TaskCategory.symbol(for: cat))
-                }
-            }
-        } label: {
-            chip {
-                Image(systemName: TaskCategory.symbol(for: task.category))
-                    .font(.glyphCaption())
-                Text(task.category)
-            }
-        }
-    }
     private var effortChip: some View {
         Menu {
             Button("15 min") { setEffort(15) }
@@ -880,6 +901,14 @@ struct TaskDetailView: View {
                             .foregroundStyle(Palette.primaryText)
                             .lineLimit(1)
                         Spacer(minLength: Spacing.sm)
+                        // WHEN, in the row's own vocabulary: whether freeing this one
+                        // matters today is the question the section exists to answer.
+                        if let due = DueLabel.make(for: dependent, style: .compact) {
+                            Text(due.text)
+                                .font(.chipLabel)
+                                .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
+                                .monospacedDigit()
+                        }
                         Image(systemName: "chevron.right")
                             .font(.glyphCaption())
                             .foregroundStyle(Palette.mutedText)
@@ -1032,6 +1061,61 @@ struct TaskDetailView: View {
             ForEach(steps) { step in
                 spineStepRow(step, isCurrent: step.uuid == currentID)
             }
+            if !task.status.isResolved { addStepRow }
+        }
+    }
+
+    /// The one write the container spine offers beyond status: a step the person
+    /// thought of that the breakdown didn't. Inline, in the rows' own register —
+    /// a muted plus in the glyph column and a bare field — because a "+ Add step"
+    /// button would be a second CTA under the pinned one. Return or leaving the
+    /// field commits; the row is absent on a resolved container.
+    private var addStepRow: some View {
+        HStack(spacing: Spacing.sm) {
+            Image(systemName: "plus")
+                .font(.glyphCaption())
+                .foregroundStyle(Palette.mutedText)
+                .frame(width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn)
+            TextField("Add a step", text: $newStepTitle)
+                .font(.supporting)
+                .foregroundStyle(Palette.primaryText)
+                .textInputAutocapitalization(.sentences)
+                .submitLabel(.done)
+                .focused($focusedField, equals: .newStep)
+                .onSubmit { commitNewStep() }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Add a step")
+    }
+
+    /// Append the typed step through the model's seam and clear the field. Silent on
+    /// blank input — leaving an empty field is not an act.
+    private func commitNewStep() {
+        let typed = newStepTitle
+        newStepTitle = ""
+        guard
+            let step = Motion.withMotion(
+                Motion.decide,
+                {
+                    task.addStep(typed, among: allTasks, in: context)
+                })
+        else { return }
+        actionPulse += 1
+        context.saveChanges()
+        advisorStore.ensure(task: task, among: allTasks)
+        refreshContainerKickoff()
+        // Adding a step has the same receipt a breakdown does: one pill, one revert path.
+        // The entry is looked up at UNDO time, by the child's id, rather than read
+        // from the fetched results now — the fetch refreshes after this call returns.
+        let stepID = step.uuid?.uuidString ?? ""
+        let context = context
+        notice = UndoNotice(message: "Added step “\(step.title)”") {
+            let request = NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry")
+            request.predicate = NSPredicate(format: "action == %@ AND newValue == %@", "split", stepID)
+            guard let entry = (try? context.fetch(request))?.first, !entry.undone else { return }
+            entry.undone = true
+            ChangeLogUndo.revert(entry, in: context)
+            context.saveChanges()
         }
     }
 
@@ -1046,13 +1130,10 @@ struct TaskDetailView: View {
         return HStack(spacing: Spacing.sm) {
             StatusGlyphView(
                 task: step, allTasks: allTasks,
-                onPick: { state in
-                    actionPulse += 1
-                    Motion.withMotion(Motion.decide) { step.setStatus(state, in: context) }
-                    context.saveChanges()
-                    advisorStore.ensure(task: task, among: allTasks)
-                    refreshContainerKickoff()
-                }
+                // ONE step-status seam for the spine and the card's step rows: the
+                // re-judge, the kickoff refresh and the way back all live in
+                // `pickStepStatus`, so the two surfaces cannot drift.
+                onPick: { state in pickStepStatus(step, state) }
             )
             Button {
                 openedRelated = step
@@ -1072,6 +1153,13 @@ struct TaskDetailView: View {
                             .foregroundStyle(Palette.accentFlat)
                     }
                     Spacer(minLength: Spacing.sm)
+                    // WHEN, when a step has its own date — rare, and exactly then worth ink.
+                    if let due = DueLabel.make(for: step, style: .compact) {
+                        Text(due.text)
+                            .font(.chipLabel)
+                            .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
+                            .monospacedDigit()
+                    }
                     // Sizing at a glance, matching the proposal rows the steps came from.
                     if !done, let label = TaskItem.effortLabel(step.effortMinutes) {
                         Text("~\(label)")
@@ -1270,13 +1358,22 @@ struct TaskDetailView: View {
             Button {
                 Motion.withMotion(Motion.settle) { showDetails.toggle() }
             } label: {
-                HStack(spacing: Spacing.xs) {
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
                     Text("Details")
                         .sectionHeaderStyle()
                     Image(systemName: "chevron.down")
                         .font(.glyphCaption())
                         .foregroundStyle(Palette.mutedText)
                         .rotationEffect(.degrees(showDetails ? 180 : 0))
+                    // A closed row that says what it holds: "Details" alone is mute,
+                    // and a person deciding whether to open it deserves the count.
+                    // Gone once open — the rows below are the count.
+                    if !showDetails, let hint = Self.detailsHint(changes: activityEntries.count) {
+                        Text(hint)
+                            .metadataStyle()
+                            .monospacedDigit()
+                            .transition(.opacity)
+                    }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
@@ -1291,6 +1388,12 @@ struct TaskDetailView: View {
                 activitySection.transition(.opacity)
             }
         }
+    }
+
+    /// "3 changes" · "1 change" · nil when the trail holds nothing but the task's birth.
+    static func detailsHint(changes: Int) -> String? {
+        guard changes > 0 else { return nil }
+        return changes == 1 ? "1 change" : "\(changes) changes"
     }
 
     private func footer(_ action: RecommendedAction) -> some View {
@@ -1726,7 +1829,11 @@ struct TaskDetailView: View {
     // MARK: - Freely-typed field commits (title / description, on focus loss)
 
     private func commitTitleEdit() {
-        let updated = task.title
+        // Never save a blank title. Clearing the field and leaving used to persist an
+        // empty string, which rendered as a nameless row in the list — the one edit the
+        // page must refuse. Trimmed, and restored to what it was when it comes back empty.
+        let updated = Self.committedTitle(task.title, fallback: originalTitle)
+        if updated != task.title { task.title = updated }
         guard updated != originalTitle else { return }
         task.logHumanEdit(
             field: "title", oldValue: originalTitle, newValue: updated, summary: "Renamed task",
@@ -1734,6 +1841,13 @@ struct TaskDetailView: View {
         originalTitle = updated
         context.saveChanges()
         reclassifyWorkIntent()  // a material title change may change what kind of work this is
+    }
+
+    /// The title that gets saved: the typed one, trimmed — or the title the edit began
+    /// from when the typed one is empty. Pure, so the refusal is testable.
+    static func committedTitle(_ typed: String, fallback: String) -> String {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
     }
 
     private func commitNotesEdit() {

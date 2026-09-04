@@ -10,6 +10,7 @@
 //  keyboard.
 //
 
+import CoreData
 import Foundation
 import Testing
 
@@ -143,5 +144,77 @@ struct TitleReturnTests {
     func midTitleReturn() {
         #expect(TaskDetailView.titleAfterReturn("Renew \npassport") == "Renew passport")
         #expect(TaskDetailView.titleAfterReturn("Renew\n\npassport") == "Renew passport")
+    }
+}
+
+@Suite("Title commit — never a blank title")
+struct TitleCommitTests {
+
+    @Test("A cleared title restores what the edit began from")
+    func blankRestoresOriginal() {
+        #expect(TaskDetailView.committedTitle("", fallback: "Renew passport") == "Renew passport")
+        #expect(TaskDetailView.committedTitle("   \n", fallback: "Renew passport") == "Renew passport")
+    }
+
+    @Test("A real edit is saved trimmed")
+    func trimmedEdit() {
+        #expect(TaskDetailView.committedTitle("  Book flights ", fallback: "x") == "Book flights")
+    }
+
+    @Test("The Details row names its count, and says nothing for an empty trail")
+    func detailsHint() {
+        #expect(TaskDetailView.detailsHint(changes: 0) == nil)
+        #expect(TaskDetailView.detailsHint(changes: 1) == "1 change")
+        #expect(TaskDetailView.detailsHint(changes: 4) == "4 changes")
+    }
+}
+
+@Suite("Add a step — the container's one hand-written move")
+struct AddStepTests {
+
+    @Test("A hand-added step lands AFTER the breakdown's order, linked to the container")
+    func appendsAfterExistingSteps() {
+        let context = TestStore.makeContext()
+        let parent = TaskItem(title: "Move house", in: context)
+        let steps = parent.splitInto(
+            [BreakdownStep(title: "Book movers", effortMinutes: 30), BreakdownStep(title: "Pack", effortMinutes: 120)],
+            in: context)
+        let all = [parent] + steps
+        let added = parent.addStep("Change address", among: all, in: context)
+        #expect(added != nil)
+        let ordered = parent.children(among: all + [added!])
+        #expect(ordered.map(\.title) == ["Book movers", "Pack", "Change address"])
+        #expect(added?.parentTaskID == parent.uuid)
+        #expect(added?.category == parent.category)
+        #expect(added?.confirmedAt != nil)
+    }
+
+    @Test("Blank input adds nothing and logs nothing")
+    func blankIsRefused() {
+        let context = TestStore.makeContext()
+        let parent = TaskItem(title: "Move house", in: context)
+        #expect(parent.addStep("   ", among: [parent], in: context) == nil)
+        let entries = try? context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
+        #expect((entries ?? []).isEmpty)
+    }
+
+    @Test("The entry is a one-child split, so the existing undo arm reclaims it")
+    func entryIsAOneChildSplit() throws {
+        let context = TestStore.makeContext()
+        let parent = TaskItem(title: "Move house", in: context)
+        let step = try #require(parent.addStep("Change address", among: [parent], in: context))
+        try context.save()
+        let entry = try #require(
+            (try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))).first {
+                $0.action == "split"
+            })
+        // The contract with `ChangeLogUndo`'s split arm (pinned in `BreakdownSplitTests`,
+        // including the delete this harness cannot run twice): a reversible "split"
+        // whose newValue is exactly the one child, on the container's own trail.
+        #expect(entry.isReversible)
+        #expect(entry.fieldChanged == "children")
+        #expect(entry.newValue == step.uuid?.uuidString)
+        #expect(entry.taskUUID == parent.uuid)
+        #expect(entry.initiatedBy == .human)
     }
 }

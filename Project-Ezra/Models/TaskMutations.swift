@@ -423,6 +423,56 @@ extension TaskItem {
             ))
         return created
     }
+
+    /// One step, added BY HAND to a container's breakdown — the person thought of a
+    /// move the model didn't. Appended after the existing steps (`sortIndex` past the
+    /// current maximum, so the breakdown order the model proposed is untouched),
+    /// inheriting the container's category, owner and capture exactly as `splitInto`'s
+    /// children do. Logged as a one-child `"split"` entry so `ChangeLogUndo`'s existing
+    /// arm reclaims it (an untouched step only, same rule as a breakdown's undo).
+    /// Nil for a blank title. Callers own `save()`.
+    @discardableResult
+    func addStep(
+        _ stepTitle: String, among tasks: [TaskItem], in context: NSManagedObjectContext,
+        now: Date = Date()
+    ) -> TaskItem? {
+        let trimmed = stepTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let selfID = uuid else { return nil }
+        let child = TaskItem(
+            title: trimmed,
+            category: category,
+            status: .todo,
+            creatorID: creatorID,
+            confidence: confidence,
+            reasoning: "A step of “\(title)”.",
+            isUrgent: false,
+            ownerID: ownerID,
+            ownerOrigin: ownerOrigin,
+            captureID: captureID,
+            rawCapture: rawCapture,
+            createdAt: now,
+            in: context)
+        child.confirmedAt = now
+        child.sortIndex = (children(among: tasks).map(\.sortIndex).max() ?? -1) + 1
+        child.linkParent(selfID)
+        context.insert(child)
+        touchHuman(now: now)
+        context.insert(
+            ChangeLogEntry(
+                summary: "Added step “\(trimmed)”",
+                detail: trimmed,
+                action: "split",
+                fieldChanged: "children",
+                newValue: child.uuid?.uuidString ?? "",
+                initiatedBy: .human,
+                isReversible: true,
+                taskTitle: title,
+                taskUUID: uuid,
+                actorID: UserProfile.currentMemberID(in: context),
+                timestamp: now, in: context
+            ))
+        return child
+    }
 }
 
 // MARK: - Recommended Action (the derived "one obvious next tap")
