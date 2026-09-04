@@ -205,6 +205,11 @@ struct ComposerView: View {
     /// is "nothing happened at all," which otherwise looks identical to a tap that
     /// didn't register).
     @State private var showPhotoImportFailedAlert = false
+    /// Distinct from the above: the photo decoded fine but Vision itself threw (or
+    /// timed out) rather than simply finding no text — a photo with no text at all is
+    /// `ImageTextExtractor`'s documented normal outcome and stays silent, but a genuine
+    /// failure must not look identical to "the tap didn't register."
+    @State private var showOCRFailedAlert = false
     /// The text the last COMPLETED parse ran against. Only when this matches what's in the
     /// field do we know an empty `drafts` means "the engine found nothing here" rather than
     /// Whether the last completed parse returned any candidates at all, before the
@@ -428,7 +433,14 @@ struct ComposerView: View {
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                     let parked
                 {
-                    // The thought was erased; parking must not keep advertising it.
+                    // The thought was erased; parking must not keep advertising it. This
+                    // is the same destructive path as the explicit `discard()` below, so
+                    // it owes the photo the same cleanup — otherwise the JPEG under
+                    // `CaptureImageStore` outlives the row that referenced it.
+                    if let ref = capturedImageRef { CaptureImageStore.delete(ref) }
+                    capturedImageRef = nil
+                    capturedThumb = nil
+                    usedImage = false
                     AppBrain.discard(parked, in: context)
                     self.parked = nil
                 }
@@ -524,6 +536,11 @@ struct ComposerView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Try picking it again, or type what it said instead.")
+            }
+            .alert("Couldn't read the text in that photo", isPresented: $showOCRFailedAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("The photo was saved. Try again, or type what it said instead.")
             }
         }
         .presentationDetents([.large])
@@ -1977,9 +1994,18 @@ struct ComposerView: View {
     private func ingestPhoto(_ item: PhotosPickerItem) async {
         readingImage = true
         defer { readingImage = false }
-        guard let data = try? await item.loadTransferable(type: Data.self),
-            let image = UIImage(data: data), let cgImage = image.cgImage
-        else {
+        let data: Data?
+        do {
+            // Unlike every model call in the app, this had no deadline: an iCloud-only
+            // asset needing a slow download could hang "Reading…" indefinitely.
+            data = try await ModelDeadline.race(timeout: ModelDeadline.photoImportSeconds) {
+                try await item.loadTransferable(type: Data.self)
+            }
+        } catch {
+            showPhotoImportFailedAlert = true
+            return
+        }
+        guard let data, let image = UIImage(data: data), let cgImage = image.cgImage else {
             showPhotoImportFailedAlert = true
             return
         }
@@ -1987,10 +2013,21 @@ struct ComposerView: View {
         capturedImageRef = CaptureImageStore.save(data)
         capturedThumb = image
         usedImage = true
-        let recognized = (try? await ImageTextExtractor.text(from: cgImage)) ?? ""
-        guard !recognized.isEmpty else { return }
-        // Entering through `text` is the whole design: onChange → the rolling parse.
-        text = text.isEmpty ? recognized : text + "\n" + recognized
+        do {
+            let recognized = try await ModelDeadline.race(timeout: ModelDeadline.photoImportSeconds) {
+                try await ImageTextExtractor.text(from: cgImage)
+            }
+            // A photo with no text in it is `ImageTextExtractor`'s documented normal
+            // outcome, not a failure — stays silent.
+            guard !recognized.isEmpty else { return }
+            // Entering through `text` is the whole design: onChange → the rolling parse.
+            text = text.isEmpty ? recognized : text + "\n" + recognized
+        } catch {
+            // A genuine Vision failure (or a timeout) is NOT the same outcome as "no
+            // text found" — collapsing them made a failed read indistinguishable from
+            // "the tap didn't register."
+            showOCRFailedAlert = true
+        }
     }
 
     /// The picked photo, disclosed above the field — provenance the user can see

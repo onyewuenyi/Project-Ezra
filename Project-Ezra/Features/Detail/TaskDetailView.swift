@@ -73,14 +73,17 @@ struct TaskDetailView: View {
     /// siblings insert a ChangeLogEntry unconditionally on every call, so a second
     /// firing produces a duplicate Activity row rather than a duplicate task.
     @State private var isPerformingPrimary = false
-    /// Set when `context.saveChanges()` reports a dropped write after the primary
-    /// action — the button already animated success, so this is the one honest
-    /// way left to tell the user the mutation didn't actually land.
+    /// Set when `context.saveChanges()` reports a dropped write anywhere on this page
+    /// (the primary action, or a spine step's own status glyph) — whichever button was
+    /// tapped already animated success, so this is the one honest way left to tell the
+    /// user the mutation didn't actually land.
     @State private var showSaveFailedAlert = false
-    /// The action and its resurfaced dependents, held across a failed save so
-    /// "Try Again" can finish the same action rather than re-running the mutation.
-    @State private var pendingPrimaryAction: RecommendedAction?
-    @State private var pendingUnblocked: [TaskItem] = []
+    /// What "Try Again" re-attempts. The mutation that failed to save is always still
+    /// pending on its object (`saveChanges` never rolls back), so a retry only needs to
+    /// ask the store to save again and run whatever follow-up the original tap owed —
+    /// never to redo the mutation itself. One closure covers every save site on this
+    /// page instead of a save-site-specific pending-state pair per caller.
+    @State private var pendingRetry: (() -> Void)?
     /// "Why this is here" + Activity, collapsed behind one quiet toggle. Provenance
     /// and history are inputs, not content the page must always show — every field
     /// stays one tap away, and the glance shows what is consequential.
@@ -410,14 +413,15 @@ struct TaskDetailView: View {
             Text("Who is this task for?")
         }
         .alert("Couldn't save", isPresented: $showSaveFailedAlert) {
-            Button("Try Again") { retryPrimarySave() }
-            // Deliberately does NOT re-enable the primary button: the mutation is
-            // still pending on `task` (never rolled back), so a fresh tap would
-            // re-run `performRecommendedAction` and double-insert its ChangeLogEntry
-            // on top of the one already pending — exactly the duplicate this guard
-            // exists to prevent. "Try Again" is the only retry path from here; the
-            // page's own teardown save is the backstop if the user navigates away.
-            Button("Cancel", role: .cancel) {}
+            Button("Try Again") { pendingRetry?() }
+            // Deliberately does NOT re-enable the primary button on a primary-action
+            // failure: the mutation is still pending on `task` (never rolled back), so
+            // a fresh tap would re-run `performRecommendedAction` and double-insert its
+            // ChangeLogEntry on top of the one already pending — exactly the duplicate
+            // this guard exists to prevent. "Try Again" is the only retry path from
+            // here; the page's own teardown save is the backstop if the user navigates
+            // away without retrying.
+            Button("Cancel", role: .cancel) { pendingRetry = nil }
         } message: {
             Text("Your change didn't save. Check your storage and try again.")
         }
@@ -1502,8 +1506,7 @@ struct TaskDetailView: View {
         // `task` regardless (`saveChanges` never rolls back), so the retry below
         // only needs to ask the store to save again, never to redo the mutation.
         guard context.saveChanges() else {
-            pendingPrimaryAction = action
-            pendingUnblocked = unblocked
+            pendingRetry = { [self] in retryPrimarySave(action: action, unblocked: unblocked) }
             showSaveFailedAlert = true
             return
         }
@@ -1527,13 +1530,14 @@ struct TaskDetailView: View {
         }
     }
 
-    /// "Try Again" on the save-failed alert.
-    private func retryPrimarySave() {
-        guard let action = pendingPrimaryAction, context.saveChanges() else {
+    /// "Try Again" on the save-failed alert, for the primary action.
+    private func retryPrimarySave(action: RecommendedAction, unblocked: [TaskItem]) {
+        guard context.saveChanges() else {
+            pendingRetry = { [self] in retryPrimarySave(action: action, unblocked: unblocked) }
             showSaveFailedAlert = true
             return
         }
-        finishPrimary(action, unblocked: pendingUnblocked)
+        finishPrimary(action, unblocked: unblocked)
     }
 
     /// Ask for the one concrete first move. Any non-success renders nothing — the
@@ -1626,7 +1630,19 @@ struct TaskDetailView: View {
         guard state != target.status else { return }
         if state.isResolved { resolvePulse += 1 } else { actionPulse += 1 }
         Motion.withMotion(Motion.decide) { target.setStatus(state, in: context) }
-        context.saveChanges()
+        settleBlockerPick(target, state)
+    }
+
+    /// The post-mutation half of `pickBlockerStatus`, shared with "Try Again": save —
+    /// or arm the page's one save-failed alert with THIS as the retry, since the
+    /// mutation is already on `target` and only the save needs another go — then the
+    /// re-judge and the way back.
+    private func settleBlockerPick(_ target: TaskItem, _ state: TaskStatus) {
+        guard context.saveChanges() else {
+            pendingRetry = { [self] in settleBlockerPick(target, state) }
+            showSaveFailedAlert = true
+            return
+        }
         advisorStore.ensure(task: task, among: allTasks)
         guard state.isResolved else { return }
         let freed = task.hasActiveBlockers(among: allTasks) ? [] : [task]
@@ -1648,7 +1664,18 @@ struct TaskDetailView: View {
         guard state != step.status else { return }
         if state.isResolved { resolvePulse += 1 } else { actionPulse += 1 }
         Motion.withMotion(Motion.decide) { step.setStatus(state, in: context) }
-        context.saveChanges()
+        settleStepPick(step, state)
+    }
+
+    /// The post-mutation half of `pickStepStatus`, shared with "Try Again" — same
+    /// shape as `settleBlockerPick`: a dropped save arms the one alert with the retry
+    /// that finishes this tap, never one that redoes the mutation.
+    private func settleStepPick(_ step: TaskItem, _ state: TaskStatus) {
+        guard context.saveChanges() else {
+            pendingRetry = { [self] in settleStepPick(step, state) }
+            showSaveFailedAlert = true
+            return
+        }
         advisorStore.ensure(task: task, among: allTasks)
         refreshContainerKickoff()
         guard state.isResolved else { return }

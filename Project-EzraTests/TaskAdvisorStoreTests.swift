@@ -114,6 +114,50 @@ struct TaskAdvisorStoreTests {
         }
     }
 
+    @Test("A failed judgment retries on the next open-moment visit, not just on a fact change")
+    func failedJudgmentRetries() async {
+        let context = context()
+        let task = TaskItem(title: "Renovate the kitchen", status: .todo, effortMinutes: 120, in: context)
+        let reading = ValidatedReading(
+            move: .advise, observation: "Try the smaller room first.", guidance: nil,
+            nextMove: nil, options: [], recommendation: nil, steps: [])
+
+        var callCount = 0
+        let name = "advisor-store-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        let store = TaskAdvisorStore(
+            judge: { _, _, _ in
+                callCount += 1
+                return callCount == 1 ? .failed("simulated") : .success(reading)
+            },
+            isModelAvailable: { true },
+            metrics: AdvisorMetrics(defaults: defaults))
+
+        store.ensure(task: task, among: [task])
+        await store.awaitPendingJudgment(for: task.uuid)
+        // A failed generation lands on the rung-0 floor when there is one (this task's
+        // effort gives it one) and on `.failed` only when there isn't — either way it
+        // is a settled entry the next open-moment visit must NOT re-serve as memory.
+        switch store.state(for: task) {
+        case .failed, .fallback: break
+        default:
+            Issue.record("expected a settled failure after the first (simulated) failure, got \(store.state(for: task))")
+            return
+        }
+
+        // Nothing about the task changed — the fingerprint is identical — yet a plain
+        // re-visit must retry rather than re-serve the stale failure forever.
+        store.ensure(task: task, among: [task])
+        await store.awaitPendingJudgment(for: task.uuid)
+        #expect(callCount == 2)
+        guard case .revealed(let revealed) = store.state(for: task) else {
+            Issue.record("expected .revealed after the retry succeeded, got \(store.state(for: task))")
+            return
+        }
+        #expect(revealed == reading)
+    }
+
     @Test("A never-opened task is unevaluated, NOT a judgment of silence")
     func unknownTaskIsUnevaluated() {
         let context = context()

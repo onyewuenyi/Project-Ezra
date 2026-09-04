@@ -107,6 +107,34 @@ enum IntentResolver {
         return dated.sorted { $0.date < $1.date }.map(\.fragment)
     }
 
+    /// True when the phrase names MORE distinct occasions than `expand` will ever act
+    /// on — the one decline reason where falling through to `resolveDate`'s ordinary
+    /// single-date reading would be actively wrong rather than merely conservative.
+    /// `instanceExpressions` returning `[]` also covers "not an enumeration at all" and
+    /// "one of the fragments isn't a date", and in both of those the single-date
+    /// fallback is exactly the right behavior — so this re-parses independently rather
+    /// than asking `instanceExpressions` "why" it declined, and only answers true when
+    /// every fragment genuinely resolves and there are simply too many of them (e.g.
+    /// "clean the litter box every day this week and next Monday": eight real dates,
+    /// none of them "the" date). Without this, `resolveDate`'s weekday match silently
+    /// picks the FIRST named day and reports it as confident — the whole thing this
+    /// exists to stop, not "8+ separate correct dates I chose to only show one of."
+    static func exceedsInstanceCap(in expression: String?, now: Date = Date()) -> Bool {
+        guard let raw = expression?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            !raw.isEmpty,
+            raw.contains(" and ") || raw.contains(",") || raw.contains("&")
+        else { return false }
+        let fragments =
+            raw
+            .replacingOccurrences(of: "&", with: ",")
+            .replacingOccurrences(of: " and ", with: ",")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard fragments.count > maxInstances else { return false }
+        return fragments.allSatisfy { resolveDate(expression: $0, now: now) != nil }
+    }
+
     static func resolve(
         _ intent: TaskIntent, rules: [LearnedRule] = [],
         openTasks: [OpenTaskSnapshot] = [], candidates: [RetrievalCandidate] = [],
@@ -120,7 +148,12 @@ enum IntentResolver {
         let titleWords = CorrectionProfile.significantWords(intent.title)
         // The date the user actually EXPRESSED, kept separate from the one inferred
         // from the task's nature below — the two are not interchangeable downstream.
-        let spokenDate = resolveDate(expression: intent.dateExpression, now: now)
+        // Nil when the phrase names more occasions than `expand` will fan out (rather
+        // than the ordinary single-date read silently picking the first named day and
+        // reporting it as confident) — see `exceedsInstanceCap`.
+        let spokenDate =
+            exceedsInstanceCap(in: intent.dateExpression, now: now)
+            ? nil : resolveDate(expression: intent.dateExpression, now: now)
         let workIntent =
             intent.workIntent.flatMap { WorkIntent.decode($0.lowercased()) }
             ?? inferredWorkIntent(title: intent.title, words: titleWords)

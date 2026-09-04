@@ -74,6 +74,12 @@ struct TaskRow: View {
     /// before with more in it. Keyed to `confirmedAt`, so only the commit's own rows
     /// wash, and only for the few seconds after it.
     @State private var arrivalWash = false
+    /// Toggled (never read) to fire the error haptic below — a dropped save here has
+    /// no alert to show (a flat list row owns no presentation), but silence would mean
+    /// a tap that looked like it worked and wasn't persisted goes completely unnoticed.
+    /// The mutation itself is left pending on `task`, matching every other save-check
+    /// in the app: unconfirmed, not lost.
+    @State private var saveFailed = false
 
     private var isBlocked: Bool { blockerSummary != nil }
 
@@ -192,6 +198,7 @@ struct TaskRow: View {
             if onComplete != nil { Button("Complete") { complete() } }
             if onCancel != nil { Button("Cancel Task") { onCancel?() } }
         }
+        .sensoryFeedback(.error, trigger: saveFailed)
     }
 
     // MARK: - Long-press quick actions
@@ -275,7 +282,7 @@ struct TaskRow: View {
 
     private func applyDirect(_ state: TaskStatus) {
         Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
-        context.saveChanges()
+        if !context.saveChanges() { saveFailed.toggle() }
         // A lifecycle move is the cheapest honest escalation signal there is: the task's
         // facts just changed, so its cached Advisor reading is stale and the next open
         // would pay for a cold judgment while the user watches. Think it through now.
@@ -293,7 +300,7 @@ struct TaskRow: View {
     /// seam (which logs to the task's Activity timeline + recomputes attention), then saves.
     private func toggleUrgent() {
         task.setUrgent(!task.isUrgent, among: allTasks, in: context)
-        context.saveChanges()
+        if !context.saveChanges() { saveFailed.toggle() }
     }
 
     private func complete() {

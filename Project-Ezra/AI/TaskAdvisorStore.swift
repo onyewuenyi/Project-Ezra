@@ -120,6 +120,13 @@ final class TaskAdvisorStore: ObservableObject {
         /// person can tell Ezra looked, and when, rather than wondering whether it is
         /// there at all.
         var judgedAt: Date?
+        /// The model call behind this entry timed out or threw. The STATE may still be a
+        /// floor reading (§07's fall-through), which is why this is a flag and not a
+        /// pattern match on `.failed`: nothing about the facts will change to invalidate
+        /// the fingerprint on its own, so without it a failed judgment — floor or
+        /// `.failed` — would be re-served as memory forever. Read by `ensure`, which
+        /// retries on the next open-moment visit and never for a precompute pass.
+        var modelFailed = false
     }
 
     @Published private(set) var entries: [UUID: Entry] = [:]
@@ -231,17 +238,28 @@ final class TaskAdvisorStore: ObservableObject {
         let facts = TaskAdvisorFacts.make(task: task, among: tasks, now: now)
         let fingerprint = facts.fingerprint
         if let entry = entries[id], entry.fingerprint == fingerprint {
-            // Rung 1 — re-served. Precompute reaching a warm entry is the SUCCESS case,
-            // not a wasted call: it means the work already happened off the open-moment.
-            // It is not counted, though — a speculative pass over the same unchanged task
-            // every time the Brief runs would inflate the memory rung into meaninglessness.
-            if presence == .userIsLooking {
-                ledger.record(.memory, for: .advisor, now: now)
-                // The precompute payoff: a judgment prepared before they arrived is being
-                // seen for the first time, so now it counts as offered.
-                recordPendingOfferIfNeeded(id)
+            // A model failure is the one settled outcome that owes a retry rather than
+            // a cache hit (whether it landed on the floor or on `.failed`) — nothing about the facts will change to invalidate this
+            // fingerprint on its own, so treating it as re-served would leave a
+            // failed judgment silent forever. Only on an open-moment visit: a
+            // precompute pass has no standing to retry a failure nobody is
+            // waiting on. Falls through to re-judge below rather than returning.
+            if presence == .userIsLooking, entry.modelFailed {
+                entries[id] = nil
+                readings.forget(taskID: id)
+            } else {
+                // Rung 1 — re-served. Precompute reaching a warm entry is the SUCCESS case,
+                // not a wasted call: it means the work already happened off the open-moment.
+                // It is not counted, though — a speculative pass over the same unchanged task
+                // every time the Brief runs would inflate the memory rung into meaninglessness.
+                if presence == .userIsLooking {
+                    ledger.record(.memory, for: .advisor, now: now)
+                    // The precompute payoff: a judgment prepared before they arrived is being
+                    // seen for the first time, so now it counts as offered.
+                    recordPendingOfferIfNeeded(id)
+                }
+                return
             }
-            return
         }
         // Rung 1, for a "no": the person already declined THIS reading — same task, same
         // facts. Remembered across launches by `HumanVerdictStore` and bound to the
@@ -464,8 +482,10 @@ final class TaskAdvisorStore: ObservableObject {
         // empty, so the retry seam still exists for the genuinely blank case.
         case .timedOut:
             entry.state = floor ?? .failed(retryable: true)
+            entry.modelFailed = true
         case .failed:
             entry.state = floor ?? .failed(retryable: true)
+            entry.modelFailed = true
         }
         entry.work = nil
         entries[id] = entry
