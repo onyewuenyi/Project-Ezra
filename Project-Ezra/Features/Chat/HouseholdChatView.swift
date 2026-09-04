@@ -24,6 +24,7 @@ import SwiftUI
 
 struct HouseholdChatView: View {
     @Environment(\.managedObjectContext) private var context
+    @Environment(\.openCapture) private var openCapture
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
@@ -36,6 +37,9 @@ struct HouseholdChatView: View {
     @State private var sendPulse = 0
     @State private var opened: TaskItem?
     @State private var openedPeers: [TaskItem] = []
+    /// The Undo pill for a row swiped from an answer — the same way back the list gives.
+    @State private var notice: UndoNotice?
+    @State private var stopPulse = 0
     @FocusState private var composing: Bool
 
     private var currentUserID: UUID? { profilesResults.first?.linkedMemberID }
@@ -55,7 +59,12 @@ struct HouseholdChatView: View {
                 .safeAreaInset(edge: .bottom) {
                     ChatComposerBar(
                         draft: $draft, placeholder: "Ask about anything you've got on",
-                        isReplying: store.isReplying, onSend: send, focus: $composing)
+                        isReplying: store.isReplying, onSend: send,
+                        onStop: {
+                            stopPulse += 1
+                            store.cancel(key: HouseholdInquiryScope.singletonKey)
+                        },
+                        focus: $composing)
                 }
                 .background(Palette.background)
                 .scrollDismissesKeyboard(.interactively)
@@ -81,7 +90,10 @@ struct HouseholdChatView: View {
                     }
                 }
                 .taskDetailSheet($opened, peers: openedPeers)
+                .undoNotice($notice)
                 .sensoryFeedback(.impact(weight: .light), trigger: sendPulse)
+                .sensoryFeedback(.impact(flexibility: .rigid), trigger: stopPulse)
+                .chatReplyLanding(store.messages)
                 .onAppear {
                     // The person SUMMONED this (F-12: Ask is a sheet, not a tab), so the
                     // keyboard rises with it — the same rule as the task chat with no
@@ -111,15 +123,33 @@ struct HouseholdChatView: View {
                     if store.messages.isEmpty {
                         emptyState
                     } else {
-                        ForEach(store.messages) { message in
+                        // The glance: the household's counts as one-tap questions, above
+                        // the day answer, until the first question is asked — under the
+                        // page's date, so the opener reads as today's.
+                        if !hasAsked {
+                            ChatDayKicker(date: facts.now)
+                            ChatSummaryStrip(items: HouseholdChatPrompt.summary(for: facts)) { send($0) }
+                        }
+                        ForEach(Array(store.messages.enumerated()), id: \.element.id) { index, message in
+                            if ChatThreadRhythm.needsDivider(
+                                before: message, after: index > 0 ? store.messages[index - 1] : nil)
+                            {
+                                ChatTimeDivider(date: message.sentAt)
+                            }
                             line(message)
+                                .id(message.id.uuidString)
                         }
                         // The opener alone is not a conversation yet: keep the chips —
                         // they teach what the floor answers — until the first question.
-                        if !store.messages.contains(where: { $0.role == .user }) {
+                        // After one, the scope's FOLLOW-UPS take their place under the
+                        // latest answer.
+                        if !hasAsked {
                             ChatStarterChips(questions: HouseholdChatPrompt.starterQuestions(for: facts)) {
                                 send($0)
                             }
+                        } else if !followUps.isEmpty {
+                            ChatStarterChips(questions: followUps) { send($0) }
+                                .transition(.opacity)
                         }
                     }
                     Color.clear.frame(height: 1).id(Self.bottomAnchor)
@@ -129,9 +159,11 @@ struct HouseholdChatView: View {
                 .padding(.bottom, Spacing.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // The list's swipes on cited rows need this OUTSIDE a `List` (iOS 27).
+            .swipeActionsContainer()
             .onChange(of: store.messages) { _, _ in
                 withAnimation(reduceMotion ? nil : Motion.settle) {
-                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                    proxy.scrollTo(scrollTarget, anchor: scrollTarget == Self.bottomAnchor ? .bottom : .top)
                 }
             }
             .onChange(of: composing) { _, focused in
@@ -141,34 +173,87 @@ struct HouseholdChatView: View {
         }
     }
 
+    private var hasAsked: Bool { store.messages.contains { $0.role == .user } }
+
+    /// Where the thread scrolls when a line lands. An answer with ROWS scrolls its
+    /// QUESTION to the top so the sentence and the rows are read from the top down —
+    /// scrolling a six-row answer to its bottom hid the sentence that explained it.
+    /// Everything else settles to the bottom.
+    private var scrollTarget: String {
+        guard let last = store.messages.last, last.role == .advisor, last.state == .sent,
+            !last.citedTaskIDs.isEmpty,
+            let question = store.messages.last(where: { $0.role == .user })
+        else { return Self.bottomAnchor }
+        return question.id.uuidString
+    }
+
+    /// The scope's follow-ups for the latest ANSWERED question — nothing while a reply
+    /// is in flight, nothing that was already asked in this thread.
+    private var followUps: [String] {
+        guard !store.isReplying, let last = store.messages.last, last.role == .advisor, last.state == .sent,
+            let question = store.messages.last(where: { $0.role == .user })?.text
+        else { return [] }
+        let asked = store.messages.filter { $0.role == .user }.map(\.text)
+        return HouseholdInquiryScope(facts: facts).followUps(after: question, asked: asked)
+    }
+
+    /// Nothing open and nothing finished: there is nothing to ask about yet, and saying
+    /// so with the way in beats three chips that all answer "nothing".
+    private var nothingToAsk: Bool { facts.open.isEmpty && facts.done.isEmpty }
+
+    @ViewBuilder
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text(
-                facts.members.count > 1
-                    ? "Ask about the whole household." : "Ask about everything you've got on."
-            )
-            .sectionHeaderStyle()
-            Text("What's due, what's stuck, who's carrying what. Everything you ask stays on this device.")
-                .supportingStyle()
-            ChatStarterChips(questions: HouseholdChatPrompt.starterQuestions(for: facts)) { question in
-                send(question)
+        if nothingToAsk {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Text("Nothing to ask about yet.")
+                    .sectionHeaderStyle()
+                Text("Capture something first — then ask what's due, what's stuck, who's carrying what.")
+                    .supportingStyle()
+                Button {
+                    dismiss()
+                    openCapture()
+                } label: {
+                    Label("Capture something", systemImage: "waveform")
+                        .font(.controlLabel)
+                        .foregroundStyle(Palette.accentFlat)
+                        .padding(.horizontal, Spacing.md)
+                        .frame(minHeight: LayoutMetrics.hitTarget)
+                        .background(Palette.elevatedSurface, in: Capsule())
+                        .overlay { Capsule().strokeBorder(Palette.border, lineWidth: 0.5) }
+                }
+                .buttonStyle(.pressable)
             }
-            .padding(.top, Spacing.xs)
+            .padding(.top, Spacing.md)
+        } else {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Text(
+                    facts.members.count > 1
+                        ? "Ask about the whole household." : "Ask about everything you've got on."
+                )
+                .sectionHeaderStyle()
+                Text("What's due, what's stuck, who's carrying what. Everything you ask stays on this device.")
+                    .supportingStyle()
+                ChatStarterChips(questions: HouseholdChatPrompt.starterQuestions(for: facts)) { question in
+                    send(question)
+                }
+                .padding(.top, Spacing.xs)
+            }
+            .padding(.top, Spacing.md)
         }
-        .padding(.top, Spacing.md)
     }
 
     @ViewBuilder
     private func line(_ message: ChatMessage) -> some View {
         switch message.role {
         case .user:
-            ChatUserLine(text: message.text)
+            ChatUserLine(text: message.text, onAskAgain: store.isReplying ? nil : { send(message.text) })
                 .transition(reduceMotion ? .opacity : Motion.cardEntry)
         case .advisor:
             let cited = citedTasks(message)
             ChatAdvisorLine(
                 message: message,
                 citedTasks: cited,
+                gestures: ChatRowGestures(allTasks: allTasks, currentUserID: currentUserID, notice: $notice),
                 onOpenTask: { task in
                     openedPeers = cited
                     opened = task
@@ -196,6 +281,12 @@ struct HouseholdChatView: View {
         draft = ""
         withAnimation(reduceMotion ? nil : Motion.settle) {
             store.ask(question, facts: facts)
+            // An instant answer with rows is something to LOOK at; the keyboard drops
+            // so the rows are not behind it. A model answer keeps the keyboard — the
+            // person is likely to type the next question while it thinks.
+            if store.lastRoute == .floor, store.messages.last?.citedTaskIDs.isEmpty == false {
+                composing = false
+            }
             // A floor answer SURFACED its rows — orientation's input (F-11). Stamped
             // here because the floor is pure over facts and cannot touch the store.
             if store.lastRoute == .floor, let answer = store.messages.last, answer.role == .advisor {

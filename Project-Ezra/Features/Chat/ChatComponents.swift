@@ -3,7 +3,7 @@
 //  Project-Ezra
 //
 //  The pieces both chats are made of — the task chat (a sheet over one task) and the
-//  household chat (the Ask tab). One vocabulary, so a person who has used one has
+//  household chat (the Ask sheet). One vocabulary, so a person who has used one has
 //  used the other:
 //
 //  - The person's lines sit in a bubble, trailing (`elevatedSurface`, the composer
@@ -11,10 +11,16 @@
 //    bubble, no avatar, no name, no badge saying a model wrote it. Whose turn a line
 //    is needs one cue, and the bubble is it.
 //  - A reply in flight is the `ThinkingLine` — the mark for a wait the person asked
-//    for. Never a typing ellipsis, never a spinner.
+//    for. Never a typing ellipsis, never a spinner. While it runs, Send becomes STOP:
+//    a wait the person asked for is a wait the person may end.
 //  - A reply that cites tasks renders them as rows UNDER the sentence, tappable into
 //    the task: the answer is the navigation.
-//  - Failure is one quiet line and a way back. `.unavailable` reads as absence.
+//  - Under the latest answer, FOLLOW-UPS: two chips the scope shaped to what was just
+//    answered, so the conversation keeps moving without typing.
+//  - Failure is one quiet line and a way back. Stopped is not failure and says so.
+//    `.unavailable` reads as absence.
+//  - A new sitting gets a quiet time divider; a question can be asked again or copied
+//    from its bubble.
 //  - The composer is the pinned-CTA pattern: solid surface, hairline, rides the
 //    keyboard. Send is the surface's one primary action and wears the gradient.
 //
@@ -25,6 +31,8 @@ import SwiftUI
 
 struct ChatUserLine: View {
     let text: String
+    /// "Ask again" — re-sends this question. Nil hides the item (a reply in flight).
+    var onAskAgain: (() -> Void)? = nil
 
     var body: some View {
         HStack {
@@ -39,16 +47,43 @@ struct ChatUserLine: View {
                     in: RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
                 )
                 .fixedSize(horizontal: false, vertical: true)
+                .contextMenu {
+                    if let onAskAgain {
+                        Button {
+                            onAskAgain()
+                        } label: {
+                            Label("Ask again", systemImage: "arrow.counterclockwise")
+                        }
+                    }
+                    Button {
+                        UIPasteboard.general.string = text
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("You asked: \(text)")
     }
 }
 
+/// What a cited row needs to carry the list's own swipes: the set the recommended
+/// action is derived against, who is asking, and the pill a resolution owes.
+struct ChatRowGestures {
+    let allTasks: [TaskItem]
+    let currentUserID: UUID?
+    let notice: Binding<UndoNotice?>
+}
+
 struct ChatAdvisorLine: View {
     let message: ChatMessage
     /// The cited tasks, resolved by the surface (the store holds ids, never objects).
     var citedTasks: [TaskItem] = []
+    /// When present, cited rows carry the record surface's two swipes — the same
+    /// channel, the same meaning (`TaskSwipeActions`): leading advances the lifecycle
+    /// through the task's own recommended action, trailing cancels. "What's due
+    /// today?" becomes a list you can work, not only read.
+    var gestures: ChatRowGestures? = nil
     var onOpenTask: (TaskItem) -> Void = { _ in }
     var onRetry: () -> Void = {}
 
@@ -72,7 +107,14 @@ struct ChatAdvisorLine: View {
                 if !citedTasks.isEmpty {
                     VStack(alignment: .leading, spacing: Spacing.xxs) {
                         ForEach(citedTasks) { task in
-                            ChatCitedTaskRow(task: task) { onOpenTask(task) }
+                            if let gestures {
+                                ChatCitedTaskRow(task: task) { onOpenTask(task) }
+                                    .taskSwipeActions(
+                                        task: task, allTasks: gestures.allTasks,
+                                        currentUserID: gestures.currentUserID, notice: gestures.notice)
+                            } else {
+                                ChatCitedTaskRow(task: task) { onOpenTask(task) }
+                            }
                         }
                     }
                 }
@@ -80,17 +122,24 @@ struct ChatAdvisorLine: View {
             case .failed(let retryable):
                 Text(retryable ? "That didn't come through." : "Not available on this device.")
                     .supportingStyle()
-                if retryable {
-                    Button("Try again", action: onRetry)
-                        .font(.controlLabel)
-                        .foregroundStyle(Palette.accentFlat)
-                        .buttonStyle(.pressableLink)
-                        .minimumHitTarget()
-                }
+                if retryable { retryButton }
+
+            case .stopped:
+                Text("Stopped.")
+                    .supportingStyle()
+                retryButton
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+    }
+
+    private var retryButton: some View {
+        Button("Try again", action: onRetry)
+            .font(.controlLabel)
+            .foregroundStyle(Palette.accentFlat)
+            .buttonStyle(.pressableLink)
+            .minimumHitTarget()
     }
 }
 
@@ -152,18 +201,61 @@ struct ChatCitedTaskRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
+        // A row whose task has since been finished recedes rather than vanishing: the
+        // answer stays a record of what was asked, and the row says what happened.
+        .recessed(task.status.isResolved)
         .accessibilityLabel(task.title + (placing.map { ", \($0)" } ?? ""))
         .accessibilityHint("Opens the task")
     }
 }
 
-// MARK: - Empty state
+// MARK: - Rhythm
 
+/// A quiet timestamp between sittings — "Today 8:00 AM", "Yesterday 6:12 PM",
+/// "Tue 2 Sep". Centred, metadata weight, never a card.
+/// The day answer's date — "Friday, 4 September" — above the opener, so the first
+/// line reads as today's page. Metadata weight, leading, no chrome.
+struct ChatDayKicker: View {
+    let date: Date
+
+    var body: some View {
+        Text(ChatThreadRhythm.dayLabel(for: date).uppercased())
+            .font(.chipLabel)
+            .tracking(0.6)
+            .foregroundStyle(Palette.mutedText)
+            .accessibilityLabel(ChatThreadRhythm.dayLabel(for: date))
+    }
+}
+
+struct ChatTimeDivider: View {
+    let date: Date
+
+    var body: some View {
+        Text(ChatThreadRhythm.dividerLabel(for: date))
+            .metadataStyle()
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Spacing.xxs)
+            .accessibilityLabel(ChatThreadRhythm.dividerLabel(for: date))
+    }
+}
+
+// MARK: - Suggestions
+
+/// Questions as chips — the empty state's starters and, under the latest answer, the
+/// scope's follow-ups. Tapping one asks it.
 struct ChatStarterChips: View {
     let questions: [String]
     let onPick: (String) -> Void
+    /// What VoiceOver calls the group — "Suggested questions" by default.
+    var groupLabel = "Suggested questions"
 
     var body: some View {
+        chips
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(groupLabel)
+    }
+
+    private var chips: some View {
         FlowLayout {
             ForEach(questions, id: \.self) { question in
                 Button {
@@ -184,6 +276,68 @@ struct ChatStarterChips: View {
     }
 }
 
+/// The household at a glance — "2 overdue · 3 due today · 1 waiting" — as a row of
+/// compact counts, each a floor question one tap away. The glance and the ask are the
+/// same object, so a number you notice is a number you can open.
+struct ChatSummaryStrip: View {
+    let items: [HouseholdChatPrompt.SummaryItem]
+    let onPick: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Spacing.xs) {
+                ForEach(items, id: \.label) { item in
+                    Button {
+                        onPick(item.question)
+                    } label: {
+                        Text(item.label)
+                            .font(.chipLabel)
+                            .monospacedDigit()
+                            .foregroundStyle(Palette.secondaryText)
+                            .padding(.horizontal, Spacing.xs + 2)
+                            .padding(.vertical, Spacing.xxs + 1)
+                            .background(Palette.secondarySurface, in: Capsule())
+                    }
+                    .buttonStyle(.pressableLink)
+                    .accessibilityLabel(item.label)
+                    .accessibilityHint("Asks: \(item.question)")
+                }
+            }
+        }
+        .scrollClipDisabled()
+    }
+}
+
+// MARK: - Reply landing (announce + feel)
+
+/// The moment an answer lands: VoiceOver hears it, the hand feels it. Attached to the
+/// thread by both chats so a reply arriving off-screen or behind the keyboard is
+/// never silent for someone who cannot see it land.
+private struct ReplyLandingModifier: ViewModifier {
+    let messages: [ChatMessage]
+
+    /// The id of the latest SENT advisor line — the value whose change means "landed".
+    private var latestAnsweredID: UUID? {
+        messages.last { $0.role == .advisor && $0.state == .sent }?.id
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .sensoryFeedback(.impact(weight: .light), trigger: latestAnsweredID)
+            .onChange(of: latestAnsweredID) { _, id in
+                guard let id, let message = messages.first(where: { $0.id == id }), !message.text.isEmpty
+                else { return }
+                AccessibilityNotification.Announcement("Ezra: \(message.text)").post()
+            }
+    }
+}
+
+extension View {
+    func chatReplyLanding(_ messages: [ChatMessage]) -> some View {
+        modifier(ReplyLandingModifier(messages: messages))
+    }
+}
+
 // MARK: - Composer
 
 struct ChatComposerBar: View {
@@ -191,6 +345,9 @@ struct ChatComposerBar: View {
     let placeholder: String
     let isReplying: Bool
     let onSend: (String) -> Void
+    /// Stop the reply in flight. While a reply is pending Send becomes Stop — the one
+    /// control, two verbs, never both at once.
+    var onStop: () -> Void = {}
     var focus: FocusState<Bool>.Binding
 
     private var canSend: Bool {
@@ -218,20 +375,40 @@ struct ChatComposerBar: View {
                 }
                 .accessibilityLabel("Your question")
 
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.glyphAction(.semibold))
-                    .foregroundStyle(Palette.onAccent)
-                    .frame(width: 36, height: 36)
-                    .background(Palette.accentGradient, in: Circle())
+            if isReplying {
+                Button(action: onStop) {
+                    Image(systemName: "stop.fill")
+                        .font(.glyphSmall(.semibold))
+                        .foregroundStyle(Palette.primaryText)
+                        .frame(width: 36, height: 36)
+                        .background(Palette.elevatedSurface, in: Circle())
+                        .overlay { Circle().strokeBorder(Palette.border, lineWidth: 0.5) }
+                }
+                .buttonStyle(.pressable)
+                .minimumHitTarget(around: 36)
+                .accessibilityLabel("Stop")
+                .accessibilityHint("Stops the answer in progress")
+                .transition(.opacity)
+            } else {
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.glyphAction(.semibold))
+                        .foregroundStyle(Palette.onAccent)
+                        .frame(width: 36, height: 36)
+                        .background(Palette.accentGradient, in: Circle())
+                }
+                .buttonStyle(.pressableProminent)
+                .disabled(!canSend)
+                .opacity(canSend ? 1 : 0.4)
+                .scaleEffect(canSend ? 1 : 0.92)
+                .animation(Motion.fade, value: canSend)
+                .minimumHitTarget(around: 36)
+                .accessibilityLabel("Send")
+                .accessibilityHint("Asks Ezra")
+                .transition(.opacity)
             }
-            .buttonStyle(.pressableProminent)
-            .disabled(!canSend)
-            .opacity(canSend ? 1 : 0.4)
-            .minimumHitTarget(around: 36)
-            .accessibilityLabel("Send")
-            .accessibilityHint(isReplying ? "Waiting for the last answer" : "Asks Ezra")
         }
+        .animation(Motion.fade, value: isReplying)
         .padding(.horizontal, Spacing.lg)
         .padding(.top, Spacing.sm)
         .padding(.bottom, Spacing.xs)

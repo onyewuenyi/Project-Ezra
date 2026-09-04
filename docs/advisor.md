@@ -61,3 +61,24 @@ The invariants are in `CLAUDE.md`; this is the why.
 - **Dismissals teach (F-10).** The most frequent human verdict the Advisor receives used to
   be discarded. It now rides the prompt as an INTERNAL preference line — never the
   fingerprint, never evidence — with `CorrectionProfile`'s twice-then-rule threshold.
+
+## The chat's craft pass (2026-09-04, eight moves)
+
+- **Follow-ups under the latest answer.** `InquiryScope.followUps(after:asked:)` (default none): two chips shaped by what was just answered — a list invites "Which one should I do first?", a person's list invites their next move and their waits, the day answer offers the views it hides, a model answer brings the person back to the floor's starters — never a question already asked in the thread. Every model-bound chip carries a reasoning word and every floor chip stays a floor question, so the chips route the same way typed questions do (test-pinned). The conversation keeps moving without typing, and it never dead-ends on prose.
+- **The glance strip.** `HouseholdChatPrompt.summary(for:)`: the household's non-zero counts in triage order — overdue · due today · waiting · decisions · open · done — as compact chips above the day answer until the first question. Each IS a floor question, so the number you notice is the number you can open. Zero rows are never shown; "0 open" alone survives so the strip is never empty.
+- **Nothing to ask about yet.** With no open and no finished work, the Ask sheet says so and offers Capture (dismiss, then `\.openCapture`) instead of three chips that all answer "nothing".
+- **Stop.** While a reply is pending, Send becomes Stop — one control, two verbs, never both. Stopping leaves a `.stopped` slot ("Stopped." + Try again), a new `ChatMessage.State`: the person chose it, so it is not a failure and must not read like one. `InquiryStore.cancel` and a `.cancelled` outcome both land there; `retry` accepts it.
+- **Reply landing.** `chatReplyLanding(_:)` on both threads: a light impact when an answer lands, and a VoiceOver announcement of it — an answer arriving off-screen or behind the keyboard is never silent for someone who cannot see it land.
+- **Time dividers.** `ChatMessage.sentAt` and `ChatThreadRhythm`: a quiet "Today 8:00 AM" / "Yesterday …" / "Tue 2 Sep" precedes a line that starts a new sitting (an hour or more after the line before it), never every line. Conversations stay in-memory per launch — the primitive's rule — so this marks sittings within a launch.
+- **Ask again / Copy.** A long-press on a question bubble re-asks it (hidden while a reply is in flight) or copies it.
+- **The live Send.** Send scales and fades with the draft's emptiness under `Motion.fade`, so the control reads as waking up rather than switching on.
+
+## The chat's second craft pass (2026-09-04, six moves)
+
+- **Rows you can work.** Cited rows in the Ask sheet carry the record surface's two swipes through the same modifier the list uses (`TaskSwipeActions` via `ChatRowGestures`): leading performs the task's own recommended action, trailing cancels, both with the list's Undo pill (the sheet now hosts one). "What's due today?" is a list you can clear, not only read — and it is the SAME channel with the SAME meaning, never a chat-only verb. The thread's `ScrollView` wears `swipeActionsContainer()`, the iOS 27 seam that lets rows swipe outside a `List`.
+- **Finished rows recede.** A cited row whose task has since been resolved dims (`.recessed`) and says "Done" rather than disappearing: the answer stays a record of what was asked.
+- **Answers with rows are read from the top.** A landed answer that carries rows scrolls its QUESTION to the top so the sentence and the first rows are in view; everything else settles to the bottom. Scrolling a seven-row answer to its bottom hid the sentence that explained it.
+- **The keyboard drops for rows.** A chip that yields an instant answer with rows drops the keyboard so the rows are not behind it; a model answer keeps it, because the next question is likely being typed while it thinks.
+- **The page's date.** "FRIDAY, 4 SEPTEMBER" above the glance strip and the day answer, so the opener reads as today's page rather than a message from nowhere.
+- **Small honesties.** Stop pulses a rigid impact so the hand knows it landed; chip groups announce themselves to VoiceOver as "Suggested questions".
+

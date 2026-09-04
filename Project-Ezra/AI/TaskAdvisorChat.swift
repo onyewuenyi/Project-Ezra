@@ -48,6 +48,9 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
         /// `.unavailable` (no model), which the surface should never reach because
         /// the entry point hides itself; kept so the vocabulary stays honest.
         case failed(retryable: Bool)
+        /// The PERSON stopped this reply (the composer's stop control). Not a failure
+        /// — nothing went wrong — so it reads "Stopped." and offers the same way back.
+        case stopped
     }
 
     let id: UUID
@@ -59,16 +62,57 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
     /// with or a title the reply named that the facts actually hold — never a model's
     /// claim about the graph.
     var citedTaskIDs: [UUID]
+    /// When the line was sent (a question) or landed (an answer). Drives the thread's
+    /// time dividers and survives the Ask tab's archive.
+    var sentAt: Date
 
     init(
         id: UUID = UUID(), role: Role, text: String, state: State = .sent,
-        citedTaskIDs: [UUID] = []
+        citedTaskIDs: [UUID] = [], sentAt: Date = Date()
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.state = state
         self.citedTaskIDs = citedTaskIDs
+        self.sentAt = sentAt
+    }
+}
+
+// MARK: - Thread rhythm (pure)
+
+enum ChatThreadRhythm {
+    /// A divider precedes a line when it starts a new sitting — more than this long
+    /// after the line before it, or when it is the first line and older than this.
+    static let sittingGap: TimeInterval = 60 * 60
+
+    static func needsDivider(before message: ChatMessage, after previous: ChatMessage?, now: Date = Date()) -> Bool {
+        guard let previous else { return now.timeIntervalSince(message.sentAt) > sittingGap }
+        return message.sentAt.timeIntervalSince(previous.sentAt) > sittingGap
+    }
+
+    /// The day answer's kicker: "Friday, 4 September" — the page's date, so the opener
+    /// reads as today's page rather than a message from nowhere.
+    static func dayLabel(for date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE, d MMMM"
+        return f.string(from: date)
+    }
+
+    /// "Today 8:00 AM" · "Yesterday 6:12 PM" · "Tue 2 Sep" — the reference design's
+    /// quiet timestamp, relative where relative reads naturally.
+    static func dividerLabel(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let time = DateFormatter()
+        time.dateFormat = "h:mm a"
+        if calendar.isDate(date, inSameDayAs: now) { return "Today " + time.string(from: date) }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+            calendar.isDate(date, inSameDayAs: yesterday)
+        {
+            return "Yesterday " + time.string(from: date)
+        }
+        let day = DateFormatter()
+        day.dateFormat = "EEE d MMM"
+        return day.string(from: date)
     }
 }
 
@@ -143,6 +187,9 @@ struct TaskInquiryScope: InquiryScope {
     // No per-turn context: the facts block in the instructions carries everything.
 
     func starterQuestions() -> [String] { TaskAdvisorChatPrompt.starterQuestions(for: facts) }
+    func followUps(after question: String, asked: [String]) -> [String] {
+        TaskAdvisorChatPrompt.followUps(for: facts, asked: asked)
+    }
 }
 
 /// One turn, as the responder is given it.
@@ -189,6 +236,14 @@ enum TaskAdvisorChatPrompt {
         - If the question has nothing to do with this task, say in one sentence that
           you only know this task.
         """
+
+    /// What to ask next, under the latest answer: the task's starter questions the
+    /// person has not asked yet, at most two. Chips, not prose — the conversation
+    /// keeps going without typing, and every chip is a question this task can take.
+    static func followUps(for facts: TaskAdvisorFacts, asked: [String]) -> [String] {
+        let askedSet = Set(asked.map { $0.lowercased() })
+        return Array(starterQuestions(for: facts).filter { !askedSet.contains($0.lowercased()) }.prefix(2))
+    }
 
     /// Three questions worth asking THIS task, from its shape — the empty state's
     /// suggestions. Deterministic, so the chat opens knowing what is askable here

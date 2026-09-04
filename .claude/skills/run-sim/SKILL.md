@@ -62,8 +62,9 @@ Append to the `simctl launch` line:
 - `-HoldUnderstanding` — hold the arc on the thinking orb instead of parsing. Pair with `-OpenCapture "text"`.
 - `-OpenTaskDetail [N]` — open the full-screen detail pager on the Nth visible row. 
 - `-OpenAdvisorChat` — present the Advisor chat sheet over the opened detail; add `-ChatFixture` to seed a canned thread (question · answer · reply in flight) so the surface is reviewable with no model; or `-AskAdvisor "question"` to send one live question. Pair with `-InitialTab 1 -OpenTaskDetail 0`.
-- `-AskHousehold "question"` sends one question through the live store (floor questions answer with rows even with no model — try `"What's overdue?"` with `-SeedTodayFixtures`); `-HouseholdChatFixture` seeds a canned thread. `-HouseholdChatEval -EvalToFile` writes the eval report to the app container's Documents.
-- `-FocusAsk` — raise the Ask tab's keyboard at launch (with the Simulator's hardware keyboard OFF: `defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false`, then restart Simulator) to check the composer and the orb against it. NOTE: two devices named "iPhone 17 Pro" (iOS 26.4 and 27.0) may both be booted; `simctl launch` by NAME then hangs — use the iOS 27 device's UDID.
+- `-AskHousehold "question"` sends one question through the live store (floor questions answer with rows even with no model — try `"What's overdue?"` with `-SeedFlowFixtures`; `-SeedTodayFixtures` went with the Brief); `-HouseholdChatFixture` seeds a canned thread. `-HouseholdChatEval -EvalToFile` writes the eval report to the app container's Documents.
+- `-OpenAsk` — summon the Ask sheet as a person would (the day answer + glance strip, or the nothing-to-ask state on an empty store). On a FRESH install pre-grant the mic first or the permission alert covers the sheet: `xcrun simctl privacy <udid> grant microphone amanze-studios.Project-Ezra`.
+- `-FocusAsk` — raise the Ask sheet's keyboard at launch (with the Simulator's hardware keyboard OFF: `defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false`, then restart Simulator) to check the composer and the orb against it. NOTE: two devices named "iPhone 17 Pro" (iOS 26.4 and 27.0) may both be booted; `simctl launch` by NAME then hangs — use the iOS 27 device's UDID.
 
 Example — land on the seeded Tasks surface:
 ```bash

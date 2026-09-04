@@ -89,7 +89,12 @@ struct TaskAdvisorChatView: View {
                 .safeAreaInset(edge: .bottom) {
                     ChatComposerBar(
                         draft: $draft, placeholder: "Ask about this task",
-                        isReplying: isReplying, onSend: send, focus: $composing)
+                        isReplying: isReplying, onSend: send,
+                        onStop: {
+                            actionPulse += 1
+                            store.cancel(taskID: task.uuid)
+                        },
+                        focus: $composing)
                 }
                 .background(Palette.background)
                 .scrollDismissesKeyboard(.interactively)
@@ -119,6 +124,7 @@ struct TaskAdvisorChatView: View {
                 .taskDetailSheet($openedRelated)
                 .sensoryFeedback(.impact(weight: .light), trigger: sendPulse)
                 .sensoryFeedback(.impact(flexibility: .soft), trigger: actionPulse)
+                .chatReplyLanding(messages)
                 .alert("Mark decided", isPresented: $showDecisionPrompt) {
                     TextField("What did you decide? (optional)", text: $decisionChoice)
                     Button("Mark decided") {
@@ -156,8 +162,17 @@ struct TaskAdvisorChatView: View {
                     if messages.isEmpty {
                         emptyState
                     } else {
-                        ForEach(messages) { message in
+                        ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                            if ChatThreadRhythm.needsDivider(
+                                before: message, after: index > 0 ? messages[index - 1] : nil)
+                            {
+                                ChatTimeDivider(date: message.sentAt)
+                            }
                             line(message)
+                        }
+                        if !followUps.isEmpty {
+                            ChatStarterChips(questions: followUps) { send($0) }
+                                .transition(.opacity)
                         }
                     }
                     Color.clear.frame(height: 1).id(Self.bottomAnchor)
@@ -221,6 +236,16 @@ struct TaskAdvisorChatView: View {
         )
     }
 
+    /// The scope's follow-ups for the latest answered question — nothing while a reply
+    /// is in flight, nothing already asked.
+    private var followUps: [String] {
+        guard !isReplying, let last = messages.last, last.role == .advisor, last.state == .sent,
+            let question = messages.last(where: { $0.role == .user })?.text
+        else { return [] }
+        let asked = messages.filter { $0.role == .user }.map(\.text)
+        return TaskInquiryScope(facts: facts)?.followUps(after: question, asked: asked) ?? []
+    }
+
     /// Where the conversation starts: three things worth asking about this task,
     /// from its shape. Under the opener when there is one; alone otherwise.
     private var emptyState: some View {
@@ -243,7 +268,7 @@ struct TaskAdvisorChatView: View {
     private func line(_ message: ChatMessage) -> some View {
         switch message.role {
         case .user:
-            ChatUserLine(text: message.text)
+            ChatUserLine(text: message.text, onAskAgain: isReplying ? nil : { send(message.text) })
                 .transition(reduceMotion ? .opacity : Motion.cardEntry)
         case .advisor:
             ChatAdvisorLine(

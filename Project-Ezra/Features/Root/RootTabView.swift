@@ -228,6 +228,9 @@ struct RootTabView: View {
             HouseholdChatStore.shared.ask(args[flag + 1], facts: facts)
             showAsk = true
         }
+        // `-OpenAsk`: the sheet as a person would summon it — the day answer, the glance
+        // strip, or the nothing-to-ask state on an empty store.
+        if args.contains("-OpenAsk") { showAsk = true }
         #endif
     }
 

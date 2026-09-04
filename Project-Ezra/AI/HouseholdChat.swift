@@ -601,6 +601,91 @@ enum HouseholdChatPrompt {
 
     static var maxLines: Int { HouseholdInquiryScope.maxLines }
 
+    /// The household at a glance, as tappable counts — each one IS a floor question,
+    /// so the glance and the ask are the same object. Only what is non-zero, in the
+    /// order a person triages: overdue · today · waiting · decisions · open · done.
+    struct SummaryItem: Equatable, Sendable {
+        let label: String
+        let question: String
+    }
+
+    static func summary(for facts: HouseholdChatFacts) -> [SummaryItem] {
+        var items: [SummaryItem] = []
+        func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)" }
+        if !facts.overdue.isEmpty { items.append(.init(label: count(facts.overdue.count, "overdue"), question: "What's overdue?")) }
+        if !facts.dueToday.isEmpty { items.append(.init(label: count(facts.dueToday.count, "due today"), question: "What's due today?")) }
+        if !facts.blocked.isEmpty { items.append(.init(label: count(facts.blocked.count, "waiting"), question: "What's waiting on something?")) }
+        if !facts.decisions.isEmpty {
+            items.append(.init(label: count(facts.decisions.count, facts.decisions.count == 1 ? "decision" : "decisions"), question: "What needs a decision?"))
+        }
+        items.append(.init(label: count(facts.open.count, "open"), question: "How many tasks are open?"))
+        if !facts.done.isEmpty { items.append(.init(label: count(facts.done.count, "done this week"), question: "What did we get done this week?")) }
+        return items
+    }
+
+    /// What to ask next, under the latest answer. Shaped by what was just answered
+    /// (a list invites "which first?"; a person invites their waits), never a
+    /// question already asked in this thread, at most two. Every model-bound chip
+    /// carries a reasoning word so it stays a model question; every floor chip stays
+    /// a floor question — the routing is decided by the words, as always.
+    static func followUps(after question: String, facts: HouseholdChatFacts, asked: [String]) -> [String] {
+        var out: [String] = []
+        let person = facts.member(named: question)
+        let name = person.map { $0.isYou ? "I" : $0.name }
+        // "Which one first?" only makes sense when the answer listed something: an empty
+        // list ("Nothing is overdue.") gets the other views instead.
+        let listed = (HouseholdChatFloor.answer(question: question, facts: facts)?.citedTaskIDs.count ?? 0) > 0
+        switch HouseholdChatFloor.shape(of: question, facts: facts) {
+        case .overdue, .dueToday, .dueThisWeek, .urgent:
+            if listed { out.append(name == nil ? "Which one should I do first?" : "Which should \(name!) do first?") }
+            if facts.dueToday.isEmpty == false, !question.lowercased().contains("today") { out.append("What's due today?") }
+            else if !facts.overdue.isEmpty, !question.lowercased().contains("overdue") { out.append("What's overdue?") }
+        case .blocked:
+            if listed { out.append("What could I do while I wait?") }
+            if !facts.overdue.isEmpty { out.append("What's overdue?") }
+            if !facts.dueToday.isEmpty { out.append("What's due today?") }
+        case .decisions:
+            if listed { out.append("What should I weigh first?") }
+            out.append("What's coming up this week?")
+        case .personOpen:
+            if let name, name != "I" {
+                out.append("What should \(name) do first?")
+                out.append("What is \(name) waiting on?")
+            } else {
+                out.append("Which one should I do first?")
+                out.append("What am I waiting on?")
+            }
+        case .whoMost:
+            if let top = facts.members.map({ ($0, facts.openTasks(of: $0).count) }).max(by: { $0.1 < $1.1 })?.0, !top.isYou {
+                out.append("What could \(top.name) hand off?")
+            }
+            out.append("What's overdue?")
+        case .done:
+            out.append("What's coming up this week?")
+        case .today:
+            // The day answer already IS "which first" — offer the two views it hides.
+            if !facts.overdue.isEmpty { out.append("What's overdue?") }
+            if !facts.blocked.isEmpty { out.append("What's waiting on something?") }
+            out.append("What did we get done this week?")
+        case .countOpen, .unowned:
+            out.append("What's overdue?")
+            out.append("Who has the most on their plate?")
+        case nil:
+            // A model answer: bring the person back to the closed questions that
+            // answer instantly, so the thread never dead-ends on prose.
+            out.append(contentsOf: starterQuestions(for: facts))
+        }
+        let askedSet = Set(asked.map { $0.lowercased() })
+        var seen = Set<String>()
+        let shaped = out.filter { seen.insert($0.lowercased()).inserted && !askedSet.contains($0.lowercased()) }
+        // Never a dead end: when the shaped chips are all spent (an empty list, every
+        // view already asked), the floor's starters take over.
+        let fallback = starterQuestions(for: facts).filter {
+            !askedSet.contains($0.lowercased()) && !shaped.contains($0)
+        }
+        return Array((shaped + fallback).prefix(2))
+    }
+
     /// The empty state's suggestions — every one a floor question, so the first tap
     /// answers in two milliseconds with rows, which teaches what this surface is for
     /// better than any copy. Shaped to the household: the load question needs two
@@ -673,6 +758,9 @@ struct HouseholdInquiryScope: InquiryScope {
     }
 
     func starterQuestions() -> [String] { HouseholdChatPrompt.starterQuestions(for: facts) }
+    func followUps(after question: String, asked: [String]) -> [String] {
+        HouseholdChatPrompt.followUps(after: question, facts: facts, asked: asked)
+    }
 }
 
 /// One turn, as the responder is given it.

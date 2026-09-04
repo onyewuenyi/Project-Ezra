@@ -287,7 +287,7 @@ struct TaskAdvisorChatStoreTests {
         #expect(seen[3].continuity == nil)
     }
 
-    @Test("Cancel turns every pending slot into a retryable failure and keeps the question")
+    @Test("Stop turns every pending slot into a STOPPED slot and keeps the question")
     func cancel() async {
         let task = TaskItem(title: "Anything", status: .todo, in: context())
         let store = store { _ in
@@ -299,7 +299,7 @@ struct TaskAdvisorChatStoreTests {
         let messages = store.messages(for: task.uuid)
         #expect(messages.count == 2)
         #expect(messages[0].text == "Why?")
-        #expect(messages[1].state == .failed(retryable: true))
+        #expect(messages[1].state == .stopped)
         #expect(!store.isReplying(for: task.uuid))
     }
 
@@ -357,5 +357,19 @@ struct TaskAdvisorChatPrivacyTests {
     func ownCounters() {
         #expect(IntelligenceWorkload.allCases.contains(.chat))
         #expect(ModelFeature.advisorChat.label == "chat")
+    }
+}
+
+@Suite("Advisor chat — follow-ups")
+struct TaskAdvisorChatFollowUpTests {
+    @Test("Follow-ups are the unasked starters, at most two")
+    func followUps() {
+        let context = TestStore.makeContext()
+        let task = TaskItem(title: "Call the dentist", status: .todo, in: context)
+        let facts = TaskAdvisorFacts.make(task: task, among: [task])
+        let starters = TaskAdvisorChatPrompt.starterQuestions(for: facts)
+        let chips = TaskAdvisorChatPrompt.followUps(for: facts, asked: [starters[0]])
+        #expect(chips == Array(starters.dropFirst().prefix(2)))
+        #expect(TaskAdvisorChatPrompt.followUps(for: facts, asked: starters).isEmpty)
     }
 }

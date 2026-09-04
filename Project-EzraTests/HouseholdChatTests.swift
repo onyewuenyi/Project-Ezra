@@ -299,3 +299,74 @@ struct HouseholdChatPrivacyTests {
         }
     }
 }
+
+@Suite("Household chat — follow-ups, glance, rhythm")
+struct HouseholdChatFollowUpTests {
+
+    private let facts = HouseholdChatEval.fixture()
+
+    @Test("Follow-ups are shaped by the answered question, never repeat, cap at two")
+    func followUps() {
+        let after = HouseholdChatPrompt.followUps(after: "What's overdue?", facts: facts, asked: ["What's overdue?"])
+        #expect(after.count <= 2)
+        #expect(after.first == "Which one should I do first?")
+        #expect(!after.contains("What's overdue?"))
+        // A named person's list invites that person's next move and waits.
+        let maya = HouseholdChatPrompt.followUps(after: "What is Maya working on?", facts: facts, asked: [])
+        #expect(maya == ["What should Maya do first?", "What is Maya waiting on?"])
+        // Every model-bound chip carries a reasoning word; every floor chip is a floor question.
+        for chip in after + maya {
+            let shape = HouseholdChatFloor.shape(of: chip, facts: facts)
+            #expect(shape != nil || InquiryFloor.isReasoning(chip), "\(chip) is neither floor nor model")
+        }
+        // After a model answer the chips are the floor's starters, minus what was asked.
+        let model = HouseholdChatPrompt.followUps(after: "Why is the passport stuck?", facts: facts, asked: ["What's overdue?"])
+        #expect(!model.isEmpty)
+        #expect(!model.contains("What's overdue?"))
+    }
+
+    @Test("The glance lists only non-zero counts, in triage order, each a floor question")
+    func summary() {
+        let items = HouseholdChatPrompt.summary(for: facts)
+        #expect(items.map(\.label) == ["2 overdue", "2 due today", "3 waiting", "2 decisions", "14 open", "3 done this week"])
+        for item in items {
+            #expect(HouseholdChatFloor.shape(of: item.question, facts: facts) != nil, "\(item.question) is not a floor question")
+        }
+        let quiet = HouseholdChatFacts(now: facts.now, members: facts.members, open: [], done: [])
+        #expect(HouseholdChatPrompt.summary(for: quiet).map(\.label) == ["0 open"])
+    }
+
+    @Test("A divider precedes a new sitting, not every line")
+    func rhythm() {
+        let now = Date()
+        let earlier = ChatMessage(role: .user, text: "a", sentAt: now.addingTimeInterval(-3 * 3600))
+        let reply = ChatMessage(role: .advisor, text: "b", sentAt: now.addingTimeInterval(-3 * 3600 + 5))
+        let later = ChatMessage(role: .user, text: "c", sentAt: now)
+        #expect(ChatThreadRhythm.needsDivider(before: earlier, after: nil, now: now))
+        #expect(!ChatThreadRhythm.needsDivider(before: reply, after: earlier, now: now))
+        #expect(ChatThreadRhythm.needsDivider(before: later, after: reply, now: now))
+        #expect(!ChatThreadRhythm.needsDivider(before: later, after: nil, now: now))
+        #expect(ChatThreadRhythm.dividerLabel(for: now, now: now).hasPrefix("Today "))
+        #expect(ChatThreadRhythm.dividerLabel(for: now.addingTimeInterval(-86_400), now: now).hasPrefix("Yesterday "))
+    }
+
+    @Test("Stop leaves a STOPPED slot that retries in place")
+    @MainActor
+    func stopThenRetry() async {
+        var calls = 0
+        let store = HouseholdChatStore(
+            responder: { _ in
+                calls += 1
+                if calls == 1 { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+                return .success("Answer.")
+            }, isModelAvailable: { true })
+        store.ask("Why is the passport stuck?", facts: facts)
+        store.cancel(key: HouseholdInquiryScope.singletonKey)
+        #expect(store.messages[1].state == .stopped)
+        #expect(!store.isReplying)
+        store.retry(replyID: store.messages[1].id, facts: facts)
+        await store.awaitPendingReplies()
+        #expect(store.messages[1].state == .sent)
+        #expect(store.messages[1].text == "Answer.")
+    }
+}

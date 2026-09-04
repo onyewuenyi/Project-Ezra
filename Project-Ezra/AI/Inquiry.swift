@@ -104,9 +104,15 @@ protocol InquiryScope: Sendable {
 
     /// The empty state's suggestions — what is askable here, from the facts.
     func starterQuestions() -> [String]
+
+    /// What to ask next, under the latest answer — shaped by the question just
+    /// answered, never repeating one already asked, at most two. Chips keep the
+    /// conversation moving without typing. Default: nothing.
+    func followUps(after question: String, asked: [String]) -> [String]
 }
 
 extension InquiryScope {
+    func followUps(after question: String, asked: [String]) -> [String] { [] }
     func floor(for question: String) -> InquiryAnswer? { nil }
     func context(for question: String) -> InquiryContext { .none }
     var sessionDiscriminator: String { "" }
@@ -556,14 +562,17 @@ final class InquiryStore<Scope: InquiryScope> {
         conversations[scope.key] = conversation
     }
 
-    /// Retry a failed reply in place — the question stays where it was, the failed slot
-    /// becomes pending again. Only meaningful from `.failed`.
+    /// Retry a failed or stopped reply in place — the question stays where it was, the
+    /// slot becomes pending again. Only meaningful from `.failed` / `.stopped`.
     func retry(replyID: UUID, scope: Scope, now: Date = Date()) {
         guard var conversation = conversations[scope.key],
             let index = conversation.messages.firstIndex(where: { $0.id == replyID }),
-            case .failed = conversation.messages[index].state,
             index > 0, conversation.messages[index - 1].role == .user
         else { return }
+        switch conversation.messages[index].state {
+        case .failed, .stopped: break
+        case .sent, .pending: return
+        }
         let question = conversation.messages[index - 1].text
         conversation.messages[index].state = .pending
         conversation.messages[index].text = ""
@@ -571,15 +580,16 @@ final class InquiryStore<Scope: InquiryScope> {
         start(replyID: replyID, question: question, scope: scope, now: now)
     }
 
-    /// Cancel every reply in flight for a key. The pending slots become retryable
-    /// failures rather than vanishing — the question was asked, and a reopened
-    /// conversation should show it unanswered rather than pretend it never happened.
+    /// Stop every reply in flight for a key. The pending slots become STOPPED rather
+    /// than vanishing — the question was asked, and a reopened conversation should show
+    /// it unanswered rather than pretend it never happened. Stopped is not failed:
+    /// the person chose it, and the slot says so.
     func cancel(key: Scope.Key?) {
         guard let key, var conversation = conversations[key] else { return }
         for (replyID, work) in conversation.work {
             work.cancel()
             if let index = conversation.messages.firstIndex(where: { $0.id == replyID }) {
-                conversation.messages[index].state = .failed(retryable: true)
+                conversation.messages[index].state = .stopped
             }
         }
         conversation.work = [:]
@@ -666,7 +676,7 @@ final class InquiryStore<Scope: InquiryScope> {
         case .cancelled:
             // `cancel` already marked the slot; a cancelled task that reaches here (the
             // responder observed cancellation itself) gets the same honest state.
-            conversation.messages[index].state = .failed(retryable: true)
+            conversation.messages[index].state = .stopped
         case .timedOut, .failed:
             conversation.messages[index].state = .failed(retryable: true)
         }
