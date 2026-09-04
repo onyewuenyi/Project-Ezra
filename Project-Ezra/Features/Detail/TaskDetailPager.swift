@@ -33,6 +33,12 @@ struct TaskDetailPager: View {
     /// The task the user tapped — always the first page shown, and the fallback if the
     /// page list ever empties out from under us.
     let opened: TaskItem
+    /// Where an undo pill goes when the cover closes with one still showing. The pill
+    /// is pager state and renders on the active page; when there is no page left to
+    /// render it on — the last peer resolved, or Back tapped mid-pill — it is handed
+    /// to the presenting surface rather than lost with the cover. Resolving the ONLY
+    /// task you opened used to be the one resolution in the product with no way back.
+    let handOffNotice: ((UndoNotice) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -59,8 +65,9 @@ struct TaskDetailPager: View {
 
     /// `peers` is the presenting surface's on-screen order; empty (or missing `opened`)
     /// collapses to a single page — the pre-pager behaviour.
-    init(opened: TaskItem, peers: [TaskItem] = []) {
+    init(opened: TaskItem, peers: [TaskItem] = [], handOffNotice: ((UndoNotice) -> Void)? = nil) {
         self.opened = opened
+        self.handOffNotice = handOffNotice
         // A peer list that doesn't contain the tapped task is stale (or was never given)
         // — fall back to the single page rather than paging somewhere unexpected.
         let list = peers.contains { $0.objectID == opened.objectID } ? peers : [opened]
@@ -90,7 +97,7 @@ struct TaskDetailPager: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button {
-                            dismiss()
+                            close()
                         } label: {
                             Image(systemName: "chevron.left")
                         }
@@ -124,7 +131,8 @@ struct TaskDetailPager: View {
                             task: currentTask, onResolved: advanceAfterResolve, notice: $notice)
                     }
                 }
-                .undoNotice($notice)
+                // The pill is rendered by the ACTIVE page (above its pinned bar), not
+                // here — an overlay at this level sat on top of the next page's CTA.
                 .sheet(isPresented: $showChat) {
                     TaskAdvisorChatView(
                         task: currentTask, notice: $notice,
@@ -236,7 +244,7 @@ struct TaskDetailPager: View {
     /// paging offset). No next peer → the surface has nothing left to show, so dismiss.
     private func advanceAfterResolve() {
         guard let index = currentIndex, livePages.indices.contains(index + 1) else {
-            dismiss()
+            close()
             return
         }
         let resolvedID = livePages[index].objectID
@@ -245,6 +253,15 @@ struct TaskDetailPager: View {
         } completion: {
             pages.removeAll { $0.objectID == resolvedID }
         }
+    }
+
+    /// Every dismissal goes through here so a pending undo pill outlives the cover.
+    private func close() {
+        if let pending = notice {
+            handOffNotice?(pending)
+            notice = nil
+        }
+        dismiss()
     }
 
     // MARK: - Edge-swipe dismiss (honors the back chevron's platform contract)
@@ -261,7 +278,7 @@ struct TaskDetailPager: View {
                     .onChanged { value in dragOffset = max(0, value.translation.width) }
                     .onEnded { value in
                         if value.translation.width > 80 {
-                            dismiss()
+                            close()
                         } else {
                             withAnimation(reduceMotion ? nil : Motion.snap) { dragOffset = 0 }
                         }

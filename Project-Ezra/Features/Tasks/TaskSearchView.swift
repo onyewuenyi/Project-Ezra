@@ -99,7 +99,7 @@ struct TaskSearchView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .taskDetailSheet($selectedTask, peers: matches)
+            .taskDetailSheet($selectedTask, peers: matches, handOffNotice: { notice = $0 })
             .undoNotice($notice)
         }
     }

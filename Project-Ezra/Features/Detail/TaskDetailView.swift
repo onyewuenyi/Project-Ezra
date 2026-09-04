@@ -63,6 +63,10 @@ struct TaskDetailView: View {
     @State private var kickoffStep: String?
     @State private var kickoffWork: Task<Void, Never>?
     @State private var actionPulse = 0
+    /// The one haptic that differs from the rest: finishing a task is `.success`,
+    /// every edit and lifecycle nudge is the soft impact on `actionPulse`. The capture
+    /// commit already makes this distinction; the page's own resolution earned it too.
+    @State private var resolvePulse = 0
     @State private var showAllActivity = false
     /// Guards the primary CTA against a double-tap firing `performPrimary` twice
     /// before the page reacts to the first one — `completeAndResurface` and its
@@ -174,7 +178,9 @@ struct TaskDetailView: View {
         switch advisorStore.state(for: task) {
         case .revealed(let reading): return BarLine(text: reading.observation, kind: .reading)
         case .fallback(let reading):
-            if let reading, !reading.observation.isEmpty { return BarLine(text: reading.observation, kind: .reading) }
+            if let reading, !reading.observation.isEmpty {
+                return BarLine(text: reading.observation, kind: .reading)
+            }
             return nil
         case .quiet(.model):
             return BarLine(text: Self.silenceLine(judgedAt: advisorStore.judgedAt(for: task)), kind: .silence)
@@ -230,7 +236,17 @@ struct TaskDetailView: View {
         }
         // Hosts every related-task push from this page (spine rows, advisor rows) —
         // attached to the scroll view, not to a section that may not be in the tree.
-        .taskDetailSheet($openedRelated)
+        // `relatedPeers` hands the nested pager the list the tapped row came from, so
+        // a step pages through its siblings the way a My Tasks row pages through its
+        // section — "what neighbouring means belongs to the presenting surface".
+        .taskDetailSheet($openedRelated, peers: relatedPeers)
+        // The undo pill renders on the ACTIVE page, above the pinned bar. Applied
+        // BEFORE the inset so the overlay lives in the reduced safe area and lands over
+        // the content, never over the CTA — on the pager it sat on top of the next
+        // page's "Start" for the four seconds the way back was on offer. The notice
+        // itself stays the pager's state, so the page that resolves can slide away and
+        // the next page inherits the pill.
+        .undoNotice(isActive ? $notice : .constant(nil))
         // The recommended action stays persistently available — a product decision,
         // not a layout preference: on exactly the busy tasks where guidance matters
         // (decision card + breakdown + unstick + timeline), the one accented control
@@ -247,6 +263,20 @@ struct TaskDetailView: View {
         .background(Palette.background)
         .scrollDismissesKeyboard(.interactively)
         .sensoryFeedback(.impact(flexibility: .soft), trigger: actionPulse)
+        .sensoryFeedback(.success, trigger: resolvePulse)
+        // The keyboard's way out. Title and notes both edit in place with no field
+        // chrome, and `scrollDismissesKeyboard` is a gesture nobody is told about — a
+        // Done above the keyboard is the honest end of an edit. Conditional on focus,
+        // so only the page being edited contributes it (neighbours stay mounted).
+        .toolbar {
+            if focusedField != nil {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }
+                        .font(.controlLabel)
+                }
+            }
+        }
         .task {
             Motion.withMotion(Motion.settle) { appeared = true }
             // The Advisor's ambient trigger — a no-op unless the facts fingerprint
@@ -289,6 +319,16 @@ struct TaskDetailView: View {
             // appears while the user is still on the page.
             if previous == .title { commitTitleEdit() }
             if previous == .notes { commitNotesEdit() }
+        }
+        // Return in the title means "done", never a line break. The field wraps
+        // (`axis: .vertical`) so a long title is readable, but a task title is one
+        // line of intent — the return key used to insert a newline into it, and the
+        // only way to finish renaming was to scroll the keyboard away. Strip the
+        // break and drop focus, which runs the commit path above.
+        .onChange(of: task.title) { _, updated in
+            guard focusedField == .title, let single = Self.titleAfterReturn(updated) else { return }
+            task.title = single
+            focusedField = nil
         }
         .onChange(of: isActive) { _, active in
             // Swiping to the next task doesn't unmount this page, so `.onDisappear` can't
@@ -390,9 +430,37 @@ struct TaskDetailView: View {
                 .tracking(-0.4)
                 .foregroundStyle(Palette.primaryText)
                 .textInputAutocapitalization(.sentences)
+                .submitLabel(.done)
                 .focused($focusedField, equals: .title)
             provenanceLine
+            lifecycleLine
             parentLine
+        }
+    }
+
+    /// A title edit that contains a line break is a return key pressed: the title
+    /// with the break collapsed to a space, or nil when there was no break. Pure, so
+    /// the rule is testable without a keyboard.
+    static func titleAfterReturn(_ title: String) -> String? {
+        guard title.contains(where: \.isNewline) else { return nil }
+        let joined = title.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return joined
+    }
+
+    /// Where the task is in its life, said plainly under the title — "Started 2 hours
+    /// ago" while the commitment is live, "Done yesterday" / "Canceled 3 days ago" once
+    /// it is a record. Nothing for a plain to-do. The status chip shows the STATE; this
+    /// line shows the TIME, which the page used to keep behind the Details disclosure
+    /// where nobody read it. Same quiet register as provenance; it is a fact, not a badge.
+    @ViewBuilder private var lifecycleLine: some View {
+        if let caption = TaskTimeline.caption(for: task) {
+            Text(caption)
+                .font(.chipLabel)
+                .foregroundStyle(Palette.secondaryText)
+                .transition(.opacity)
         }
     }
 
@@ -471,10 +539,32 @@ struct TaskDetailView: View {
                 effortChip
                 addBlockerChip
             }
+            // The inline picker is an EXPANSION of the card, not a mode: it opens from
+            // "Pick a date…", closes the moment a date is picked (the chip above shows
+            // the result — leaving the calendar open under a chip that already answers
+            // it read as a picker that never finished), and carries a Done for the
+            // person who opened it to look and chose nothing.
             if showDatePicker {
-                DatePicker("Due date", selection: dueBinding, displayedComponents: .date)
-                    .datePickerStyle(.graphical)
-                    .tint(Palette.accentFlat)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Due date")
+                            .metadataStyle()
+                            .textCase(.uppercase)
+                            .tracking(0.6)
+                        Spacer(minLength: Spacing.sm)
+                        Button("Done") {
+                            Motion.withMotion(Motion.settle) { showDatePicker = false }
+                        }
+                        .font(.controlLabel)
+                        .foregroundStyle(Palette.accentFlat)
+                        .buttonStyle(.pressableLink)
+                    }
+                    DatePicker("Due date", selection: dueBinding, displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                        .labelsHidden()
+                        .tint(Palette.accentFlat)
+                }
+                .transition(.opacity)
             }
             // When a spine owns these rows they render under the title instead —
             // the same rows twice on one page teaches the user to read neither. A
@@ -590,23 +680,49 @@ struct TaskDetailView: View {
             Button("Today") { setDue(dayOffset: 0) }
             Button("Tomorrow") { setDue(dayOffset: 1) }
             Button("Next week") { setDue(dayOffset: 7) }
+            // Opening the picker no longer stamps today onto an undated task — that
+            // wrote a due date (and an Activity row) before the person had chosen
+            // anything, and closing without picking left it there. The picker shows
+            // today as its cursor; the date is set only when one is tapped.
             Button("Pick a date…") {
-                if task.dueDate == nil { setDue(dayOffset: 0) }
-                showDatePicker = true
+                Motion.withMotion(Motion.settle) { showDatePicker = true }
             }
             if task.dueDate != nil {
                 Divider()
                 Button("Clear", role: .destructive) {
                     setDue(nil)
-                    showDatePicker = false
+                    Motion.withMotion(Motion.settle) { showDatePicker = false }
                 }
             }
         } label: {
+            // The chip says WHEN in the same vocabulary as the row — and, unlike the
+            // row, this is the one place a person reads the task properly, so overdue
+            // has to be stated here or it is stated nowhere that matters. Live work
+            // only: a resolved task's due is a plain date, because "overdue" on
+            // finished work is a scold about the past.
+            let due = DueLabel.make(for: task, style: .full)
+            let overdue = due?.isOverdue == true
             chip(muted: task.dueDate == nil) {
-                Image(systemName: "calendar").font(.glyphCaption())
-                Text(task.dueDate.map(dueText) ?? "No due date")
+                Group {
+                    Image(systemName: overdue ? "calendar.badge.exclamationmark" : "calendar")
+                        .font(.glyphCaption())
+                    Text(due?.text ?? task.dueDate.map(dueText) ?? "No due date")
+                }
+                .foregroundStyle(
+                    overdue
+                        ? Palette.overdue : task.dueDate == nil ? Palette.mutedText : Palette.primaryText)
             }
         }
+        .accessibilityLabel(dueAccessibilityLabel)
+    }
+
+    /// VoiceOver hears the same fact the chip shows — "Due 3 days overdue" reads wrong,
+    /// so overdue is voiced as a state rather than a date.
+    private var dueAccessibilityLabel: String {
+        guard let label = DueLabel.make(for: task, style: .full) else {
+            return task.dueDate.map { "Due \(dueText($0))" } ?? "No due date"
+        }
+        return label.isOverdue ? "Overdue, \(label.text)" : "Due \(label.text)"
     }
 
     private var categoryChip: some View {
@@ -783,6 +899,18 @@ struct TaskDetailView: View {
 
     /// The reverse `.blocks` edge, walked in the one place that owns that walk.
     private var dependents: [TaskItem] { task.dependents(among: allTasks) }
+
+    /// The ordered list a related task was opened FROM — its siblings become the nested
+    /// pager's peers. Steps page through the steps, dependents through the dependents,
+    /// blockers through the blockers; a task cited from nowhere in particular (the
+    /// Advisor's "frees up" rows) opens alone, exactly as before.
+    private var relatedPeers: [TaskItem] {
+        guard let opened = openedRelated else { return [] }
+        let lists = [
+            task.children(among: allTasks), dependents, task.activeBlockerTasks(among: allTasks),
+        ]
+        return lists.first { list in list.contains { $0.objectID == opened.objectID } } ?? []
+    }
 
     // MARK: - The waiting spine (shape == .waiting)
 
@@ -1215,7 +1343,9 @@ struct TaskDetailView: View {
                         .foregroundStyle(line.kind == .silence ? Palette.mutedText : Palette.accentFlat)
                         Text(line.text)
                             .supportingStyle()
-                            .foregroundStyle(line.kind == .silence ? Palette.mutedText : Palette.secondaryText)
+                            .foregroundStyle(
+                                line.kind == .silence ? Palette.mutedText : Palette.secondaryText
+                            )
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                         if line.opensChat {
@@ -1266,7 +1396,9 @@ struct TaskDetailView: View {
         // the same button stays live and legitimately tappable again.
         guard !isPerformingPrimary else { return }
         isPerformingPrimary = true
-        actionPulse += 1
+        // The resolving arm earns `.success` once the save lands (see `finishPrimary`);
+        // firing the soft impact here too would stack two haptics on one tap.
+        if !action.dismissesDetail { actionPulse += 1 }
         var unblocked: [TaskItem] = []
         Motion.withMotion(Motion.decide) {
             unblocked = task.performRecommendedAction(action, among: allTasks, in: context)
@@ -1294,6 +1426,7 @@ struct TaskDetailView: View {
         // Only the resolving arm leaves the working set, and it is the only one that can
         // free dependents — so it is the only one that owes the user a way back.
         if action.dismissesDetail {
+            resolvePulse += 1
             offerUndo(verb: "Completed", unblocked: unblocked)
             onResolved()
         } else {
@@ -1356,7 +1489,7 @@ struct TaskDetailView: View {
 
     private func applyStatus(_ state: TaskStatus) {
         guard state != task.status else { return }
-        actionPulse += 1
+        if state.isResolved { resolvePulse += 1 } else { actionPulse += 1 }
         Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
         context.saveChanges()
         if state.isResolved {
@@ -1486,7 +1619,11 @@ struct TaskDetailView: View {
     private var dueBinding: Binding<Date> {
         Binding(
             get: { task.dueDate ?? Calendar.current.startOfDay(for: Date()) },
-            set: { setDue($0) }
+            set: { date in
+                setDue(date)
+                // A pick is the end of the interaction — the chip now says the answer.
+                Motion.withMotion(Motion.settle) { showDatePicker = false }
+            }
         )
     }
 
@@ -1596,9 +1733,17 @@ extension View {
     /// detail pages horizontally through it, so a swipe lands where the eye expects (the
     /// row above / below the one you tapped). Omit it and the detail is a single page,
     /// exactly as before.
-    func taskDetailSheet(_ task: Binding<TaskItem?>, peers: [TaskItem] = []) -> some View {
+    ///
+    /// `handOffNotice` receives an undo pill the pager could not keep — the cover
+    /// dismissed (the last page resolved, or Back was tapped) while the way back was
+    /// still on offer. The presenter shows it on its own surface; omit it and the
+    /// notice dies with the cover, which was the behaviour before 2026-09-04.
+    func taskDetailSheet(
+        _ task: Binding<TaskItem?>, peers: [TaskItem] = [],
+        handOffNotice: ((UndoNotice) -> Void)? = nil
+    ) -> some View {
         fullScreenCover(item: task) { item in
-            TaskDetailPager(opened: item, peers: peers)
+            TaskDetailPager(opened: item, peers: peers, handOffNotice: handOffNotice)
         }
     }
 }

@@ -182,7 +182,7 @@ struct TasksHomeView: View {
             .navigationDestination(isPresented: $showRoster) { HouseholdRosterView() }
             .sheet(isPresented: $showSearch) { TaskSearchView() }
             .sheet(isPresented: $showSettings) { SettingsView() }
-            .taskDetailSheet($selectedTask, peers: slice.peers)
+            .taskDetailSheet($selectedTask, peers: slice.peers, handOffNotice: { notice = $0 })
             .undoNotice($notice)
             .task {
                 applyFilterArgsIfRequested()

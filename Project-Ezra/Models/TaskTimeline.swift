@@ -48,6 +48,40 @@ enum TaskTimeline {
         return "\(phrase(for: task.status)) \(dwell)"
     }
 
+    /// The detail page's one lifecycle caption under the title — where the task IS in
+    /// its life, said the way a person would: "Started 2 hours ago" · "Done yesterday" ·
+    /// "Canceled 3 days ago". Nil for a plain to-do, which has nothing to report beyond
+    /// existing (its capture time is a receipt, and lives under Details).
+    ///
+    /// Reads the CURRENT visit (`currentStateEnteredAt`), never the summed dwell: a task
+    /// picked up, dropped and picked up again is "started" when it was last started.
+    /// "took 3d" stays in `summary` — the total is a receipt, the caption is the fact.
+    static func caption(
+        for task: TaskItem, now: Date = Date(), locale: Locale = .current
+    ) -> String? {
+        guard task.status != .todo, let at = task.currentStateEnteredAt else { return nil }
+        let verb: String
+        switch task.status {
+        case .doing: verb = "Started"
+        case .done: verb = "Done"
+        case .canceled: verb = "Canceled"
+        case .todo: return nil
+        }
+        return "\(verb) \(relative(at, now: now, locale: locale))"
+    }
+
+    /// "just now" under a minute, otherwise the named relative form ("2 hours ago",
+    /// "yesterday"). Sub-minute is special-cased because "in 0 seconds" is what the
+    /// formatter says about the tap that just happened.
+    static func relative(_ date: Date, now: Date, locale: Locale = .current) -> String {
+        guard now.timeIntervalSince(date) >= 60 else { return "just now" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = locale
+        formatter.unitsStyle = .full
+        formatter.dateTimeStyle = .named
+        return formatter.localizedString(for: date, relativeTo: now)
+    }
+
     private static func phrase(for state: TaskStatus) -> String {
         switch state {
         case .todo: return "Queued for"
