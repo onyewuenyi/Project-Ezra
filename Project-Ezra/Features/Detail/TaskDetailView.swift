@@ -399,7 +399,7 @@ struct TaskDetailView: View {
             TextField("What did you decide? (optional)", text: $decisionChoice)
             Button("Mark decided") {
                 let trimmed = decisionChoice.trimmingCharacters(in: .whitespacesAndNewlines)
-                advisorActed(.decide) { markDecided(choice: trimmed.isEmpty ? nil : trimmed) }
+                actions.markDecided(choice: trimmed.isEmpty ? nil : trimmed)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -1205,7 +1205,7 @@ struct TaskDetailView: View {
             showsReading: false,
             onDecide: { choice in
                 if let choice {
-                    advisorActed(.decide) { markDecided(choice: choice) }
+                    actions.markDecided(choice: choice)
                 } else {
                     // No option carried the outcome — ask for it, optionally. A
                     // decision is the product's crown primitive, and "decided" with
@@ -1219,39 +1219,20 @@ struct TaskDetailView: View {
             },
             // Escalating is a human act accepting the reading's suggestion — the
             // axis-3 flag, through the same seam Unstick's rung used.
-            onEscalate: {
-                advisorActed(.decide) {
-                    Motion.withMotion(Motion.decide) {
-                        task.escalateToDecision()
-                        task.touchHuman()
-                    }
-                    context.saveChanges()
-                }
-            },
+            onEscalate: { actions.escalate() },
             onDismiss: { advisorStore.dismiss(taskID: task.uuid) }
         )
     }
 
-    /// Every Advisor action funnels here: one acted record (with the lifecycle
-    /// position it acted FROM — the progression metric's baseline), the stall-clearing
-    /// rule (a card its own buttons can't dismiss is a scold — any action taken while
-    /// a stall diagnosis is present resets the deferral clock via `touchHuman`), then
-    /// the move itself.
-    private func advisorActed(_ move: AdvisorMove, _ action: () -> Void) {
-        AdvisorMetrics.shared.recordActed(move, taskID: task.uuid, status: task.status)
-        if StallDetector.diagnose(task, among: allTasks) != nil {
-            task.touchHuman()
-        }
-        actionPulse += 1
-        action()
-    }
-
-    private func markDecided(choice: String? = nil) {
-        actionPulse += 1
-        Motion.withMotion(Motion.decide) {
-            task.resolveDecisionAndLog(in: context, choice: choice)
-        }
-        context.saveChanges()
+    /// The Advisor's moves — the same value the chat runs, so the acted metric, the
+    /// stall-clearing rule and the pulse have ONE implementation. The page used to keep
+    /// private copies of `acted`/`markDecided`, which is exactly what `AdvisorActions`
+    /// was extracted to end; they had already drifted — the page's own nesting
+    /// (`advisorActed(.decide) { markDecided(...) }`) pulsed twice on one tap.
+    private var actions: AdvisorActions {
+        AdvisorActions(
+            task: task, allTasks: allTasks, context: context, notice: $notice,
+            onResolved: onResolved, pulse: { actionPulse += 1 })
     }
 
     // MARK: - Description

@@ -41,6 +41,8 @@ struct TaskAdvisorChatView: View {
     /// — the same idiom every detail surface uses.
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
     private var allTasks: [TaskItem] { Array(allTasksResults) }
+    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    private var currentUserID: UUID? { profilesResults.first?.linkedMemberID }
 
     @State private var store = TaskAdvisorChatStore.shared
     @ObservedObject private var advisorStore = TaskAdvisorStore.shared
@@ -48,6 +50,14 @@ struct TaskAdvisorChatView: View {
     @State private var sendPulse = 0
     @State private var actionPulse = 0
     @State private var openedRelated: TaskItem?
+    /// An answer's rows become the opened task's peers, so "what's blocking this?"
+    /// pages through exactly those — the same move the Ask sheet makes.
+    @State private var openedPeers: [TaskItem] = []
+    /// The pill for a row swiped HERE. Deliberately not the pager's `notice`: that one
+    /// is rendered by the page underneath this sheet, so a cancel swiped on a cited row
+    /// would post a way back the person cannot see until they close the chat. Same rule
+    /// the Ask sheet follows — the pill belongs to the surface the gesture happened on.
+    @State private var rowNotice: UndoNotice?
     @State private var showDecisionPrompt = false
     @State private var decisionChoice = ""
     @FocusState private var composing: Bool
@@ -71,14 +81,23 @@ struct TaskAdvisorChatView: View {
             diagnosis: StallDetector.diagnose(task, among: allTasks))
     }
 
-    private var citedTasks: [TaskItem] {
-        let ids: [UUID]
+    /// The OPENER's citations — the reading's "frees up" rows.
+    private var readingCitedTasks: [TaskItem] {
         switch advisorStore.state(for: task) {
-        case .revealed(let reading): ids = reading.citedTaskIDs
-        case .fallback(let reading): ids = reading?.citedTaskIDs ?? []
-        default: ids = []
+        case .revealed(let reading): resolve(reading.citedTaskIDs)
+        case .fallback(let reading): resolve(reading?.citedTaskIDs ?? [])
+        default: []
         }
-        return ids.compactMap { id in allTasks.first { $0.uuid == id } }
+    }
+
+    /// Resolve citation ids to live tasks, in the answer's order. A task that has since
+    /// been deleted simply drops out of the rows.
+    private func resolve(_ ids: [UUID]) -> [TaskItem] {
+        guard !ids.isEmpty else { return [] }
+        let byID = Dictionary(
+            allTasks.compactMap { task in task.uuid.map { ($0, task) } },
+            uniquingKeysWith: { a, _ in a })
+        return ids.compactMap { byID[$0] }
     }
 
     private static let bottomAnchor = "bottom"
@@ -121,7 +140,8 @@ struct TaskAdvisorChatView: View {
                 }
                 // Blocker and cited rows push the related task's own detail, over this
                 // sheet — the same nested navigation the page's spine rows use.
-                .taskDetailSheet($openedRelated)
+                .taskDetailSheet($openedRelated, peers: openedPeers)
+                .undoNotice($rowNotice)
                 .sensoryFeedback(.impact(weight: .light), trigger: sendPulse)
                 .sensoryFeedback(.impact(flexibility: .soft), trigger: actionPulse)
                 .chatReplyLanding(messages)
@@ -182,6 +202,10 @@ struct TaskAdvisorChatView: View {
                 .padding(.bottom, Spacing.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // The list's swipes on cited rows need this OUTSIDE a `List` (iOS 27) —
+            // without it the gestures are wired and inert, which is the same silent
+            // failure as not passing them at all.
+            .swipeActionsContainer()
             .onChange(of: messages) { _, _ in
                 withAnimation(reduceMotion ? nil : Motion.settle) {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
@@ -207,7 +231,7 @@ struct TaskAdvisorChatView: View {
             // The page's waiting spine is under the sheet, not on it: the rows belong
             // here too.
             blockersRenderedElsewhere: false,
-            citedTasks: citedTasks,
+            citedTasks: readingCitedTasks,
             showsObligation: false,
             onDecide: { choice in
                 if let choice {
@@ -223,6 +247,7 @@ struct TaskAdvisorChatView: View {
             },
             onOpenBlocker: { blocker in
                 actions.followed(.openBlocker)
+                openedPeers = []
                 openedRelated = blocker
             },
             onDoItNow: { actions.setStatus(.doing) },
@@ -231,6 +256,7 @@ struct TaskAdvisorChatView: View {
             onDismiss: { advisorStore.dismiss(taskID: task.uuid) },
             onOpenCited: { cited in
                 actions.followed(.advise)
+                openedPeers = readingCitedTasks
                 openedRelated = cited
             }
         )
@@ -271,8 +297,16 @@ struct TaskAdvisorChatView: View {
             ChatUserLine(text: message.text, onAskAgain: isReplying ? nil : { send(message.text) })
                 .transition(reduceMotion ? .opacity : Motion.cardEntry)
         case .advisor:
+            let cited = resolve(message.citedTaskIDs)
             ChatAdvisorLine(
                 message: message,
+                citedTasks: cited,
+                gestures: ChatRowGestures(
+                    allTasks: allTasks, currentUserID: currentUserID, notice: $rowNotice),
+                onOpenTask: { related in
+                    openedPeers = cited
+                    openedRelated = related
+                },
                 onRetry: { store.retry(replyID: message.id, task: task, among: allTasks) }
             )
             .transition(reduceMotion ? .opacity : Motion.cardEntry)

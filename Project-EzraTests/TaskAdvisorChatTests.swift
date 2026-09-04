@@ -373,3 +373,39 @@ struct TaskAdvisorChatFollowUpTests {
         #expect(TaskAdvisorChatPrompt.followUps(for: facts, asked: starters).isEmpty)
     }
 }
+
+// MARK: - The two surfaces render the same answer
+
+@Suite("Chat surfaces — an answer's citations reach the screen")
+struct ChatCitationParityTests {
+
+    @Test("Both chat surfaces hand their answers' citations to the line — structurally")
+    func citationsReachBothSurfaces() throws {
+        // The bug this pins shipped INERT: `ChatAdvisorLine.citedTasks` is an unset
+        // DEFAULT parameter, so the task chat built every answer without it — the floor
+        // cited `blockerIDs`/`childIDs`, `InquiryCitations` resolved the model's, and
+        // none of it ever drew a row. The household chat did it correctly, and both read
+        // from the one component whose header promises "the answer is the navigation".
+        //
+        // A capability threaded through a call chain has to be asserted at the POINT OF
+        // USE: nothing downstream can tell an empty package from an absent one, which is
+        // why every test stayed green while the feature was missing on half its surfaces.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Project-Ezra")
+        for file in [
+            "Features/Advisor/TaskAdvisorChatView.swift", "Features/Chat/HouseholdChatView.swift",
+        ] {
+            let content = try String(
+                contentsOf: root.appendingPathComponent(file), encoding: .utf8)
+            #expect(
+                content.contains("citedTasks: cited"),
+                "\(file) builds a ChatAdvisorLine without its answer's citations")
+            #expect(
+                content.contains("gestures: ChatRowGestures("),
+                "\(file) renders cited rows without the list's two swipes")
+        }
+    }
+}
+

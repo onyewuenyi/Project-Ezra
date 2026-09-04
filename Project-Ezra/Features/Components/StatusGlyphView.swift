@@ -56,6 +56,12 @@ struct StatusGlyphView: View {
                 glyph
             }
             .buttonStyle(.pressableIcon)
+            // The one-tap lifecycle control on every spine and step row, drawn at a
+            // 28pt column — under the 44pt floor. The hit area reaches into the gap
+            // around the glyph without moving it (`minimumHitTarget`'s whole trick), so
+            // a near miss on the row's core control still opens the state menu instead
+            // of falling through to the row's own tap.
+            .minimumHitTarget()
             .accessibilityLabel("Status: \(display.label)")
             .accessibilityHint("Change status")
             .sensoryFeedback(.error, trigger: saveFailed)
@@ -66,10 +72,24 @@ struct StatusGlyphView: View {
 
     private var glyph: some View {
         Image(systemName: display.symbol)
-            .font(.system(size: size, weight: .regular))
+            .font(glyphFont)
             .foregroundStyle(display.tint)
             .frame(width: LayoutMetrics.recordGlyphColumn, height: LayoutMetrics.recordGlyphColumn)
             .contentShape(Rectangle())
+    }
+
+    /// The glyph scaled along the type curve of the tier its size belongs to — the
+    /// pairings `Font.glyphControl`/`glyphAction`/`glyphBody` already declare. A frozen
+    /// `.system(size:)` here left the status marker at 22pt while the title beside it
+    /// grew at accessibility sizes, which is exactly the drift the glyph tokens exist
+    /// to prevent.
+    private var glyphFont: Font {
+        switch size {
+        case IconSize.control...: .glyphControl()
+        case IconSize.action...: .glyphAction()
+        case IconSize.body...: .glyphBody()
+        default: .glyph(size, relativeTo: .subheadline)
+        }
     }
 
     private func pick(_ state: TaskStatus) {
