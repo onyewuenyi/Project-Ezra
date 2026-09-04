@@ -609,6 +609,40 @@ struct IntentResolverTests {
         #expect(draft.unresolved.isEmpty)
     }
 
+    @Test("Naming more occasions than expand's cap is reported, not silently narrowed to one")
+    func exceedingInstanceCapIsReported() {
+        // Eight real, individually-resolvable occasions — one past `IntentResolver
+        // .maxInstances` (7; there are only seven weekday names, so the eighth has to
+        // come from elsewhere in the vocabulary). `expand` declines to fan this out,
+        // and without the `exceedsInstanceCap` guard `resolveDate`'s substring match
+        // would silently pick the FIRST phrase it recognizes and report it as a
+        // confident single date, dropping the other seven with no signal to the user.
+        let intent = TaskIntent(
+            title: "Clean the litter box", category: "Home",
+            dateExpression: "today, tomorrow, monday, tuesday, wednesday, thursday, friday, "
+                + "and saturday",
+            confidence: 0.9, isJudgmentCall: false, reasoning: "")
+        let draft = IntentResolver.resolve(intent, now: wednesday)
+        #expect(draft.dueDate == nil, "no single date honestly represents eight named occasions")
+        #expect(draft.unresolved == [.date], "too many named occasions must ask, not guess")
+    }
+
+    @Test("The instance-cap guard does not misfire on an ordinary non-enumeration phrase")
+    func exceedingInstanceCapDoesNotMisfireOnOrdinaryPhrases() {
+        // A guard against the fix above being too broad: a phrase with several "and"s
+        // that ISN'T a calendar enumeration (its fragments aren't all dates) must not
+        // be treated as exceeding the cap, however many fragments it splits into.
+        #expect(
+            !IntentResolver.exceedsInstanceCap(
+                in: "before the trip and after the meeting", now: wednesday))
+        // Seven or fewer resolvable occasions is exactly what `expand` handles itself —
+        // the cap guard only fires strictly ABOVE `maxInstances`.
+        #expect(
+            !IntentResolver.exceedsInstanceCap(
+                in: "monday, tuesday, wednesday, thursday, friday, saturday, and sunday",
+                now: wednesday))
+    }
+
     @Test("An INFERRED due date is not an answer to a question the user asked")
     func inferredDatesDoNotSuppressTheAsk() {
         // `inferredDueDate` only fires when no date was spoken, so the two can never

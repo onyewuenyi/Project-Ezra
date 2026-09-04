@@ -211,17 +211,27 @@ final class TaskAdvisorStore: ObservableObject {
         let facts = TaskAdvisorFacts.make(task: task, among: tasks, now: now)
         let fingerprint = facts.fingerprint
         if let entry = entries[id], entry.fingerprint == fingerprint {
-            // Rung 1 — re-served. Precompute reaching a warm entry is the SUCCESS case,
-            // not a wasted call: it means the work already happened off the open-moment.
-            // It is not counted, though — a speculative pass over the same unchanged task
-            // every time the Brief runs would inflate the memory rung into meaninglessness.
-            if presence == .userIsLooking {
-                ledger.record(.memory, for: .advisor, now: now)
-                // The precompute payoff: a judgment prepared before they arrived is being
-                // seen for the first time, so now it counts as offered.
-                recordPendingOfferIfNeeded(id)
+            // `.failed` is the one settled state that owes a retry rather than a
+            // cache hit — nothing about the facts will change to invalidate this
+            // fingerprint on its own, so treating it as re-served would leave a
+            // failed judgment silent forever. Only on an open-moment visit: a
+            // precompute pass has no standing to retry a failure nobody is
+            // waiting on. Falls through to re-judge below rather than returning.
+            if presence == .userIsLooking, case .failed = entry.state {
+                entries[id] = nil
+            } else {
+                // Rung 1 — re-served. Precompute reaching a warm entry is the SUCCESS case,
+                // not a wasted call: it means the work already happened off the open-moment.
+                // It is not counted, though — a speculative pass over the same unchanged task
+                // every time the Brief runs would inflate the memory rung into meaninglessness.
+                if presence == .userIsLooking {
+                    ledger.record(.memory, for: .advisor, now: now)
+                    // The precompute payoff: a judgment prepared before they arrived is being
+                    // seen for the first time, so now it counts as offered.
+                    recordPendingOfferIfNeeded(id)
+                }
+                return
             }
-            return
         }
         entries[id]?.work?.cancel()
 
@@ -282,14 +292,6 @@ final class TaskAdvisorStore: ObservableObject {
         guard let id = taskID, let entry = entries[id] else { return }
         entry.work?.cancel()
         if case .loading = entry.state { entries[id] = nil }
-    }
-
-    /// Only meaningful from `.failed` — the retry the failure owes.
-    func retry(task: TaskItem, among tasks: [TaskItem], now: Date = Date()) {
-        guard let id = task.uuid else { return }
-        guard case .failed = entries[id]?.state else { return }
-        entries[id] = nil
-        ensure(task: task, among: tasks, now: now)
     }
 
     /// Collapse the reading for the CURRENT fingerprint. It never resurfaces until the

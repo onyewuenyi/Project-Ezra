@@ -28,6 +28,11 @@ struct StatusGlyphView: View {
     var onPick: ((TaskStatus) -> Void)? = nil
 
     @Environment(\.managedObjectContext) private var context
+    /// Fires the error haptic below when the default (no `onPick`) path's own save
+    /// fails — this leaf view owns no alert presentation, so a dropped save must not
+    /// go completely unsignaled. Every real call site today passes `onPick` and owns
+    /// its own save-failure handling; this only guards a future embedder that doesn't.
+    @State private var saveFailed = false
 
     private var display: TaskStatus { task.status }
 
@@ -53,6 +58,7 @@ struct StatusGlyphView: View {
             .buttonStyle(.pressableIcon)
             .accessibilityLabel("Status: \(display.label)")
             .accessibilityHint("Change status")
+            .sensoryFeedback(.error, trigger: saveFailed)
         } else {
             glyph.accessibilityLabel("Status: \(display.label)")
         }
@@ -75,7 +81,7 @@ struct StatusGlyphView: View {
         Motion.withMotion(Motion.decide) {
             task.setStatus(state, in: context)
         }
-        context.saveChanges()
+        if !context.saveChanges() { saveFailed.toggle() }
     }
 }
 

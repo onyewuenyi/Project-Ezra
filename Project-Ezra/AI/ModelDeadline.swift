@@ -63,6 +63,13 @@ enum ModelDeadline {
     /// — not a bigger number here.
     static let captureSeconds: Double = 30
 
+    /// A picked photo's decode + OCR pass. Not a model call, but the same problem: an
+    /// iCloud-only asset needing a slow download, or a wedged Vision request, would
+    /// otherwise hang `ComposerView`'s "Reading…" state forever with no way out short of
+    /// leaving the sheet. `cardSeconds`-sized, since this is a user-facing wait with a
+    /// visible label, not background work.
+    static let photoImportSeconds: Double = cardSeconds
+
     /// How long the paid capture arm gets to itself before the free one starts alongside
     /// it (`CaptureTriageRace.hedged`).
     ///
