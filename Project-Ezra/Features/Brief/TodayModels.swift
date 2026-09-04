@@ -2,7 +2,7 @@
 //  TodayModels.swift
 //  Project-Ezra
 //
-//  The pure foundations of the Today sequence (Recap → Docket → Capacity → Plan).
+//  The pure foundations of the Today sequence (Recap → Docket → Plan).
 //  Everything here is deterministic: membership and order come from pure queries
 //  and `TaskRanking`, never the model. The model only narrates over what these
 //  types decide — a boundary enforced mechanically downstream in
@@ -14,11 +14,11 @@
 
 import Foundation
 
-// MARK: - Capacity (the one-tap pivot)
+// MARK: - Capacity
 
-/// How much the user has to give today — the single human input in the sequence.
-/// Deliberately coarse (three states, no slider): the point is a one-tap read of
-/// today, not a planning ritual. Copy is Full / Steady / Light (spec §5.3).
+/// Daily throughput category logged by `CapacityLog` and read by `CapacityBaseline`
+/// to personalize plan sizing. Three coarse buckets (Full / Steady / Light); the
+/// user-facing selection UI was removed — this type now lives in the logging layer only.
 enum Capacity: String, CaseIterable, Codable, Sendable {
     case full
     case steady
@@ -32,10 +32,8 @@ enum Capacity: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// The deterministic cold-start plan size for this capacity, used until
-    /// `CapacityLog` has enough samples to personalize (spec §5.3). Personalization
-    /// (see `CapacityBaseline`) only ever *replaces* this number with an observed
-    /// one — the model never decides what "Light" means.
+    /// Cold-start plan size for this bucket, used until `CapacityLog` has enough
+    /// samples for `CapacityBaseline` to replace it with an observed value.
     var defaultCount: Int {
         switch self {
         case .full: return 6
