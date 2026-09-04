@@ -114,9 +114,9 @@ enum SampleFlowFixtures {
         context.insert(offsiteVenue)
 
         // MARK: Flow 3 — Needs Decision Resolution
-        // Two distinct reasons a proposal wears a "Needs Decision" assessment in the
-        // Suggested lane: a judgment call (always deferred regardless of confidence),
-        // and plain low confidence (< 0.5, not a judgment call).
+        // Two distinct reasons a task carries the needsDecision flag: a judgment call
+        // (isJudgmentCall: true, always deferred regardless of confidence) and plain
+        // low confidence (< 0.5, not a judgment call).
         let judgmentCall = TaskItem(
             title: "Figure out if the side project is still worth it", category: "Personal",
             status: .todo, confidence: 0.85, isJudgmentCall: true, needsDecision: true,
