@@ -74,6 +74,13 @@ enum Motion {
 
     /// The composer's "thinking" glow pulse — never a spinner.
     static let glowPulse = Animation.easeInOut(duration: 0.6)
+
+    /// The list's arrival wash for a just-created task (see `TaskRow.arrivalWash`): held
+    /// long enough to outlast the composer sheet's dismissal, then a slow fade. Slower
+    /// than `fade` on purpose — a tint that snaps off reads as a glitch, one that
+    /// dissolves reads as "settled in".
+    static let arrivalWashHold: TimeInterval = 1.2
+    static let arrivalWashFade = Animation.easeOut(duration: 1.8)
     /// Slow ambient drift for the held-depth diffuse field.
     /// The Ramble orb's breath — seconds-long on purpose. Faster reads as a spinner;
     /// this reads as thinking.

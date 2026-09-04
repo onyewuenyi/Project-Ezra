@@ -233,6 +233,23 @@ struct RemovedDraftSet {
         if let source = draft.provisionalSource { sources[source, default: 0] += 1 }
     }
 
+    /// The user took a removal back (the confirm list's Undo pill). Exactly the inverse
+    /// of `record`: without this, a restored card would still be filtered out of the
+    /// next re-parse, and a card the user visibly put back would vanish on Re-read —
+    /// the AI overruling the user by way of stale bookkeeping.
+    mutating func forget(_ draft: TaskDraft) {
+        let k = DraftMerge.key(draft)
+        if let n = counts[k] { n > 1 ? (counts[k] = n - 1) : (counts[k] = nil) }
+        if let source = draft.provisionalSource, let n = sources[source] {
+            n > 1 ? (sources[source] = n - 1) : (sources[source] = nil)
+        }
+    }
+
+    /// Whether a removal is on record for this draft — what a test asserts against.
+    func contains(_ draft: TaskDraft) -> Bool {
+        (counts[DraftMerge.key(draft)] ?? 0) > 0
+    }
+
     /// Drop up to the recorded count of fresh candidates per key, in order — then,
     /// for anything that survived, the same check against removed provisional
     /// clauses (a model re-proposal of a removed instant card).

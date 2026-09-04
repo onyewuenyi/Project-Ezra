@@ -67,22 +67,30 @@ struct TaskRow: View {
     /// True while a finger is held on the row — drives the Linear-style press
     /// highlight that communicates what's about to lift into the context menu.
     @State private var isPressingForMenu = false
+    /// The arrival wash: a just-confirmed task lands with a soft accent tint that fades
+    /// over a couple of seconds. Create dismisses the composer immediately and states no
+    /// count (2026-08-30) — the tasks themselves are the receipt — so the list has to
+    /// show WHICH rows just arrived, or the receipt is a list that looks the same as
+    /// before with more in it. Keyed to `confirmedAt`, so only the commit's own rows
+    /// wash, and only for the few seconds after it.
+    @State private var arrivalWash = false
 
     private var isBlocked: Bool { blockerSummary != nil }
 
-    /// The row's compact due vocabulary: "3d over" (overdue token) · "Today" ·
-    /// a weekday inside the week ("Fri") · a short date beyond it ("Sep 12").
-    private var dueLabel: (text: String, isOverdue: Bool)? {
-        guard !task.status.isResolved, let due = task.dueDate,
-            let days = TaskItem.daysUntil(due, now: Date())
-        else { return nil }
-        if days < 0 { return ("\(-days)d over", true) }
-        if days == 0 { return ("Today", false) }
-        if days < 7 {
-            return (due.formatted(.dateTime.weekday(.abbreviated)), false)
-        }
-        return (due.formatted(.dateTime.month(.abbreviated).day()), false)
+    /// Whether a row is arriving from a commit that just happened. The window is short
+    /// on purpose: a row scrolled into view a minute later is not arriving, and a
+    /// relaunch must never re-wash yesterday's captures.
+    static let arrivalWindow: TimeInterval = 8
+
+    static func isFreshArrival(confirmedAt: Date?, now: Date = Date()) -> Bool {
+        guard let confirmedAt else { return false }
+        let age = now.timeIntervalSince(confirmedAt)
+        return age >= 0 && age < arrivalWindow
     }
+
+    /// The row's compact due vocabulary — "3d over" · "Today" · "Fri" · "Sep 12" — from
+    /// the ONE `DueLabel` the detail chip also reads, so the two can't drift again.
+    private var dueLabel: DueLabel? { DueLabel.make(for: task, style: .compact) }
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
@@ -144,10 +152,22 @@ struct TaskRow: View {
         // and the context-menu preview share ONE rounded shape, so the card you see
         // darkening is exactly the card that lifts — a seamless handoff.
         .background(
-            RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
-                .fill(Palette.secondarySurface)
-                .opacity(isPressingForMenu ? 1 : 0)
+            ZStack {
+                RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
+                    .fill(Palette.accentSoft)
+                    .opacity(arrivalWash ? 1 : 0)
+                RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
+                    .fill(Palette.secondarySurface)
+                    .opacity(isPressingForMenu ? 1 : 0)
+            }
         )
+        .onAppear {
+            guard Self.isFreshArrival(confirmedAt: task.confirmedAt) else { return }
+            arrivalWash = true
+            // Held long enough to be seen after the composer sheet finishes leaving, then
+            // gone — a wash, never a badge. A fade is motion-safe, so Reduce Motion keeps it.
+            withAnimation(Motion.arrivalWashFade.delay(Motion.arrivalWashHold)) { arrivalWash = false }
+        }
         .contentShape(
             .contextMenuPreview, RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
         )

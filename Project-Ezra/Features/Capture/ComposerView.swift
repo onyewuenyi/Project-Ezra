@@ -143,6 +143,15 @@ struct ComposerView: View {
     /// The cards the user deleted this session. The merge filters re-proposals of
     /// them, so a removal can't be undone by the next keystroke's re-parse.
     @State private var removedDrafts = RemovedDraftSet()
+    /// The card most recently dropped from the reveal, with the place it held — what
+    /// the Undo pill puts back. One at a time, like every other undo notice: a second
+    /// removal replaces it, and the earlier card stays removed.
+    @State private var lastRemoved: (draft: TaskDraft, index: Int)?
+    /// The "Removed “X”" pill over the reveal page. Removing a candidate was the one
+    /// decisive act on the surface with no way back: a mis-tap on the X lost the card,
+    /// and `RemovedDraftSet` then kept it out of every re-read. The trust checklist
+    /// says the user can undo anything; this is where that was untrue.
+    @State private var cardNotice: UndoNotice?
     @State private var committed = 0
     @State private var speech = SpeechCaptureService()
     /// True once dictation contributed to this capture — recorded on the Capture row.
@@ -328,8 +337,12 @@ struct ComposerView: View {
                 }
                 ToolbarItem(placement: .destructiveAction) {
                     // The one irreversible action in the flow, in the slot reserved for
-                    // exactly that, and still behind a confirmation.
-                    if phase == .capture, !text.isEmpty {
+                    // exactly that, and still behind a confirmation. Offered on the
+                    // canvas AND the reveal: the reveal is where a person most often
+                    // decides "no, never mind" — and before this their only exit there
+                    // was Close, which PARKED the capture and made it reappear at the
+                    // top of Tasks as unfinished work they had already decided against.
+                    if phase == .capture || phase == .confirm, !text.isEmpty {
                         Button("Discard", role: .destructive) { showDiscardConfirm = true }
                     }
                 }
@@ -485,7 +498,10 @@ struct ComposerView: View {
                 Button("Discard", role: .destructive) { discard() }
                 Button("Keep it", role: .cancel) {}
             } message: {
-                Text("The text and everything parsed from it will be deleted.")
+                Text(
+                    phase == .confirm && !interpretation.drafts.isEmpty
+                        ? "Nothing has been created yet. The words and these tasks will be deleted."
+                        : "The text and everything parsed from it will be deleted.")
             }
             .alert("Couldn't save", isPresented: $showSaveFailedAlert) {
                 Button("Try Again") { retrySave() }
@@ -1062,6 +1078,9 @@ struct ComposerView: View {
             .background(Palette.accentGradient, in: Capsule())
         }
         .buttonStyle(.pressableProminent)
+        // ⌘↩ from a hardware keyboard (iPad, a Mac keyboard on the phone): the canvas is
+        // the typing landing, and a typist's hands are already on the keys.
+        .keyboardShortcut(.return, modifiers: .command)
         .accessibilityLabel("Ramble — turn what you said into tasks")
     }
 
@@ -1130,7 +1149,17 @@ struct ComposerView: View {
             // the orb's lower field and the orb is exactly the size it was.
             .overlay(alignment: .bottom) {
                 if phase == .listening {
-                    listeningControls.transition(.opacity)
+                    VStack(spacing: Spacing.md) {
+                        // The privacy posture, on the door most people actually use.
+                        // It lived only on the typed canvas's bar — so the person who
+                        // opened INTO listening (the default) and was about to say
+                        // something private had no way to see, let alone set, whether
+                        // it would stay on the device without leaving the surface
+                        // first. Same chip, same persisted switch; read at submit.
+                        postureChip
+                        listeningControls
+                    }
+                    .transition(.opacity)
                 }
             }
         }
@@ -1315,27 +1344,37 @@ struct ComposerView: View {
                     .screenTitleStyle()
                     if !interpretation.drafts.isEmpty {
                         Text(
-                            interpretation.drafts.count == 1
-                                ? "1 thing" : "\(interpretation.drafts.count) things"
+                            Self.revealSubtitle(
+                                count: interpretation.drafts.count, asks: unresolvedAskCount)
                         )
                         .supportingStyle()
+                        .contentTransition(.numericText())
+                        .animation(Motion.fade, value: unresolvedAskCount)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
 
+                // A caption over the words. The box is the user's own capture, editable —
+                // but under a title that says "what I understood", an unlabelled text box
+                // read as a notes field, and its editability (the whole reason it is on
+                // the page) went unnoticed. One quiet line says what it is and what it does.
+                Text(transcriptCaption)
+                    .metadataStyle()
+                    .padding(.top, Spacing.xs)
                 transcriptField
                 addMoreRow
 
                 if interpretation.drafts.isEmpty {
                     Text(Self.nothingFoundHint).supportingStyle()
+                    keepAsOneTaskButton
                 } else {
                     ConfirmCreationList(
                         drafts: $interpretation.editableDrafts,
                         ownerOptions: ownerOptions,
                         rosterNames: rosterNames,
                         onAddToRoster: { addToRoster($0) },
-                        onRemove: { removedDrafts.record($0) },
+                        onRemove: { noteRemoval(of: $0) },
                         revealedAt: revealedAt
                     )
                 }
@@ -1347,6 +1386,87 @@ struct ComposerView: View {
         // anything else with the surface.
         .scrollDismissesKeyboard(.interactively)
         .scrollBounceBehavior(.basedOnSize)
+        // The removal's way back. The pill floats over the page's own bottom edge —
+        // above the pinned Create bar, which is a safe-area inset — so it never covers
+        // the CTA and never competes with it: one undo, four seconds, then gone.
+        .undoNotice($cardNotice)
+    }
+
+    /// The one detail the reveal can ask for, counted across the cards.
+    private var unresolvedAskCount: Int {
+        interpretation.drafts.filter { $0.unresolved.contains(.date) }.count
+    }
+
+    /// The subtitle under "Here's what I understood": the count, and the ask when there is
+    /// one. The ask is the only thing on the page that wants something BACK, and it used
+    /// to be findable only by scanning every card for the one "When?" chip — VoiceOver
+    /// users were told at the reveal; sighted users were not.
+    static func revealSubtitle(count: Int, asks: Int) -> String {
+        let things = count == 1 ? "1 thing" : "\(count) things"
+        switch asks {
+        case 0: return things
+        case 1: return things + " · 1 needs a date"
+        default: return things + " · \(asks) need a date"
+        }
+    }
+
+    /// What the transcript box is, in the register of the channel it came through.
+    private var transcriptCaption: String {
+        switch captureSource {
+        case .voice: return "What I heard — edit it if I misheard."
+        case .image: return "What the photo said — edit it if I misread."
+        default: return "What you wrote — edit it to change the tasks."
+        }
+    }
+
+    /// The person's answer to "nothing actionable in that": it is a task to them. A
+    /// bordered secondary, never the gradient — Create stays the page's one primary, and
+    /// this is a way forward, not a destination. Lands through the user's own edit path,
+    /// so the reveal boundary is untouched: the system proposed nothing.
+    private var keepAsOneTaskButton: some View {
+        Button {
+            guard let draft = CaptureFlow.keepAsOneTask(text: text, learned: sessionRules()) else {
+                return
+            }
+            Motion.withMotion(Motion.settle) {
+                interpretation.editableDrafts = [draft]
+            }
+            revealedAt = .now
+        } label: {
+            Label("Keep it as one task", systemImage: "plus")
+                .font(.controlLabel)
+                .foregroundStyle(Palette.primaryText)
+                .padding(.horizontal, Spacing.md)
+                .frame(height: 40)
+                .background(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+                .frame(minHeight: LayoutMetrics.hitTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        .accessibilityHint("Makes one task from exactly what you said, with the details still editable")
+    }
+
+    /// A card left the reveal. Record it for the merge (so a re-read cannot resurrect
+    /// it) AND offer the way back, in the same breath: the pill restores the card to the
+    /// place it held and forgets the removal, so Undo is a true inverse.
+    private func noteRemoval(of draft: TaskDraft) {
+        let index = interpretation.drafts.firstIndex { $0.id == draft.id } ?? interpretation.drafts.count
+        removedDrafts.record(draft)
+        lastRemoved = (draft, index)
+        cardNotice = UndoNotice(message: "Removed “\(draft.title)”") {
+            restoreLastRemoved()
+        }
+    }
+
+    private func restoreLastRemoved() {
+        guard let removed = lastRemoved else { return }
+        lastRemoved = nil
+        removedDrafts.forget(removed.draft)
+        Motion.withMotion(Motion.settle) {
+            var drafts = interpretation.editableDrafts
+            drafts.insert(removed.draft, at: min(removed.index, drafts.count))
+            interpretation.editableDrafts = drafts
+        }
     }
 
     /// The capture, as the user gave it, on the page where they judge what was made of
@@ -1529,8 +1649,11 @@ struct ComposerView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
                     .background(Palette.accentGradient, in: Capsule())
+                    .contentTransition(.numericText())
+                    .animation(Motion.fade, value: createTitle)
             }
             .buttonStyle(.pressableProminent)
+            .keyboardShortcut(.return, modifiers: .command)
             .disabled(interpretation.drafts.isEmpty || hasBlankTitledDraft || commitPendingRetry)
         }
         .padding(.horizontal, Spacing.lg)
@@ -1540,8 +1663,22 @@ struct ComposerView: View {
     }
 
     private var createTitle: String {
-        interpretation.drafts.count == 1
-            ? "Create 1 task" : "Create \(interpretation.drafts.count) tasks"
+        let merged = interpretation.drafts.filter { $0.acceptedDuplicate != nil }.count
+        return Self.createTitle(created: interpretation.drafts.count - merged, merged: merged)
+    }
+
+    /// The CTA says what pressing it DOES. "Create 3 tasks" over a set where one card
+    /// merges into an existing task was a small lie the commit pill then had to correct
+    /// a second later; the button is the last thing read before the commit, and it
+    /// should be the first place the truth is stated.
+    static func createTitle(created: Int, merged: Int) -> String {
+        let createPart = created == 1 ? "Create 1 task" : "Create \(created) tasks"
+        switch (created, merged) {
+        case (_, 0): return createPart
+        case (0, 1): return "Merge into existing task"
+        case (0, _): return "Merge \(merged) into existing tasks"
+        default: return createPart + " · merge \(merged)"
+        }
     }
 
     /// `ConfirmCreationCard.titleBinding` has no trim/empty guard, so a card can
@@ -1661,6 +1798,8 @@ struct ComposerView: View {
         parked = nil
         interpretation = Interpretation()
         removedDrafts = RemovedDraftSet()
+        lastRemoved = nil
+        cardNotice = nil
         lastRun = nil
         text = ""
         dismiss()
@@ -1703,6 +1842,8 @@ struct ComposerView: View {
         parked = nil
         interpretation = Interpretation()
         removedDrafts = RemovedDraftSet()
+        lastRemoved = nil
+        cardNotice = nil
         lastRun = nil  // spent: this receipt belongs to the capture just committed
         text = ""
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale

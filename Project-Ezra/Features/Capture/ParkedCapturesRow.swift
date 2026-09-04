@@ -15,12 +15,22 @@
 //  anything is parked, gone the moment nothing is. Tapping resumes the capture in the
 //  composer exactly as leaving it left it.
 //
+//  Two things a place-to-look owes the person (2026-09-04): WHEN the words were left
+//  (a row that says only "unfinished capture" is a row you have to open to recognise),
+//  and a way to let one go WITHOUT opening it — a parked thought you have already
+//  decided against, dismissable only by resuming it and finding Discard, is a row that
+//  nags by construction. Long-press → Discard, behind the same confirmation the
+//  composer's own Discard wears.
+//
 
 import CoreData
 import SwiftUI
 
 struct ParkedCapturesRow: View {
     @Environment(\.resumeCapture) private var resumeCapture
+    @Environment(\.managedObjectContext) private var context
+    /// The parked capture a long-press asked to let go of; the dialog confirms.
+    @State private var discardCandidate: Capture?
     @FetchRequest(
         sortDescriptors: [SortDescriptor(\Capture.createdAt, order: .reverse)],
         predicate: NSPredicate(format: "committedAt == nil AND draftsData != nil")
@@ -33,34 +43,80 @@ struct ParkedCapturesRow: View {
     }
 
     var body: some View {
-        if unfinished.count == 1, let only = unfinished.first {
-            Button {
-                resumeCapture(only)
-            } label: {
-                label(for: only)
-            }
-            .buttonStyle(.pressableLink)
-            .accessibilityLabel("Unfinished capture: \(Self.excerpt(only.rawText))")
-            .accessibilityHint("Resumes it")
-        } else if unfinished.count > 1 {
-            Menu {
-                ForEach(unfinished, id: \.objectID) { capture in
-                    Button(Self.excerpt(capture.rawText)) { resumeCapture(capture) }
+        Group {
+            if unfinished.count == 1, let only = unfinished.first {
+                Button {
+                    resumeCapture(only)
+                } label: {
+                    label(for: only)
                 }
-            } label: {
-                row(
-                    text: "\(unfinished.count) unfinished captures",
-                    detail: Self.excerpt(unfinished[0].rawText))
+                .buttonStyle(.pressableLink)
+                .contextMenu {
+                    Button("Resume") { resumeCapture(only) }
+                    Button("Discard", systemImage: "trash", role: .destructive) {
+                        discardCandidate = only
+                    }
+                }
+                .accessibilityLabel(
+                    "Unfinished capture, \(Self.age(of: only.createdAt)): \(Self.excerpt(only.rawText))"
+                )
+                .accessibilityHint("Resumes it")
+                .accessibilityAction(named: "Discard") { discardCandidate = only }
+            } else if unfinished.count > 1 {
+                Menu {
+                    ForEach(unfinished, id: \.objectID) { capture in
+                        Button {
+                            resumeCapture(capture)
+                        } label: {
+                            Text(Self.excerpt(capture.rawText))
+                            Text(Self.age(of: capture.createdAt))
+                        }
+                    }
+                    Divider()
+                    Menu("Discard…") {
+                        ForEach(unfinished, id: \.objectID) { capture in
+                            Button(Self.excerpt(capture.rawText), role: .destructive) {
+                                discardCandidate = capture
+                            }
+                        }
+                    }
+                } label: {
+                    row(
+                        text: "\(unfinished.count) unfinished captures",
+                        detail: Self.excerpt(unfinished[0].rawText),
+                        age: Self.age(of: unfinished[0].createdAt))
+                }
+                .accessibilityLabel("\(unfinished.count) unfinished captures")
             }
-            .accessibilityLabel("\(unfinished.count) unfinished captures")
+        }
+        .confirmationDialog(
+            "Discard this capture?", isPresented: discardPresented, titleVisibility: .visible
+        ) {
+            Button("Discard", role: .destructive) {
+                if let discardCandidate { AppBrain.discard(discardCandidate, in: context) }
+                discardCandidate = nil
+            }
+            Button("Keep it", role: .cancel) { discardCandidate = nil }
+        } message: {
+            if let discardCandidate {
+                Text("“\(Self.excerpt(discardCandidate.rawText, words: 12))” will be deleted.")
+            }
         }
     }
 
-    private func label(for capture: Capture) -> some View {
-        row(text: "Unfinished capture", detail: Self.excerpt(capture.rawText))
+    private var discardPresented: Binding<Bool> {
+        Binding(
+            get: { discardCandidate != nil },
+            set: { if !$0 { discardCandidate = nil } })
     }
 
-    private func row(text: String, detail: String) -> some View {
+    private func label(for capture: Capture) -> some View {
+        row(
+            text: "Unfinished capture", detail: Self.excerpt(capture.rawText),
+            age: Self.age(of: capture.createdAt))
+    }
+
+    private func row(text: String, detail: String, age: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
             Image(systemName: "text.quote")
                 .font(.glyphCaption())
@@ -72,12 +128,32 @@ struct ParkedCapturesRow: View {
                 .foregroundStyle(Palette.mutedText)
                 .lineLimit(1)
             Spacer(minLength: Spacing.xs)
+            // WHEN, in the row's quietest register: "2h ago" is what lets the person
+            // recognise the thought without opening it.
+            Text(age)
+                .font(.chipLabel)
+                .foregroundStyle(Palette.mutedText)
+                .monospacedDigit()
             Image(systemName: "chevron.right")
                 .font(.glyphCaption())
                 .foregroundStyle(Palette.mutedText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    /// How long ago the words were left, compact: "now" inside a minute, then "5m",
+    /// "2h", "3d" — the same terse vocabulary the task row's due label speaks, never a
+    /// sentence, because this is a caption on a row and not the row's point.
+    static func age(of date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        if seconds < 60 { return "now" }
+        let minutes = Int(seconds / 60)
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h ago" }
+        let days = hours / 24
+        return "\(days)d ago"
     }
 
     /// The first few words — enough to recognise, never the whole dump.
