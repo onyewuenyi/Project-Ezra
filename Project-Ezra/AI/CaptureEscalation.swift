@@ -185,6 +185,12 @@ enum CaptureEscalation {
         }
     }
 
+    /// Compiled once. Constructing `NSRegularExpression` per call is measurably
+    /// wasteful even at capture volume, and the pattern is fixed — it is the ONE
+    /// shared time vocabulary (`IntentResolver.timeExpressionPattern`), never a copy.
+    private static let timeSignalRegex: NSRegularExpression? = try? NSRegularExpression(
+        pattern: IntentResolver.timeExpressionPattern, options: [.caseInsensitive])
+
     /// Distinct time expressions in the capture. Several of them beyond the draft
     /// count is the run-on-dictation shape: occasions competing for boundaries no
     /// draft accounts for. The vocabulary deliberately shadows
@@ -200,10 +206,7 @@ enum CaptureEscalation {
     /// corpus, 2026-09-02). The day alternatives absorb a trailing clock time; a clock
     /// time on its own still counts, because it is an occasion (today's).
     static func timeSignals(in text: String) -> Int {
-        guard
-            let regex = try? NSRegularExpression(
-                pattern: IntentResolver.timeExpressionPattern, options: [.caseInsensitive])
-        else { return 0 }
+        guard let regex = timeSignalRegex else { return 0 }
         let range = NSRange(text.startIndex..., in: text)
         return regex.numberOfMatches(in: text, range: range)
     }
@@ -231,9 +234,7 @@ enum CaptureEscalation {
     /// not a boundary of its own.
     static func interiorVerbSignals(in text: String) -> Int {
         var lowered = text.lowercased()
-        if let regex = try? NSRegularExpression(
-            pattern: IntentResolver.timeExpressionPattern, options: [.caseInsensitive])
-        {
+        if let regex = timeSignalRegex {
             lowered = regex.stringByReplacingMatches(
                 in: lowered, range: NSRange(lowered.startIndex..., in: lowered),
                 withTemplate: " | ")

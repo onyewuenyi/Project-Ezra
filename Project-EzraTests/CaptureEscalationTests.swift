@@ -119,19 +119,19 @@ struct CaptureEscalationTests {
     }
 
     @Test("A spoken detail the resolver could not land escalates")
-    func unresolvedDetailEscalates() async {
+    func unresolvedDetailEscalates() async throws {
         let text = "call the landlord about the lease"
         var drafts = await read(text)
-        try? #require(!drafts.isEmpty)
+        try #require(!drafts.isEmpty)
         drafts[0].unresolved = [.date]
         #expect(CaptureEscalation.reason(for: text, drafts: drafts) == .unresolvedDetail)
     }
 
     @Test("Dropped content escalates; reorganized content does not")
-    func coverageCatchesDroppedContent() async {
+    func coverageCatchesDroppedContent() async throws {
         let text = "schedule the plumber inspection before the kitchen renovation deadline"
         var drafts = await read(text)
-        try? #require(!drafts.isEmpty)
+        try #require(!drafts.isEmpty)
         // The read as produced covers its own words — kept.
         #expect(CaptureEscalation.reason(for: text, drafts: drafts) == nil)
         // Simulate a read that dropped most of the capture's content.
