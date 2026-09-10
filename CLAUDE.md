@@ -214,4 +214,5 @@ Recorded here (the product spec's §11 carries the phase order). **The cloud run
 ## Workflow
 
 - Commit directly to `main` (no PR flow).
+- **`docs/cohort0-checklist.md` is the Cohort 0 Readiness Audit's ground truth — update it in the same change that changes a flow.** The routine reads that file instead of carrying its own list, so a new surface, a new model rung, a new persistence writer or a retired feature each move a check; a checklist that lags the code produces a clean report about an app that no longer exists. A finding ruled "won't fix" moves to its *Known and accepted* section with the reason. The audit may PROPOSE additions in an issue body; it never edits the file.
 - No CI yet. `.gitignore` covers build artifacts / `xcuserdata` / `.claude/settings.local.json`.

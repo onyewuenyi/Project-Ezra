@@ -34,6 +34,7 @@ spec says *what* and *why*, and these say *how it is built* and *how it must loo
 | `prev-docs/design-system-managing-chaos.md` | Palette, type scale, spacing, motion, the calm-intelligence principle. | In force |
 | `prev-docs/product-guardrails.md` | What the product refuses to build. The one notification carve-out **closed** on 2026-09-02 when the Brief was cut — the product now sends zero notifications. Cited by the spec's §09. | In force |
 | `docs/platform-notes.md` | The iOS 27 beta specifics verified the hard way — the four capability/profile traps, Liquid Glass, guided generation. Extracted from `CLAUDE.md` 2026-09-03. | In force |
+| `docs/cohort0-checklist.md` | The flows and failure modes the Cohort 0 Readiness Audit checks, plus the findings already ruled on. The routine reads this file rather than carrying its own list — **update it in the same change that changes a flow.** | In force |
 | `prev-docs/household-architecture.md` | The identity/ownership substrate multiplayer will surface. | In force, dormant |
 
 `docs/capture.md`, `docs/advisor.md` and `docs/surfaces.md` were extracted verbatim from
