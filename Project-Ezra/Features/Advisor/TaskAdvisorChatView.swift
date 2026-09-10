@@ -169,7 +169,11 @@ struct TaskAdvisorChatView: View {
     // MARK: - The thread
 
     private var thread: some View {
-        ScrollViewReader { proxy in
+        // Build the lookup once per render so `line()` doesn't rebuild it per message.
+        let byID = Dictionary(
+            allTasks.compactMap { t in t.uuid.map { ($0, t) } },
+            uniquingKeysWith: { a, _ in a })
+        return ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.md) {
                     if hasOpener {
@@ -188,7 +192,7 @@ struct TaskAdvisorChatView: View {
                             {
                                 ChatTimeDivider(date: message.sentAt)
                             }
-                            line(message)
+                            line(message, byID: byID)
                         }
                         if !followUps.isEmpty {
                             ChatStarterChips(questions: followUps) { send($0) }
@@ -221,7 +225,10 @@ struct TaskAdvisorChatView: View {
     /// Ezra's first turn: the reading in full, with its move. Containerless, like
     /// every Ezra line — the intelligence is the sentence being right.
     private var opener: some View {
-        AdvisorView(
+        // Captured at render-time so the pager's peers match what was shown, even if the
+        // Advisor regenerates between when the row renders and when the person taps it.
+        let peers = readingCitedTasks
+        return AdvisorView(
             state: advisorStore.state(for: task),
             flagged: task.needsDecision && !task.status.isResolved,
             isJudgmentCall: task.isJudgmentCall,
@@ -231,7 +238,7 @@ struct TaskAdvisorChatView: View {
             // The page's waiting spine is under the sheet, not on it: the rows belong
             // here too.
             blockersRenderedElsewhere: false,
-            citedTasks: readingCitedTasks,
+            citedTasks: peers,
             showsObligation: false,
             onDecide: { choice in
                 if let choice {
@@ -256,7 +263,7 @@ struct TaskAdvisorChatView: View {
             onDismiss: { advisorStore.dismiss(taskID: task.uuid) },
             onOpenCited: { cited in
                 actions.followed(.advise)
-                openedPeers = readingCitedTasks
+                openedPeers = peers
                 openedRelated = cited
             }
         )
@@ -291,13 +298,13 @@ struct TaskAdvisorChatView: View {
     }
 
     @ViewBuilder
-    private func line(_ message: ChatMessage) -> some View {
+    private func line(_ message: ChatMessage, byID: [UUID: TaskItem]) -> some View {
         switch message.role {
         case .user:
             ChatUserLine(text: message.text, onAskAgain: isReplying ? nil : { send(message.text) })
                 .transition(reduceMotion ? .opacity : Motion.cardEntry)
         case .advisor:
-            let cited = resolve(message.citedTaskIDs)
+            let cited = message.citedTaskIDs.compactMap { byID[$0] }
             ChatAdvisorLine(
                 message: message,
                 citedTasks: cited,
