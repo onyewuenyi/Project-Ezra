@@ -246,7 +246,7 @@ final class TaskAdvisorStore: ObservableObject {
             // waiting on. Falls through to re-judge below rather than returning.
             if presence == .userIsLooking, entry.modelFailed {
                 entries[id] = nil
-                readings.forget(taskID: id)
+                readings.forget(taskID: id, fingerprint: fingerprint)
             } else {
                 // Rung 1 — re-served. Precompute reaching a warm entry is the SUCCESS case,
                 // not a wasted call: it means the work already happened off the open-moment.

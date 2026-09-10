@@ -67,7 +67,14 @@ final class AdvisorReadingCache {
         }
     }
 
-    /// Drop a task's cached judgment — a retry the person asked for must generate.
+    /// Drop the cached judgment for exactly these facts — a retry must generate fresh.
+    /// Forgets only the one (task, fingerprint) pair so a valid reading on a prior set
+    /// of facts is not evicted when a different fingerprint fails and retries.
+    func forget(taskID: UUID, fingerprint: Int) {
+        sidecar.remove { $0.taskID == taskID && $0.fingerprint == fingerprint }
+    }
+
+    /// Drop ALL cached judgments for a task — use only when the task is deleted.
     func forget(taskID: UUID) {
         sidecar.remove { $0.taskID == taskID }
     }

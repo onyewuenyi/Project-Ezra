@@ -1518,6 +1518,7 @@ struct TaskDetailView: View {
             showSaveFailedAlert = true
             return
         }
+        pendingRetry = nil
         finishPrimary(action, unblocked: unblocked)
     }
 
@@ -1624,6 +1625,7 @@ struct TaskDetailView: View {
             showSaveFailedAlert = true
             return
         }
+        pendingRetry = nil
         advisorStore.ensure(task: task, among: allTasks)
         guard state.isResolved else { return }
         let freed = task.hasActiveBlockers(among: allTasks) ? [] : [task]
@@ -1657,6 +1659,7 @@ struct TaskDetailView: View {
             showSaveFailedAlert = true
             return
         }
+        pendingRetry = nil
         advisorStore.ensure(task: task, among: allTasks)
         refreshContainerKickoff()
         guard state.isResolved else { return }

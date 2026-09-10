@@ -406,6 +406,17 @@ struct ChatCitationParityTests {
                 content.contains("gestures: ChatRowGestures("),
                 "\(file) renders cited rows without the list's two swipes")
         }
+        // The reading-opener `AdvisorView` in the task chat has its own citation path
+        // (`citedTasks: peers`, where `peers` is `readingCitedTasks` captured at render-time).
+        // Removing it would not be caught by the message-level check above, because the
+        // message-level `ChatAdvisorLine` still passes `citedTasks: cited` independently.
+        let taskChatContent = try String(
+            contentsOf: root.appendingPathComponent("Features/Advisor/TaskAdvisorChatView.swift"),
+            encoding: .utf8)
+        #expect(
+            taskChatContent.contains("citedTasks: peers"),
+            "TaskAdvisorChatView's AdvisorView opener is missing its citedTasks — the 'frees up' navigation rows won't render"
+        )
     }
 }
 

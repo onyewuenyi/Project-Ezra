@@ -2023,10 +2023,20 @@ struct ComposerView: View {
             // Entering through `text` is the whole design: onChange → the rolling parse.
             text = text.isEmpty ? recognized : text + "\n" + recognized
         } catch {
-            // A genuine Vision failure (or a timeout) is NOT the same outcome as "no
-            // text found" — collapsing them made a failed read indistinguishable from
-            // "the tap didn't register."
-            showOCRFailedAlert = true
+            if error is CancellationError {
+                // The sheet was dismissed while OCR was running. The file was already
+                // saved at this point; clean it up now so it doesn't persist without a
+                // Capture row to reference it.
+                if let ref = capturedImageRef { CaptureImageStore.delete(ref) }
+                capturedImageRef = nil
+                capturedThumb = nil
+                usedImage = false
+            } else {
+                // A genuine Vision failure (or a timeout) is NOT the same outcome as "no
+                // text found" — collapsing them made a failed read indistinguishable from
+                // "the tap didn't register."
+                showOCRFailedAlert = true
+            }
         }
     }
 
