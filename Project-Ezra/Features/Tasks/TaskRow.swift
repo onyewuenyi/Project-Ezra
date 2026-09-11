@@ -319,9 +319,19 @@ struct TaskRow: View {
 
     private var accessibilityText: String {
         var parts = [task.title, task.status.label]
+        // **The due label is the one thing on the row that position cannot say** — which
+        // is the entire reason it is drawn — and `children: .combine` under an explicit
+        // label DROPS it, so VoiceOver got every flag on the row and never the date.
+        // `.full` rather than the visual `.compact`: "3d over" is a glance, "3 days
+        // overdue" is a sentence, and the overdue arm already says the word.
+        if let due = DueLabel.make(for: task, style: .full) {
+            parts.append(due.isOverdue ? due.text : "due \(due.text)")
+        }
         if task.isUrgent { parts.append("urgent") }
         if task.needsDecision && !task.status.isResolved { parts.append("needs a decision") }
-        if isBlocked { parts.append("blocked") }
+        // Sighted, the blocked row shows WHAT it waits on; spoken, "blocked" alone made
+        // the reader open the task to learn the same thing the row was already carrying.
+        if isBlocked { parts.append(blockerSummary.map { "blocked, \($0)" } ?? "blocked") }
         if let stepProgress { parts.append(stepProgress.label) }
         // The chain indicator is silent, and the expander that used to announce
         // "chain of N linked tasks" is gone — so the row says it.

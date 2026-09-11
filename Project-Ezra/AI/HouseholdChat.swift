@@ -389,10 +389,15 @@ enum HouseholdChatFloor {
                     text: whose.map { "Nothing is asking for \($0) today." } ?? "Nothing is asking for you today.",
                     citedTaskIDs: [])
             }
-            let lead = ranked.count == 1 ? "One thing deserves you first" : "\(ranked.count) things deserve you first"
-            return HouseholdChatAnswer(
-                text: lead + (whose.map { " for \($0)" } ?? "") + " — in order.",
-                citedTaskIDs: ranked.map(\.id))
+            // The subject of the sentence IS the scope — never a hardcoded "you" with the
+            // scope bolted on after it. Written that way, an unscoped ask read "deserve you
+            // first for you" (the day question says "me", so it always resolves a person)
+            // and a scoped one read "deserve you first for Maya".
+            let subject = whose ?? "you"
+            let lead =
+                ranked.count == 1
+                ? "One thing deserves \(subject) first" : "\(ranked.count) things deserve \(subject) first"
+            return HouseholdChatAnswer(text: lead + " — in order.", citedTaskIDs: ranked.map(\.id))
         case .done:
             let done = person == nil ? facts.done : facts.done.filter { $0.ownerName == person?.name }
             guard !done.isEmpty else {

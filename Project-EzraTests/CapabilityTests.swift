@@ -382,11 +382,47 @@ struct CapabilityTests {
         }
         shapes.append(("blocked", blocked, [blocker, blocked]))
 
+        // decomposed — the residual container. Silent like `.plain`, and named apart
+        // from it so the coverage sweep can tell "nothing to improve" from "the work
+        // moved into the steps".
+        let container = task("Redo the spare room", effort: 15, in: context)
+        let step = task("Strip the wallpaper", effort: 15, in: context)
+        if let parentID = container.uuid { step.linkParent(parentID) }
+        shapes.append(("decomposed", container, [container, step]))
+
         for (label, task, among) in shapes {
             let reason = TaskCapabilities.advisorGateReason(for: task, among: among, now: now)
             let worthy = TaskCapabilities.advisorWorthy(for: task, among: among, now: now)
             #expect(worthy == reason.isWorthy, "\(label): \(reason.rawValue)")
         }
+    }
+
+    /// `.decomposed` was declared with the enum and returned by nothing for weeks: a
+    /// container fell through to `.plain`, so the coverage table's column could only read
+    /// 0 while the doc comment above it promised the opposite. It sits LAST deliberately —
+    /// a container with a parent-level problem still speaks.
+    @Test("A container reports decomposed, but only when nothing else is going on")
+    func decomposedIsTheResidualContainer() {
+        let context = context()
+        let now = Date()
+        let container = task("Redo the spare room", effort: 15, in: context)
+        let step = task("Strip the wallpaper", effort: 15, in: context)
+        if let parentID = container.uuid { step.linkParent(parentID) }
+        let all = [container, step]
+
+        #expect(TaskCapabilities.advisorGateReason(for: container, among: all, now: now) == .decomposed)
+        #expect(!TaskCapabilities.advisorWorthy(for: container, among: all, now: now))
+        // The step itself is ordinary work, not a container.
+        #expect(TaskCapabilities.advisorGateReason(for: step, among: all, now: now) == .plain)
+
+        // A parent-level problem outranks it — the steps did not absorb an overdue date.
+        container.dueDate = Calendar.current.date(byAdding: .day, value: -3, to: now)
+        #expect(TaskCapabilities.advisorGateReason(for: container, among: all, now: now) == .overdue)
+        #expect(TaskCapabilities.advisorWorthy(for: container, among: all, now: now))
+
+        // And resolution still short-circuits everything.
+        container.complete(now: now)
+        #expect(TaskCapabilities.advisorGateReason(for: container, among: all, now: now) == .resolved)
     }
 
     @Test("Resolved short-circuits every other rung")

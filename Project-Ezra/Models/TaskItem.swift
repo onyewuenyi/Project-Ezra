@@ -721,8 +721,16 @@ extension TaskItem {
     /// Resolved `.task` blockers stay in the list — so a reopen can re-block — but
     /// don't count here.
     func activeBlockers(among tasks: [TaskItem]) -> [Blocker] {
+        // **The overwhelmingly common task has no blockers at all, and must not pay for
+        // the working set to find that out.** Without this guard every caller built a
+        // Set of every open uuid before discovering there was nothing to test against
+        // it — and the list calls this once per visible row, per render pass, through
+        // `blockerSummary`. Decoding the blob is the cheap half; allocating a set the
+        // size of the whole store is the expensive one.
+        let edges = relationships
+        guard edges.contains(where: { $0.kind == .blocks }) else { return [] }
         let openIDs = Set(tasks.filter { !$0.status.isResolved }.compactMap(\.uuid))
-        return Self.activeBlockers(from: relationships, openIDs: openIDs)
+        return Self.activeBlockers(from: edges, openIDs: openIDs)
     }
 
     /// True when at least one blocker still stands — the single definition of Blocked.
@@ -814,9 +822,10 @@ extension TaskItem {
     func blockerSummary(among tasks: [TaskItem]) -> String? {
         let active = activeBlockers(among: tasks)
         guard let first = active.first else { return nil }
-        let titles = Dictionary(
-            uniqueKeysWithValues: tasks.compactMap { task in task.uuid.map { ($0, task.title) } })
-        let phrase = first.phrase(taskTitle: first.taskID.flatMap { titles[$0] })
+        // ONE title is needed — the first blocker's. This built a uuid→title dictionary
+        // of the entire store to look it up, once per visible row per render pass.
+        let title = first.taskID.flatMap { id in tasks.first { $0.uuid == id }?.title }
+        let phrase = first.phrase(taskTitle: title)
         return active.count == 1 ? phrase : "\(phrase) +\(active.count - 1)"
     }
 

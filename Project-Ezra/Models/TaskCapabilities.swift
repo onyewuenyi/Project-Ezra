@@ -120,6 +120,19 @@ enum TaskCapabilities {
         if let due = task.dueDate, let days = TaskItem.daysUntil(due, now: now), days < 0 {
             return .overdue
         }
+        // **`.decomposed` is the LAST rung, and that placement is the gate decision.**
+        // Until 2026-09-11 nothing returned it at all — a container fell through to
+        // `.plain`, so the column this enum's doc comment promises ("3 are already
+        // decomposed") could only ever read 0, and the coverage sweep could not tell
+        // rising silence caused by simple tasks from silence caused by the breakdown
+        // doing its job. Sitting last, it splits the silent bucket and changes no
+        // verdict: a container that is ALSO stalled, blocked, in progress or overdue
+        // still speaks, because those are problems at the PARENT level that the steps
+        // did not absorb. What it claims is only the residual case — the work moved
+        // into the steps and there is nothing left up here to say. `children`, not
+        // `dependents`, for the reason `BreakdownEligibility` names: the reverse edge
+        // would count any task that merely blocks another.
+        if !task.children(among: tasks).isEmpty { return .decomposed }
         return .plain
     }
 

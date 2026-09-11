@@ -58,7 +58,12 @@ enum DataReset {
 
     /// Empty the store at `scope`. Returns the same `StoreResetRecord` the involuntary
     /// wipes write — durable, backup-carrying — and never throws: a clear the user asked
-    /// for must not be blockable by a failed copy or a failed save.
+    /// for must not be blockable by a failed copy.
+    ///
+    /// **`destroyedData` is the answer to "did it work?"** A failed save returns
+    /// `destroyedData: false` and writes NO receipt — nothing was destroyed, so there is
+    /// nothing to receipt, and the caller has the one fact it needs to say so instead of
+    /// reporting a wipe that did not happen.
     ///
     /// **The receipt is written to `StoreResetLog`, not just returned.** A UI-local return
     /// value dies with the sheet, and "where did my backup go?" is a question asked hours
@@ -68,15 +73,19 @@ enum DataReset {
     /// `metrics`/`planMetrics` are passed in rather than reached for: they are instances
     /// owned by `AppBrain`, and both cache their counters in memory, so clearing their
     /// `UserDefaults` keys alone would leave the numbers on screen until relaunch. Nil in
-    /// tests. `location` is injectable for the same reason `PersistenceStack`'s is — these
-    /// functions write and delete real files.
+    /// tests. `location` and the three sidecar stores (`provenance`/`readings`/`verdicts`)
+    /// are injectable for the same reason `PersistenceStack`'s is — these functions write
+    /// and delete real files, and a test reaching for `.shared` would unlink the
+    /// developer's own.
     @discardableResult
     static func clear(
         _ scope: Scope, in context: NSManagedObjectContext,
         metrics: MetricsRecorder? = nil,
         defaults: UserDefaults = .standard, now: Date = Date(),
         at location: PersistenceStack.StoreLocation = .default,
-        provenance: CaptureProvenanceStore? = nil
+        provenance: CaptureProvenanceStore? = nil,
+        verdicts: HumanVerdictStore? = nil,
+        readings: AdvisorReadingCache? = nil
     ) -> StoreResetRecord {
         // A copy first, always — the same rule `destroyStore` holds. Best-effort by
         // design, and weaker here than there: this copies a store that is currently OPEN,
@@ -85,22 +94,44 @@ enum DataReset {
         let backupName = PersistenceStack.backupStore(now: now, at: location)
 
         // Image bytes live beside the store as files keyed by `Capture.imageRef`;
-        // deleting the row alone would orphan them in the container forever.
+        // deleting the row alone would orphan them in the container forever. Read BEFORE
+        // the rows go, deleted only after the save lands (below) — a file unlinked ahead
+        // of a save that then fails is data destroyed by a clear that didn't happen.
         let captures = (try? context.fetch(NSFetchRequest<Capture>(entityName: "Capture"))) ?? []
-        for ref in captures.compactMap(\.imageRef) { CaptureImageStore.delete(ref) }
-
-        // Capture provenance receipts are a file sidecar keyed by `Capture.uuid`, so they
-        // orphan exactly the way the image bytes above do — and BOTH scopes delete
-        // `Capture`, so this is not an `.everything` concern. Passed in rather than reached
-        // for, like `metrics`: it deletes a real file, and a test reaching `.shared` would
-        // unlink the developer's own receipts.
-        provenance?.reset()
+        let imageRefs = captures.compactMap(\.imageRef)
 
         for name in entityNames(for: scope, in: context) {
             let request = NSFetchRequest<NSManagedObject>(entityName: name)
             (try? context.fetch(request))?.forEach(context.delete)
         }
-        context.saveChanges()
+
+        // **The save's result IS the clear's result.** Discarded, a failure was invisible
+        // twice over: the context kept the pending deletions, so every later save
+        // (`SettingsView`'s `.onDisappear`, the next capture) re-attempted and re-failed
+        // them — and the caller still got a receipt saying the data was gone, while the
+        // store on disk was untouched and every task came back on relaunch. That is
+        // exactly the "clearing does nothing" shape. Roll the deletions back so the app is
+        // left consistent, and hand back a record that says nothing was destroyed.
+        guard context.saveChanges() else {
+            context.rollback()
+            return StoreResetRecord(
+                reason: .userRequested(clearedIdentity: scope == .everything), date: now,
+                backupName: backupName, destroyedData: false)
+        }
+
+        // The three file sidecars, cleared only once the rows they describe are actually
+        // gone. Each is keyed to something BOTH scopes delete — provenance and the
+        // Advisor's cached judgments to `Capture`/`TaskItem` ids, the human's verdicts to
+        // readings and drafts whose Core Data half (`Correction`, `SuppressionRecord`)
+        // just went with them — so a scope that spared them would leave half a learning
+        // corpus about work that no longer exists, and a "reset everything" that still
+        // remembers what you told it. Passed in rather than reached for, like `metrics`:
+        // they delete real files, and a test reaching `.shared` would unlink the
+        // developer's own.
+        for ref in imageRefs { CaptureImageStore.delete(ref) }
+        provenance?.reset()
+        readings?.reset()
+        verdicts?.reset()
 
         for key in workKeys { defaults.removeObject(forKey: key) }
 

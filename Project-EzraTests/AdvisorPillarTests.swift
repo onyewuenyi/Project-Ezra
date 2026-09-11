@@ -275,4 +275,38 @@ struct DayAnswerTests {
         let answer = facts.dayAnswer(for: nil)
         #expect(answer.first?.id == unblocked.last!.id)
     }
+
+    /// The opener is the first sentence the Ask sheet ever shows, and it read
+    /// "3 things deserve you first **for you** — in order." on every unscoped ask,
+    /// because the lead hardcoded "you" and the scope was appended after it. The day
+    /// question says "me", so a person is ALWAYS resolved and the suffix always fired.
+    /// Scoped to someone else it read worse: "deserve you first for Maya".
+    @Test("The day answer names its subject once — never 'deserve you first for you'")
+    func openerNamesItsSubjectOnce() {
+        let facts = HouseholdChatEval.fixture()
+        let mine = HouseholdChatFloor.answer(question: "What deserves me today?", facts: facts)
+        #expect(mine?.text.contains("for you") == false)
+        #expect(mine?.text.hasSuffix("deserve you first — in order.") == true)
+
+        // Scoping the day answer to someone else reaches it through the phrasings that
+        // don't spell "me" — "what deserves Maya today" carries "today" and lands on
+        // due-today instead, which is a fine answer to a different question.
+        guard let maya = facts.members.first(where: { $0.name == "Maya" }) else { return }
+        #expect(HouseholdChatFloor.shape(of: "What matters most for Maya?", facts: facts) == .today)
+        let hers = HouseholdChatFloor.answer(question: "What matters most for Maya?", facts: facts)
+        #expect(hers?.text.contains("deserve you first") == false)
+        #expect(hers?.text.contains("Maya first — in order.") == true)
+        #expect(hers?.citedTaskIDs.allSatisfy { id in
+            facts.open.first { $0.id == id }?.ownerID == maya.id
+        } == true)
+
+        // One row is singular, and still names the subject exactly once.
+        let yours = facts.members.first(where: \.isYou)
+        if let one = facts.open.first(where: { !$0.isBlocked && $0.ownerID == yours?.id }) {
+            let single = HouseholdChatFacts(
+                now: facts.now, members: facts.members, open: [one], done: facts.done)
+            let answer = HouseholdChatFloor.answer(question: "What deserves me today?", facts: single)
+            #expect(answer?.text == "One thing deserves you first — in order.")
+        }
+    }
 }
