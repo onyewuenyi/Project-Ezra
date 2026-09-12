@@ -173,6 +173,13 @@ struct TaskDeckView: View {
                 .metadataStyle()
                 .monospacedDigit()
                 .contentTransition(.numericText())
+            if chain.umbrella != nil {
+                // The caption opens the outcome; the chevron the parked row wears — at the
+                // end of the line, where that row wears it — says so.
+                Image(systemName: "chevron.right")
+                    .font(.glyphCaption())
+                    .foregroundStyle(Palette.mutedText)
+            }
         }
         .contentShape(Rectangle())
         // The caption is the way UP: the umbrella's own detail carries every step,
