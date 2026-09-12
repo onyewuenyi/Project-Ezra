@@ -35,11 +35,7 @@ struct TaskChain: Identifiable {
     /// collapsed stack shows) sorts first under the stack precedence.
     var root: TaskItem {
         let roots = members.filter { TaskChainGrouping.prerequisites(of: $0, within: members).isEmpty }
-        return roots.min { a, b in
-            guard let ka = a.uuid.flatMap({ rankKeys[$0] }), let kb = b.uuid.flatMap({ rankKeys[$0] })
-            else { return false }
-            return TaskRanking.stackOrder(ka, kb)
-        } ?? members[0]
+        return roots.min { TaskChainGrouping.precedes($0, $1, keys: rankKeys) } ?? members[0]
     }
 }
 
@@ -240,13 +236,29 @@ enum TaskChainGrouping {
     /// whatever's left if nothing is ever ready (shouldn't happen — `addBlocker`
     /// already prevents cycles at write time, and containment can't cycle — but this
     /// keeps grouping from infinite-looping if one somehow existed).
+    /// The tiebreak between two members that are both ready: **siblings under one umbrella
+    /// keep their BREAKDOWN order** (`sortIndex`, then `createdAt`, then uuid — the same
+    /// ordering `children(among:)` is), everything else takes the stack precedence.
+    ///
+    /// This is what makes the deck's front card, the container spine's next-step pointer
+    /// and the kickoff line agree: all three now read the model's proposed sequence for
+    /// steps. Before it the deck picked its front by attention among the roots, so
+    /// "Order the cake" led the deck while the page called it "2 of 3 left".
+    static func precedes(_ a: TaskItem, _ b: TaskItem, keys: [UUID: RankKey]) -> Bool {
+        if let parent = a.parentTaskID, parent == b.parentTaskID {
+            return (a.sortIndex, a.createdAt, a.uuid?.uuidString ?? "")
+                < (b.sortIndex, b.createdAt, b.uuid?.uuidString ?? "")
+        }
+        guard let ka = a.uuid.flatMap({ keys[$0] }), let kb = b.uuid.flatMap({ keys[$0] })
+        else { return false }
+        return TaskRanking.stackOrder(ka, kb)
+    }
+
     private static func topologicallyLayer(
         _ members: [TaskItem], keys: [UUID: RankKey]
     ) -> [TaskItem] {
         func precedes(_ a: TaskItem, _ b: TaskItem) -> Bool {
-            guard let ka = a.uuid.flatMap({ keys[$0] }), let kb = b.uuid.flatMap({ keys[$0] })
-            else { return false }
-            return TaskRanking.stackOrder(ka, kb)
+            TaskChainGrouping.precedes(a, b, keys: keys)
         }
         var remaining = members
         var ordered: [TaskItem] = []

@@ -517,13 +517,20 @@ struct TaskDetailView: View {
         if let parentID = task.parentTaskID,
             let parent = allTasks.first(where: { $0.uuid == parentID })
         {
+            // Where this step sits, in the DECK's own terms — position among the outcome's
+            // open steps, the same "n/m" the list's caption shows — so the page and the
+            // card a person just tapped agree. Silent once the step is resolved: it has
+            // left the deck, and a position in it would be a claim about nothing.
+            let open = parent.openSteps(among: allTasks)
+            let position = open.firstIndex { $0.objectID == task.objectID }
+                .map { " · \($0 + 1) of \(open.count) left" } ?? ""
             Button {
                 openedRelated = parent
             } label: {
                 HStack(spacing: Spacing.xxs) {
                     Image(systemName: "arrow.turn.left.up")
                         .font(.glyphCaption())
-                    Text("Part of “\(parent.title)”")
+                    Text("Part of “\(parent.title)”\(position)")
                         .font(.chipLabel)
                         .lineLimit(1)
                     Image(systemName: "chevron.right")
@@ -534,7 +541,7 @@ struct TaskDetailView: View {
             }
             .buttonStyle(.pressableLink)
             .minimumHitTarget()
-            .accessibilityLabel("Part of \(parent.title)")
+            .accessibilityLabel("Part of \(parent.title)\(position)")
             .accessibilityHint("Open the containing task")
         }
     }
