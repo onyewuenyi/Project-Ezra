@@ -40,7 +40,12 @@ enum StallDiagnosis: Hashable {
 
     /// The card's one-line statement of what it noticed. Reporting, never scoring —
     /// no streaks, no judgement, no exclamation marks.
-    func headline(deferralCount: Int) -> String {
+    /// Both counts are REQUIRED. A default here is how this branch would stay dead a
+    /// second time: `ChatAdvisorLine.citedTasks` shipped unset for a day and rendered no
+    /// citations at all with every test green, and `triage`'s `route:` defaulted to
+    /// `.cloud` and transmitted a new user's first brain dump. A caller that does not name
+    /// the input is a caller nobody is deciding for.
+    func headline(deferralCount: Int, abandonedStarts: Int) -> String {
         switch self {
         case .blocked:
             return "This is waiting on something else."
@@ -49,6 +54,14 @@ enum StallDiagnosis: Hashable {
         case .reallyADecision:
             return "This reads like a decision, not a task."
         case .dying:
+            // Two different stalls, and saying the wrong one is worse than saying nothing
+            // specific. A task picked up and dropped repeatedly has NOT "gone quiet" — it
+            // is the loudest thing on the list — and until 2026-09-12 that is exactly what
+            // it was told, because this branch read `deferralCount` and the Brief that
+            // wrote it was cut on 2026-09-02.
+            if abandonedStarts >= 2 {
+                return "You've started this \(abandonedStarts) times and put it back down."
+            }
             return deferralCount >= 2
                 ? "You've set this aside \(deferralCount) times." : "This has gone quiet."
         }
@@ -101,9 +114,34 @@ enum StallDetector {
         return .dying
     }
 
+    /// Repeatedly picked up and put back down inside `quietThreshold` → stalled.
+    ///
+    /// **Two, not three**, and for the same reason the depth router's floor is two: a
+    /// deferral is one tap and often means nothing about the task, while an abandoned start
+    /// is a declared start and an abandoned one. One is an interruption; two is a pattern.
+    static let abandonmentThreshold = 2
+
     /// Has this task actually stalled? Two independent signals, either sufficient.
+    ///
+    /// **One of them had been dead for ten days** (fixed 2026-09-12). The avoidance signal
+    /// read `deferralCount`, whose only writer was the Brief's day-rollover, and the Brief
+    /// was cut on 2026-09-02 — so the only surviving route to "stalled" was neglect by
+    /// SILENCE. A person actively bouncing off a task, picking it up and dropping it week
+    /// after week, was invisible to the sensor that exists to catch exactly that, and the
+    /// whole Advisor diagnosis ladder behind it (`blocked` / `tooBig` / `reallyADecision` /
+    /// `dying`) never opened for them.
+    ///
+    /// The abandonment arm deliberately does not fire while the task is `.doing`: the open
+    /// visit is not an abandonment, and telling someone they keep avoiding the thing they
+    /// are doing right now is nagging. Starting it silences the diagnosis for as long as
+    /// they are working, which is the same dismissability `touchHuman` used to provide.
     static func isStalled(_ task: TaskItem, now: Date = Date()) -> Bool {
         if task.deferralCount >= deferralThreshold { return true }
+        if task.status != .doing,
+            task.recentAbandonedStarts(within: quietThreshold, now: now) >= abandonmentThreshold
+        {
+            return true
+        }
         return now.timeIntervalSince(task.humanTouchedAt) > quietThreshold
     }
 

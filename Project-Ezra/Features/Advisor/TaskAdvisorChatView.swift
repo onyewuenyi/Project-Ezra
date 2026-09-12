@@ -236,6 +236,7 @@ struct TaskAdvisorChatView: View {
             flagged: task.needsDecision && !task.status.isResolved,
             isJudgmentCall: task.isJudgmentCall,
             deferralCount: Int(task.deferralCount),
+            abandonedStarts: task.recentAbandonedStarts(within: StallDetector.quietThreshold),
             diagnosis: StallDetector.diagnose(task, among: allTasks),
             blockers: task.activeBlockerTasks(among: allTasks),
             // The page's waiting spine is under the sheet, not on it: the rows belong

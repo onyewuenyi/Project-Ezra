@@ -56,19 +56,20 @@ struct Project_EzraApp: App {
         // `draftsData` + `committedAt` so an abandoned capture parks instead of
         // evaporating.
         //
-        // **This spends most of the remaining clean-break budget.** The wipe-on-mismatch
-        // escape hatch closes the day `HouseholdSync.isLive` flips: a deployed CloudKit
-        // schema is additive-only, with no server-side reset. Treat everything after
-        // this as additive-in-practice, and run a schema-freeze review gated to that
-        // flip rather than declaring a final generation now — real usage of this model
-        // is exactly what is most likely to reveal a shape mistake.
+        // **The clean-break budget is SPENT (2026-09-12).** `HouseholdSync.isLive` flipped,
+        // and with it the wipe-on-mismatch escape hatch closed: a deployed CloudKit
+        // schema is additive-only, with no server-side reset, so a local wipe would only
+        // re-download the same records with the same meaning. `schemaGeneration` is now
+        // `frozenSchemaGeneration`, pinned by `SchemaFreezeTests`; every model change from
+        // here is a NEW `.xcdatamodel` version (v4 was the first under the freeze — the
+        // household edges on TaskItem/ChangeLogEntry, `Invitation.memberID`/`acceptedAt`,
+        // `FamilyMember.uuid` optional for CloudKit), and a meaning change is expressed as
+        // a new field beside the old one, never a re-reading of stored values.
         //
-        // Wipes existing stores — accepted under the clean-break policy, but NO LONGER
-        // silently: every reset takes a safety copy first (`PersistenceStack.backupStore`)
-        // and leaves a `StoreResetRecord` that Settings surfaces until acknowledged. The
-        // store now holds real captured work, so an invisible wipe is indistinguishable
-        // from the app losing it.
-        let schemaGeneration = 10
+        // The mismatch path below stays for the ONE install that could still be behind
+        // (a device on generation 9 updating), and it still wipes with a safety copy and a
+        // `StoreResetRecord` that Settings surfaces until acknowledged.
+        let schemaGeneration = Self.frozenSchemaGeneration
         let generationKey = "appSchemaGeneration"
         let storedGeneration = UserDefaults.standard.integer(forKey: generationKey)
         if storedGeneration != schemaGeneration {
@@ -128,8 +129,23 @@ struct Project_EzraApp: App {
         }
         container.viewContext.automaticallyMergesChangesFromParent = true
         container.viewContext.mergePolicy = NSMergePolicy.mergeByPropertyObjectTrump
+        // Which store a new object lands in — private or the shared household — decided
+        // once, at save, for every creation site at once.
+        storeAffinityObserver = HouseholdStoreAffinity.install(on: container.viewContext)
+        // The invite flow's owner-side (make a link) and invitee-side (accept, link identity).
+        HouseholdSharing.shared.configure(container: container, context: container.viewContext)
         return container
     }()
+
+    /// The schema generation, FROZEN at 10 the day sync went live (see the container's
+    /// header comment). Moving this number is a wipe of every device's local store under a
+    /// CloudKit schema that cannot follow, so `SchemaFreezeTests` pins it while
+    /// `HouseholdSync.isLive` is true.
+    static let frozenSchemaGeneration = 10
+
+    /// Keeps the store-affinity observer alive for the life of the process (see
+    /// `HouseholdStoreAffinity`). Installed once, below, after the container loads.
+    nonisolated(unsafe) private static var storeAffinityObserver: NSObjectProtocol?
 
     /// True when this process is the unit-test host. The host keeps its container (tests
     /// never touch it) but boots an empty scene: the live app UI doing its normal work
@@ -163,21 +179,37 @@ struct Project_EzraApp: App {
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .active:
-                    // Every foreground is a self-initiated open by construction: the app
-                    // sends no notifications (the one carve-out closed with the Brief,
-                    // 2026-09-02), so there is nothing that could have solicited it.
-                    brain.metrics.recordOpen()
+                    // A foreground the Sunday digest solicited is NOT a self-initiated
+                    // open (the one notification, carve-out 2026-09-12); every other
+                    // foreground is, by construction.
+                    if !WeeklyDigestScheduler.shared.consumeNotificationOpen() {
+                        brain.metrics.recordOpen()
+                    }
                     // Hourly-debounced maintenance: the reversible stale auto-archive.
                     brain.runMaintenanceSweepsIfDue(in: container.viewContext)
+                    // An accepted household whose records landed while the app was away.
+                    HouseholdSharing.shared.retryPendingLink()
+                    refreshDigest()
                 default:
                     break
                 }
             }
-            // Clear any notification a PREVIOUS build scheduled. The daily briefing nudge
-            // retired with the Brief; without this the requests survive the update and
-            // keep firing at a surface that no longer exists. Idempotent, so it just runs.
+            // Clear any notification a PREVIOUS build scheduled (the retired daily
+            // briefing nudge) — everything except the one request this build owns, so
+            // the digest `refreshDigest` just scheduled is not swept with it.
             .task {
-                UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+                let center = UNUserNotificationCenter.current()
+                let pending = await center.pendingNotificationRequests().map(\.identifier)
+                center.removePendingNotificationRequests(
+                    withIdentifiers: pending.filter { $0 != WeeklyDigest.identifier })
             }
+    }
+
+    /// Recompose the Sunday digest from the store as it stands now. Cheap (one fetch of
+    /// the working set) and idempotent, so it runs on every foreground.
+    private func refreshDigest() {
+        let context = container.viewContext
+        let caretakers = Household.existing(in: context).map(HouseholdActivation.caretakerIDs).map(\.count) ?? 1
+        WeeklyDigestScheduler.shared.refresh(tasks: TaskItem.fetchAll(in: context), caretakerCount: caretakers)
     }
 }

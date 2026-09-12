@@ -15,7 +15,8 @@
 //
 //  The plan encodes every rule the submit path enforces, in order of precedence:
 //  1. **The posture outranks the router** (F-03): on-device never transmits.
-//  2. **One thought + a model + on-device posture** runs the private engine.
+//  2. **On-device posture + a model**: one thought runs the private engine, several things
+//     run the boundary pass — the posture is no longer a quality trade.
 //  3. Otherwise the device-first router decides (`CaptureRoute.route`), voice-aware (F-02).
 //  4. A local read earns the thinking beat only when SPOKEN; typed structure reveals instantly.
 //
@@ -32,6 +33,17 @@ enum CaptureFlow {
         case revealAfterDwell
         /// On-device posture, one thought, a model present: the single-thought engine.
         case privateEngine
+        /// On-device posture, SEVERAL things, a model present: the boundary pass
+        /// (`OnDeviceSegmenter`), then the deterministic resolve of each fragment.
+        ///
+        /// This is the arm the posture most needed and did not have. Choosing "On device"
+        /// used to COST quality on exactly the captures where boundaries are hard: one
+        /// thought got the private engine, several things fell to a single deterministic
+        /// read of the whole run-on — the read whose under-segmentation is what escalates
+        /// on the open posture. The boundary pass answers that without transmitting, so
+        /// the posture stops being a trade. A refusal falls to the same deterministic read
+        /// it would have got anyway; the cloud is unreachable from here either way.
+        case boundaryPass
         /// The authority: the orb holds while the cloud (or its degrade) reads.
         case authority(CaptureEscalationReason?)
     }
@@ -43,13 +55,29 @@ enum CaptureFlow {
     }
 
     /// The decision, from everything known at submit.
+    ///
+    /// `boundaryPassAvailable` is a REQUIRED parameter rather than a default reading
+    /// `OnDeviceSegmenter.isRoutingEnabled`, and the reason is scar tissue: this codebase
+    /// has twice shipped a capability decided by an unset default parameter — the
+    /// candidate-blind capture prompt (a feature silently disabled for weeks, every test
+    /// green) and `triage`'s `route:` defaulting to `.cloud` (a new user's first brain dump
+    /// silently transmitted). A capability the caller does not name is a capability nobody
+    /// is deciding about.
     static func plan(
         text: String, localRead: [TaskDraft], fromVoice: Bool, posture: CapturePosture,
-        privateModelAvailable: Bool
+        privateModelAvailable: Bool, boundaryPassAvailable: Bool
     ) -> SubmitPlan {
         if posture == .onDevice {
-            if privateModelAvailable, !PrivateCaptureEngine.soundsLikeSeveralThings(text) {
-                return SubmitPlan(route: .local, escalation: nil, arm: .privateEngine)
+            if privateModelAvailable {
+                // The two on-device envelopes are complementary by construction: the
+                // detector's question is exactly "one thought or several?".
+                return SubmitPlan(
+                    route: .local, escalation: nil,
+                    arm: PrivateCaptureEngine.soundsLikeSeveralThings(text)
+                        ? (boundaryPassAvailable
+                            ? .boundaryPass
+                            : (fromVoice ? .revealAfterDwell : .revealInstantly))
+                        : .privateEngine)
             }
             return SubmitPlan(
                 route: .local, escalation: nil, arm: fromVoice ? .revealAfterDwell : .revealInstantly)
@@ -57,7 +85,8 @@ enum CaptureFlow {
         let decision = CaptureRoute.route(for: text, localRead: localRead, fromVoice: fromVoice)
         switch decision.route {
         case .cloud:
-            return SubmitPlan(route: .cloud, escalation: decision.escalation, arm: .authority(decision.escalation))
+            return SubmitPlan(
+                route: .cloud, escalation: decision.escalation, arm: .authority(decision.escalation))
         case .local:
             return SubmitPlan(
                 route: .local, escalation: nil, arm: fromVoice ? .revealAfterDwell : .revealInstantly)

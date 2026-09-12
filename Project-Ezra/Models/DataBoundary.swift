@@ -36,8 +36,15 @@ struct DataBoundary: Equatable {
     let judgment: String
     /// What never leaves, under any configuration.
     let never: String
+    /// The product-telemetry line (2026-09-12) — present only while telemetry is live on
+    /// this install, so a build with no sink or a person who opted out is not told about
+    /// a transmission that isn't happening. Says what is NOT sent first.
+    var telemetry: String? = nil
+    /// The household-sync line — present only once `HouseholdSync.isLive`, because before
+    /// that nothing claims another person will see anything.
+    var sync: String? = nil
 
-    var sentences: [String] { [capture, judgment, never] }
+    var sentences: [String] { [capture, judgment, never] + [sync, telemetry].compactMap { $0 } }
 
     /// The boundary as it currently stands.
     ///
@@ -45,7 +52,21 @@ struct DataBoundary: Equatable {
     /// answer. Note what is NOT a parameter: which provider, which model, how many calls
     /// remain. The user experiences "Ezra thought", never a vendor or a budget — v5 cuts
     /// provider names and usage mechanics from customer-facing language entirely.
-    static func current(cloudReachable: Bool, posture: CapturePosture = .open) -> DataBoundary {
+    static func current(
+        cloudReachable: Bool, posture: CapturePosture = .open,
+        telemetry: Bool = false, syncLive: Bool = HouseholdSync.isLive
+    ) -> DataBoundary {
+        var boundary = base(cloudReachable: cloudReachable, posture: posture)
+        if telemetry { boundary.telemetry = Telemetry.boundarySentence }
+        if syncLive { boundary.sync = syncSentence }
+        return boundary
+    }
+
+    /// Sync, in the person's words: WHO sees, not which cloud carries it. No vendor.
+    static let syncSentence =
+        "Your household's tasks are shared only with the people you invite, and only after you invite them."
+
+    private static func base(cloudReachable: Bool, posture: CapturePosture) -> DataBoundary {
         // The posture (F-03) is the person's own setting, so it is said first when it is
         // on: what leaves the device is something they chose, in their words.
         if posture == .onDevice {

@@ -18,6 +18,7 @@
 //  context is for test/preview fixtures alone, so contexts never cross.
 //
 
+import CloudKit
 import CoreData
 import OSLog
 
@@ -56,10 +57,26 @@ enum PersistenceStack {
     /// One logger for the persistence layer — save failures, backups, resets.
     static let log = Logger(subsystem: "com.projectezra.app", category: "persistence")
 
-    /// The CloudKit container id. Nil until the iCloud entitlement is added in Xcode
-    /// signing (Phase 2c) — while nil the store is local (fully functional, sim-testable);
-    /// set it (and the entitlement) to switch private-DB sync on with no other change.
-    static let cloudKitContainerID: String? = nil
+    /// The CloudKit container id — SET on 2026-09-12, the day `HouseholdSync.isLive`
+    /// flipped, in the same change as the entitlement (`Project_Ezra.entitlements`). This
+    /// is the one-way door CLAUDE.md describes: a deployed CloudKit schema is additive-only
+    /// with no server-side reset, so from here every model change is a NEW version and
+    /// `schemaGeneration` never moves again (`Project_EzraApp.frozenSchemaGeneration`).
+    ///
+    /// Two databases, two stores: the PRIVATE store (`storeURL`) holds everything this
+    /// person owns — their own household when they are its owner, plus the entities that
+    /// never travel (`Correction`, `Capture`, `EmbeddingCache`, `SuppressionRecord`,
+    /// `UserProfile`); the SHARED store (`sharedStoreURL`) mirrors a household someone
+    /// else owns and invited this person into. Which store a new object lands in is decided
+    /// ONCE, at save, by `HouseholdStoreAffinity` — never per creation site.
+    static let cloudKitContainerID: String? = "iCloud.amanze-studios.Project-Ezra"
+
+    /// Whether this process runs the CloudKit container at all. The unit-test host does
+    /// not: `NSPersistentCloudKitContainer` mutates the shared model for CloudKit-readiness,
+    /// which corrupts class binding for `scratch` in the same process (the multi-coordinator
+    /// trap this file warns about throughout), and a suite must never reach a real
+    /// container anyway. Everywhere else it follows the id.
+    static var usesCloudKit: Bool { cloudKitContainerID != nil && !Project_EzraApp.isHostingUnitTests }
 
     /// The ONE managed object model, loaded once and shared by every container. A single
     /// `@objc` subclass must be claimed by exactly one `NSManagedObjectModel` instance —
@@ -104,18 +121,39 @@ enum PersistenceStack {
     /// moment `cloudKitContainerID` is non-nil and the entitlement exists; until then this
     /// is a local store.
     static func makeContainer(inMemory: Bool = false) -> NSPersistentContainer {
-        // Use the plain container until CloudKit is actually enabled — an
-        // `NSPersistentCloudKitContainer` mutates the shared model for CloudKit-readiness,
-        // which corrupts class binding for the in-memory test containers in the same
-        // process. Switch to the CloudKit container the moment `cloudKitContainerID` is set.
+        // The plain container under the test host (see `usesCloudKit`); the CloudKit one
+        // everywhere else.
         let container: NSPersistentContainer =
-            cloudKitContainerID != nil
+            usesCloudKit
             ? NSPersistentCloudKitContainer(name: "ProjectEzra", managedObjectModel: model)
             : NSPersistentContainer(name: "ProjectEzra", managedObjectModel: model)
         guard let desc = container.persistentStoreDescriptions.first else {
             fatalError("Container created without a store description")
         }
-        if inMemory { desc.url = URL(fileURLWithPath: "/dev/null") }
+        desc.url = inMemory ? URL(fileURLWithPath: "/dev/null") : storeURL
+        configure(desc)
+        if usesCloudKit, let id = cloudKitContainerID {
+            let privateOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: id)
+            privateOptions.databaseScope = .private
+            desc.cloudKitContainerOptions = privateOptions
+
+            // The SHARED database — households other people own and invited this person
+            // into. Same model, same options, `.shared` scope, its own file. Listed SECOND
+            // so an object with no relationship anchoring it to a store (a `Correction`, a
+            // `Capture`) defaults to the private one.
+            let shared = NSPersistentStoreDescription(
+                url: inMemory ? URL(fileURLWithPath: "/dev/null") : sharedStoreURL)
+            configure(shared)
+            let sharedOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: id)
+            sharedOptions.databaseScope = .shared
+            shared.cloudKitContainerOptions = sharedOptions
+            container.persistentStoreDescriptions = [desc, shared]
+        }
+        return container
+    }
+
+    /// The store options every description carries, stated once.
+    private static func configure(_ desc: NSPersistentStoreDescription) {
         desc.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
         desc.setOption(
             true as NSNumber, forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
@@ -129,22 +167,36 @@ enum PersistenceStack {
         // place, always add a new one (see the DEBUG tripwire in `Project_EzraApp`).
         desc.shouldMigrateStoreAutomatically = true
         desc.shouldInferMappingModelAutomatically = true
-        if let id = cloudKitContainerID {
-            desc.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
-                containerIdentifier: id)
-        }
-        return container
     }
 
     /// The store's file name, and the sidecars that must travel with it. A sqlite store
     /// copied WITHOUT its `-wal` is a store missing its most recent writes.
     static let storeFileName = "ProjectEzra.sqlite"
+    /// The shared-database mirror's file. A safety copy takes it too, and a reset removes
+    /// it too — a shared store left behind under a fresh private one would describe a
+    /// household this install no longer knows it belongs to.
+    static let sharedStoreFileName = "ProjectEzra-shared.sqlite"
     private static let storeSuffixes = ["", "-wal", "-shm"]
 
     /// The on-disk store location, for the clean-break reset (delete + recreate on a schema
     /// generation bump — Core Data has no lightweight path for a meaning change here).
     static var storeURL: URL {
         NSPersistentContainer.defaultDirectoryURL().appendingPathComponent(storeFileName)
+    }
+
+    static var sharedStoreURL: URL {
+        NSPersistentContainer.defaultDirectoryURL().appendingPathComponent(sharedStoreFileName)
+    }
+
+    /// The loaded private / shared stores, by the URL each was configured with. Nil until
+    /// `loadPersistentStores` has run, and the shared one is nil on every build that does
+    /// not use CloudKit — callers treat "no shared store" as "nothing can be accepted".
+    static func privateStore(in container: NSPersistentContainer) -> NSPersistentStore? {
+        container.persistentStoreCoordinator.persistentStore(for: storeURL)
+    }
+
+    static func sharedStore(in container: NSPersistentContainer) -> NSPersistentStore? {
+        container.persistentStoreCoordinator.persistentStore(for: sharedStoreURL)
     }
 
     // MARK: - Safety copies
@@ -169,6 +221,11 @@ enum PersistenceStack {
         }
 
         var fileName: String { storeURL.lastPathComponent }
+
+        /// The private store and, beside it, the shared mirror — both copied, both removed.
+        var storeFileNames: [String] {
+            [fileName, PersistenceStack.sharedStoreFileName]
+        }
 
         static var `default`: StoreLocation { StoreLocation(storeURL: PersistenceStack.storeURL) }
 
@@ -204,11 +261,12 @@ enum PersistenceStack {
         let dir = location.storeURL.deletingLastPathComponent()
         do {
             try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-            for suffix in storeSuffixes {
-                let source = dir.appendingPathComponent(location.fileName + suffix)
-                guard fm.fileExists(atPath: source.path) else { continue }
-                try fm.copyItem(
-                    at: source, to: folder.appendingPathComponent(location.fileName + suffix))
+            for name in location.storeFileNames {
+                for suffix in storeSuffixes {
+                    let source = dir.appendingPathComponent(name + suffix)
+                    guard fm.fileExists(atPath: source.path) else { continue }
+                    try fm.copyItem(at: source, to: folder.appendingPathComponent(name + suffix))
+                }
             }
         } catch {
             try? fm.removeItem(at: folder)
@@ -293,9 +351,10 @@ enum PersistenceStack {
         let storeExisted = FileManager.default.fileExists(atPath: location.storeURL.path)
         let backupName = backupStore(now: now, at: location)
         let dir = location.storeURL.deletingLastPathComponent()
-        for suffix in storeSuffixes {
-            try? FileManager.default.removeItem(
-                at: dir.appendingPathComponent(location.fileName + suffix))
+        for name in location.storeFileNames {
+            for suffix in storeSuffixes {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(name + suffix))
+            }
         }
         return StoreResetRecord(
             reason: reason, date: now, backupName: backupName, destroyedData: storeExisted)

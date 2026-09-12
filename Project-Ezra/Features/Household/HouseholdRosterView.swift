@@ -52,6 +52,8 @@ private struct HouseholdRosterContent: View {
     private var allMembers: [FamilyMember] { Array(allMembersResults) }
     @State private var showAddPerson = false
     @State private var newPersonName = ""
+    /// The member an invite link is being made for (drives `InviteLinkSheet`).
+    @State private var inviting: FamilyMember?
 
     /// Live roster only, excluding the current user's own linked member (shown as its
     /// own `youRow`) — soft-deleted people stay in the store for attribution.
@@ -93,6 +95,28 @@ private struct HouseholdRosterContent: View {
             Button("Cancel", role: .cancel) { newPersonName = "" }
         } message: {
             Text("Who else is in your household?")
+        }
+        .sheet(item: $inviting) { member in
+            InviteLinkSheet(member: member, household: household)
+        }
+    }
+
+    /// Whether this member can be handed a phone: an adult who is not the owner. Children
+    /// and pets are planned FOR, not invited. Only once sync is live — before that a link
+    /// would promise another person will see something nothing can deliver.
+    private func canInvite(_ member: FamilyMember) -> Bool {
+        HouseholdSync.isLive && member.role != .owner && member.relationship != .child
+            && member.relationship != .pet
+    }
+
+    /// The roster row's one word about the invite: nothing until a link was made, then
+    /// the state the invitation record carries (it rides the share, so "Joined" appears
+    /// on the owner's phone when the other phone links its identity).
+    private func invitationCaption(_ member: FamilyMember) -> String? {
+        switch household.invitationState(for: member.uuid) {
+        case .pending: return "Invited · waiting"
+        case .accepted: return "Joined"
+        case .expired, .none: return nil
         }
     }
 
@@ -202,10 +226,21 @@ private struct HouseholdRosterContent: View {
                         .metadataStyle()
                 }
                 .accessibilityLabel("\(member.name)'s relationship, \(member.relationship.label)")
+                if let caption = invitationCaption(member) {
+                    Text(caption)
+                        .metadataStyle()
+                        .foregroundStyle(caption == "Joined" ? Palette.accentFlat : Palette.mutedText)
+                }
             }
             Spacer(minLength: 0)
 
             Menu {
+                if canInvite(member) {
+                    Button(
+                        household.invitationState(for: member.uuid) == .pending ? "Send the link again" : "Invite to share this household",
+                        systemImage: "person.badge.plus"
+                    ) { inviting = member }
+                }
                 Button("Remove from household", role: .destructive) { remove(member) }
             } label: {
                 Image(systemName: "ellipsis")

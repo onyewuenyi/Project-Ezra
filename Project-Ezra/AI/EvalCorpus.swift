@@ -252,9 +252,18 @@ enum EvalCorpus {
         summerHoliday.workIntent = .planning
         will.workIntent = .action
         stamps.workIntent = .action
-        // Put off four days running: the stall signal is consecutive deferrals, and the
-        // count is the evidence that the obvious advice has already failed here.
-        will.deferralCount = 4
+        // Picked up twice and put back down twice: the avoidance half of the stall signal,
+        // and the evidence that the obvious advice has already failed here.
+        //
+        // It used to set `deferralCount = 4`, which stopped meaning anything when the Brief
+        // was cut (2026-09-02) and took its day-rollover with it — so this seed has been
+        // producing a task that is NOT stalled, and the dogfooding walkthrough has not been
+        // able to reach the avoidance diagnosis since. A fixture that describes an
+        // unreachable state is worse than no fixture: it makes the surface look covered.
+        for _ in 0..<2 {
+            will.status = .doing
+            will.status = .todo
+        }
 
         // MARK: A duplicate the sweep already folded
         // `mergedPair` is the one entry with no home but Activity — the winner absorbed

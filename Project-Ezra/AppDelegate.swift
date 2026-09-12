@@ -36,6 +36,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // rung dormant, which is exactly what not configuring gives it.
         guard !Project_EzraApp.isHostingUnitTests else { return true }
 
+        // The one notification's delegate, set before launch finishes so a cold-start tap
+        // on the Sunday digest is delivered to it rather than dropped.
+        WeeklyDigestScheduler.shared.install()
+
         // **BEFORE `configure()`, and the order is the whole point.** `configure()` is
         // what builds the App Check component and freezes its provider factory; setting
         // the factory afterwards is accepted silently, leaves the default in place, and
@@ -46,6 +50,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // wire the client, prove one attested call serves, then enforce.
         AppCheckSetup.install()
         FirebaseApp.configure()
+        // Product telemetry — the ONE vendor the domain never names (`Telemetry` owns the
+        // allowlist and the opt-out; `StatsigSink` is the only file importing the SDK).
+        // Absent with no client key in Info.plist, so an unconfigured build sends nothing.
+        Telemetry.sink = StatsigSink.make()
         return true
+    }
+
+    /// Names `SceneDelegate` so a tapped household share link has somewhere to land —
+    /// `CKShare.Metadata` only ever arrives through a window-scene delegate. SwiftUI keeps
+    /// hosting the `WindowGroup`; this only adds the delegate beside it.
+    func application(
+        _ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = SceneDelegate.self
+        return configuration
     }
 }

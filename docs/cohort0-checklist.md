@@ -46,6 +46,28 @@ file. See *Keeping this file current* at the bottom.
   `CaptureFlow.route(for:posture:)`, is a finding. Holding the invariant inside
   `CaptureRoute` is not enough — the last one held perfectly while a view bypassed it.
 
+- **The boundary pass can only ever REMOVE a transmission** (`OnDeviceSegmenter`, off by
+  default until the GA report). It is reachable on exactly one escalation reason
+  (`underSegmented`) and on the on-device posture's several-things envelope; it proposes
+  nothing `CaptureEscalation.reason` has not re-cleared; every fragment is a substring of
+  what the person said and the fragments tile the text, so it cannot invent or drop an
+  outcome; and its file is grep-pinned against the cloud seam. A call site that runs it on
+  another reason, that skips the re-validation, or that lets a refusal reach anything other
+  than the read the capture would have had anyway, is a finding.
+
+- **The duplicate merge is the only inference that destroys data, and its gate is measured.**
+  `-DuplicateSweepEval` must show zero false merges on the paired corpus before the sweep runs
+  on a new runtime, model, instruction set, schema or threshold. A change to any of those five
+  invalidates the last run. The report's own vacuous-pass guard is part of the check: a zero
+  false-merge count on a host that could not run the prefilter is not a pass.
+
+- **The sentence embedding is AVAILABLE on the device, and the app says so.** On 2026-09-12 the
+  dogfooding phone had 0 `EmbeddingCache` rows against 70 tasks: semantic retrieval and the
+  duplicate sweep had been silently off for the whole period, every test green. A
+  graceful degrade with no meter is a feature that can be off for a month — check that the
+  DEBUG diagnostics card reports the embedding's availability and cached-vector count, and
+  that a device eval (`-DuplicateSweepEval`) shows the prefilter MEASURED, not skipped.
+
 ## 2. AI paths — each rung, each failure, separately
 
 - **On-device (Foundation Models).** Unavailable, model not downloaded, region-disabled,
@@ -97,15 +119,31 @@ file. See *Keeping this file current* at the bottom.
 - **Undo restores every field its action wrote**, not just the headline one
   (`ChangeLogUndo`).
 
-## 4. Sync and ownership — currently OFF, and must say so
+## 4. Sync and ownership — LIVE since 2026-09-12
 
-- `HouseholdSync.isLive` is `false` and `PersistenceStack.cloudKitContainerID` is `nil`.
-  The check is not "does sync work" — it is **does anything claim it does**: no copy, no
-  empty state, no invitation flow, no assignment side effect may promise another person
-  will see something. A task assigned to someone with no device must not silently leave
-  the user's own list.
-- Flipping the gate is a one-way door (it closes the clean-break escape hatch). An audit
-  finding must never propose flipping it as a fix.
+- `HouseholdSync.isLive` is `true`, `PersistenceStack.cloudKitContainerID` names the
+  container, and the entitlement names the same one (`SyncGateTests.gateIsOpenAsOneAct`).
+  The three must agree; a live gate over a missing container or entitlement is a finding.
+- **The invite is one link** (`HouseholdSharing`, the roster row's "…" menu): a `CKShare`
+  URL with public read-write permission. The owner's phone records an `Invitation` naming
+  the member; the arriving phone links its identity to that member without asking when
+  exactly one invitation is pending, and asks (`IdentityLinkSheet`) otherwise — it never
+  guesses from a name. A tasks list that reaches the second phone with the assigned tasks
+  NOT theirs is a finding.
+- **Every new object lands in the right store, decided once** (`HouseholdStoreAffinity`,
+  a `willSave` observer): a task or trail entry saved with no household is given the
+  working one and assigned to that household's store. A creation site that assigns a
+  store itself, or an entity that belongs to the household without a `household` edge, is
+  a finding. `Correction`, `Capture`, `EmbeddingCache`, `SuppressionRecord` and
+  `UserProfile` have NO household edge on purpose — they never travel.
+- **The schema is frozen additive-only** (`SchemaFreezeTests`): `schemaGeneration` is 10
+  for good, every model change is a new version that is a superset of the last, every
+  attribute optional or defaulted, every relationship inverse-paired. A generation bump, an
+  in-place model edit or a removed attribute is a finding of the highest severity.
+- **The device sitting this file cannot replace:** two signed-in phones, invite from one,
+  accept on the other, see the assigned tasks arrive owned; complete one on each side and
+  watch the trail on both. The simulator has no iCloud account and proves none of it.
+  Until that sitting has happened, this section describes what the code intends.
 
 ## 5. Loading, empty and stuck states
 
@@ -114,6 +152,11 @@ file. See *Keeping this file current* at the bottom.
 - **First run is not an error.** Empty store, no household, no tasks, no captures, no
   model — every surface renders something intentional. `—` means "not measurable", never
   zero.
+- **Everyone shows the household, and every row says whose.** The Everyone scope (2026-09-12)
+  renders every owner's tasks and the unowned; a row that is not yours carries the owner's
+  avatar (or the dashed unassigned ring), the leading swipe is ABSENT on someone else's task
+  (`recommendedAction` is nil there), and the title reads "Our Tasks". A row in Everyone with
+  no way to tell whose it is, or a swipe that advances someone else's task, is a finding.
 - **A group's front card is always actionable, and its umbrella is never a card.** A deck
   (`TaskDeckView`, 2026-09-12) leads with the first member that waits on nothing; a blocked
   step leading while an open one exists, an umbrella rendered as a card while it has open
@@ -128,6 +171,13 @@ file. See *Keeping this file current* at the bottom.
   emptiness. A filtered-empty state that only says "no matches" is a finding.
 - **Nothing narrates the model's internals** or exposes budgets, quotas, credits, token
   counts or vendor names to the user (DEBUG-only surfaces excepted).
+- **The Sunday digest is silent on an empty week** (`WeeklyDigest.compose` → nil →
+  nothing scheduled), one identifier, no badge, passive, off for a household of one, and
+  its opens are excluded from `selfInitiatedOpens`. A second notification type, a digest
+  that fires with nothing to say, or a badge is a finding — see the carve-out in
+  `prev-docs/product-guardrails.md`.
+- **The onboarding intro accepts a screenshot** as well as pasted text (OCR through
+  `ImageTextExtractor`); an image with no text says so in place rather than bouncing.
 
 ## 6. Crashes and uncaught errors reachable from a user action
 
@@ -135,11 +185,6 @@ file. See *Keeping this file current* at the bottom.
   can reach. Preview, test, fixture and DEBUG-only paths are out of scope — say which when
   excluding one.
 - Thrown errors that escape to no handler; `Task {}` bodies that swallow a failure the
-- **Everyone shows the household, and every row says whose.** The Everyone scope (2026-09-12)
-  renders every owner's tasks and the unowned; a row that is not yours carries the owner's
-  avatar (or the dashed unassigned ring), the leading swipe is ABSENT on someone else's task
-  (`recommendedAction` is nil there), and the title reads "Our Tasks". A row in Everyone with
-  no way to tell whose it is, or a swipe that advances someone else's task, is a finding.
   user needed to see.
 - Main-actor / concurrency traps on a background write path.
 - Debug `print` output reachable from a real user action.
@@ -154,7 +199,12 @@ file. See *Keeping this file current* at the bottom.
   shell, and `RootTabView.seedFixturesIfRequested` is the one gate a new seed goes
   behind). A new seam guarded only on its own name is a finding.
 - No vendor name, model id, token count or spend figure in customer-facing copy
-  (`DataBoundary` is the sanctioned wording).
+  (`DataBoundary` is the sanctioned wording — including its telemetry and sync sentences).
+- **Product telemetry stays inside its allowlist** (`TelemetryAllowlistTests`): no
+  `String`/`Int`/`Date`/`UUID` payload on `TelemetryEvent`, the vendor imported in exactly
+  one file, the opt-out honoured before the sink, kill switches failing closed. A
+  `Telemetry.log` call site that reaches for a title, a name or a raw number — or a second
+  file importing the vendor — is a finding.
 
 ---
 
@@ -168,7 +218,11 @@ say why rather than restating the finding.
 - **Beta toolchain (Xcode 27 / iOS 27 SDK)** — deliberate posture, not a risk to manage
   down. "Wait for GA" is not a finding.
 - **`CapacityLog` / `CapacityBaseline` are inert** — frozen schema after the Brief cut.
-- **No notifications at all** — the carve-out closed 2026-09-02. Absence is the design.
+- **One notification, the Sunday digest** — the 2026-09-02 closure stands for the daily
+  nudge; the weekly household digest is a NEW carve-out argued from scratch on 2026-09-12
+  (`prev-docs/product-guardrails.md`). Its conditions are code; audit those, not its existence.
+- **Telemetry leaves the device** — by design since 2026-09-12 (user data local-first,
+  product telemetry not). Audit the allowlist, not the transmission.
 
 ---
 

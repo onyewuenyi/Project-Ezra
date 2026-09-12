@@ -10,6 +10,7 @@
 		FBBF000000000000000000A1 /* FirebaseAILogic in Frameworks */ = {isa = PBXBuildFile; productRef = FBEE000000000000000000A1 /* FirebaseAILogic */; };
 		FBBF000000000000000000C1 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = FBEE000000000000000000C1 /* FirebaseCore */; };
 		FBBF000000000000000000D1 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = FBEE000000000000000000D1 /* FirebaseAppCheck */; };
+		FBBF000000000000000000E1 /* Statsig in Frameworks */ = {isa = PBXBuildFile; productRef = FBEE000000000000000000E1 /* Statsig */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,6 +62,7 @@
 				FBBF000000000000000000A1 /* FirebaseAILogic in Frameworks */,
 				FBBF000000000000000000C1 /* FirebaseCore in Frameworks */,
 				FBBF000000000000000000D1 /* FirebaseAppCheck in Frameworks */,
+				FBBF000000000000000000E1 /* Statsig in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -123,6 +125,7 @@
 				FBEE000000000000000000A1 /* FirebaseAILogic */,
 				FBEE000000000000000000C1 /* FirebaseCore */,
 				FBEE000000000000000000D1 /* FirebaseAppCheck */,
+				FBEE000000000000000000E1 /* Statsig */,
 			);
 			productName = "Project-Ezra";
 			productReference = 4B1A21523008A247005DDBBF /* Project-Ezra.app */;
@@ -181,6 +184,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				4B8E84D93034E73900B96CFF /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				4B8E84D93034E73900B96CF0 /* XCRemoteSwiftPackageReference "statsig-kit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 4B1A21533008A247005DDBBF /* Products */;
@@ -504,6 +508,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		4B8E84D93034E73900B96CF0 /* XCRemoteSwiftPackageReference "statsig-kit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/statsig-io/statsig-kit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.62.7;
+			};
+		};
 		4B8E84D93034E73900B96CFF /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
@@ -529,6 +541,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4B8E84D93034E73900B96CFF /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseAppCheck;
+		};
+		FBEE000000000000000000E1 /* Statsig */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B8E84D93034E73900B96CF0 /* XCRemoteSwiftPackageReference "statsig-kit" */;
+			productName = Statsig;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

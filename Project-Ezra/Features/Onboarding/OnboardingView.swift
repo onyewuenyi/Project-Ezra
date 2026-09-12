@@ -8,8 +8,9 @@
 //  brief's generation moment, one piece of craft paying off in three places.
 //
 
-import SwiftUI
 import CoreData
+import PhotosUI
+import SwiftUI
 
 struct OnboardingView: View {
     @Environment(\.managedObjectContext) private var context
@@ -42,6 +43,15 @@ struct OnboardingView: View {
     /// The parse receipt for the onboarding capture, held between `transform` and
     /// `commit` so the first capture in the store carries provenance like every other.
     @State private var onboardingReceipt: CaptureRunTelemetry?
+    /// The screenshot input (2026-09-12): the launch plan's first screen asks for ONE real
+    /// input — a forwarded school email, pasted text, or a screenshot — and the board is
+    /// born populated. Text was the only door here; the OCR path the composer already has
+    /// (`ImageTextExtractor`) now opens on the first screen too. The bytes are not kept:
+    /// onboarding's capture is text, and the composer's `CaptureImageStore` provenance is
+    /// for captures a person may want to look back at.
+    @State private var screenshotItem: PhotosPickerItem?
+    @State private var readingScreenshot = false
+    @State private var screenshotFailed = false
 
     private let sample = """
         renew my passport
@@ -244,10 +254,33 @@ struct OnboardingView: View {
                 .transition(.opacity)
             }
 
-            Button("Use a sample list") { text = sample }
-                .font(.supporting.weight(.medium))
-                .foregroundStyle(Palette.accentFlat)
+            HStack(spacing: Spacing.lg) {
+                PhotosPicker(selection: $screenshotItem, matching: .images, photoLibrary: .shared()) {
+                    Label(readingScreenshot ? "Reading…" : "Add a screenshot", systemImage: "photo")
+                        .font(.supporting.weight(.medium))
+                        .foregroundStyle(Palette.accentFlat)
+                }
                 .buttonStyle(.pressableLink)
+                .disabled(readingScreenshot)
+                .onChange(of: screenshotItem) { _, item in
+                    guard let item else { return }
+                    Task {
+                        await ingestScreenshot(item)
+                        screenshotItem = nil
+                    }
+                }
+                Button("Use a sample list") { text = sample }
+                    .font(.supporting.weight(.medium))
+                    .foregroundStyle(Palette.accentFlat)
+                    .buttonStyle(.pressableLink)
+            }
+            if screenshotFailed {
+                Text("I couldn't read any text in that image. Try a screenshot of the message itself.")
+                    .font(.supporting)
+                    .foregroundStyle(Palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
+            }
 
             Spacer()
 
@@ -281,6 +314,35 @@ struct OnboardingView: View {
 
     private var canTransform: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The composer's photo path, minus the stored image: OCR the picked screenshot and
+    /// land its lines in the editor, where they are the person's to edit before "Show me".
+    private func ingestScreenshot(_ item: PhotosPickerItem) async {
+        readingScreenshot = true
+        screenshotFailed = false
+        defer { readingScreenshot = false }
+        do {
+            let data = try await ModelDeadline.race(timeout: ModelDeadline.photoImportSeconds) {
+                try await item.loadTransferable(type: Data.self)
+            }
+            guard let data, let cgImage = UIImage(data: data)?.cgImage else {
+                screenshotFailed = true
+                return
+            }
+            let recognized = try await ModelDeadline.race(timeout: ModelDeadline.photoImportSeconds) {
+                try await ImageTextExtractor.text(from: cgImage)
+            }
+            guard !recognized.isEmpty else {
+                screenshotFailed = true
+                return
+            }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                text = text.isEmpty ? recognized : text + "\n" + recognized
+            }
+        } catch {
+            screenshotFailed = true
+        }
     }
 
     // MARK: - Settling (the signature precipitation)
@@ -474,6 +536,7 @@ struct OnboardingView: View {
         // model's segmentation instead of the deterministic read that already has the
         // boundaries a newline-separated list hands over.
         let decision = CaptureFlow.route(for: text)
+        Telemetry.log(.captureStarted(channel: .onboarding))
         let run = await brain.triage(
             text, route: decision.route, escalation: decision.escalation)
         let result = run.drafts

@@ -89,23 +89,37 @@ enum AdvisorRouting {
         //    to hold a graph, not a fact. ONE blocker is deliberately not enough — that
         //    is a fact the local model states perfectly well.
         if facts.blockerTitles.count + facts.openStepTitles.count >= 2 { return .multiStep }
-        // 3. The user has bounced off this repeatedly. `deferralCount` is CONSECUTIVE,
-        //    cleared the moment they engage, so a high number is live evidence that the
-        //    obvious advice already failed — the strongest single signal that a better
-        //    reading is worth the thought.
-        if facts.deferralCount >= repeatDeferralFloor { return .repeatDeferred }
+        // 3. The user has bounced off this repeatedly — picked it up, put it back down,
+        //    more than once. Live evidence that the obvious approach already failed, and
+        //    the strongest single signal that a better reading is worth the thought.
+        if facts.abandonedStarts >= abandonedStartFloor { return .repeatedlyAbandoned }
         return nil
     }
 
-    /// Consecutive deferrals before a task counts as repeat-deferred. The first number to
-    /// move when the benchmark has data — a magic 3 in a condition is not a thing anyone
-    /// tunes.
-    static let repeatDeferralFloor = 3
+    /// Abandoned starts before a task counts as repeatedly bounced off.
+    ///
+    /// **Two, not three.** The old `deferralCount` floor was 3 because a deferral is
+    /// cheap — a task slides to tomorrow with one tap and often for reasons that have
+    /// nothing to do with the task. Picking something up and putting it back down is not
+    /// cheap: it is a declared start and an abandoned one. The first is an interruption;
+    /// the second is a pattern. The benchmark is what moves this number.
+    static let abandonedStartFloor = 2
 
     enum DepthReason: String, CaseIterable, Sendable {
         case decision
         case multiStep
-        case repeatDeferred
+        /// Renamed from `repeatDeferred` on 2026-09-12, with its input.
+        ///
+        /// **The hypothesis was never wrong; its evidence had been deleted.** It read
+        /// `deferralCount`, whose only writer was the Brief's day-rollover — and the Brief
+        /// was cut on 2026-09-02, so the counter has been permanently zero and this reason
+        /// has been structurally unable to fire ever since. `-AdvisorBenchmark` exists to
+        /// FALSIFY these three hypotheses, so a third one that cannot fire meant the
+        /// instrument was quietly reporting on a two-reason router while the code, the
+        /// docs and the report all described three. It now reads
+        /// `TaskAdvisorFacts.abandonedStarts`, which is a human act recorded on the
+        /// timeline, so the hypothesis is testable again on the GA runtime.
+        case repeatedlyAbandoned
     }
 
     /// Which rung IMPLEMENTS a budget, given what is reachable and affordable.

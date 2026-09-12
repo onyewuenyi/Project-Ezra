@@ -46,6 +46,11 @@ final class ChangeLogEntry: NSManagedObject {
     /// renders a gradient sparkles tile instead) and for pre-redesign entries.
     @NSManaged var actorID: UUID?
     @NSManaged var timestamp: Date
+    /// The household whose trail this entry belongs to — model v4, additive. Same reason
+    /// as `TaskItem.household`: the Activity trail is the trust surface "both caretakers
+    /// can see", so its rows ride the household's share. Set at save by
+    /// `HouseholdStoreAffinity`; nil for fixtures.
+    @NSManaged var household: Household?
 
     var initiatedBy: ChangeInitiator {
         get { ChangeInitiator(rawValue: initiatedByRaw) ?? .ai }

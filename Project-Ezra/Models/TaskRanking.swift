@@ -83,11 +83,24 @@ enum TaskRanking {
 
     /// Staleness pull-down per day since the last HUMAN touch.
     static let stalenessPerDay = -0.6
-    /// Pull-down per CONSECUTIVE time the task was planned and left untouched
-    /// (`deferralCount`, which `touchHuman` resets — so this recovers as soon as the
-    /// user engages, rather than penalising a task they have since picked back up).
-    /// `carriedOverCount` (worked-but-unfinished) is deliberately unread for now.
-    static let deferralPenalty = -1.5
+    /// **The deferral pull-down was REMOVED, not repointed (2026-09-12).**
+    ///
+    /// It read `deferralCount`, whose only writer was the Brief's day-rollover — cut on
+    /// 2026-09-02 — so the term had been `x * -1.5` with `x` permanently zero. Deleting it
+    /// changes no ranking anywhere; leaving it would have left a loaded gun, because the
+    /// obvious repair is to point it at the live avoidance signal
+    /// (`recentAbandonedStarts`), and **that would be wrong in DIRECTION.**
+    ///
+    /// A deferral is a soft no — *not today* — and burying what the person keeps declining
+    /// is right. Abandoning a start is not a no: it is *I tried and could not*, which is
+    /// the signal that the task needs help, and a pull-down there would sink exactly the
+    /// task the Advisor is meanwhile spending its deepest reasoning on
+    /// (`AdvisorRouting.repeatedlyAbandoned`). The two layers would be pulling against
+    /// each other over the same evidence.
+    ///
+    /// There is no live equivalent of the soft no: the rollover was the only thing that
+    /// ever recorded one. Staleness (`stalenessPerDay`) is the surviving down-pull, and it
+    /// is enough — a task nobody engages with decays on its own.
     /// Boost while a cleared blocker is fresh (`lastUnblockedAt` within the window).
     static let recentUnblockBoost = 12.0
     /// Boost while a newly-gained dependent is fresh (a reverse `.blocks` edge's age).
@@ -195,7 +208,6 @@ enum TaskRanking {
         var relevance = 0.0
         let staleDays = max(0, now.timeIntervalSince(task.humanTouchedAt) / 86_400)
         relevance += staleDays * stalenessPerDay
-        relevance += Double(task.deferralCount) * deferralPenalty
         if let unblockedAt = task.lastUnblockedAt, unblockedAt <= now,
             now.timeIntervalSince(unblockedAt) <= recentWindow
         {

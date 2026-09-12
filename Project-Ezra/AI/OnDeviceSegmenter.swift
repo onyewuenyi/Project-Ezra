@@ -124,8 +124,11 @@ enum OnDeviceSegmenter {
         /// is what escalated and FM's own multi-intent boolean measured 43% precision
         /// against the deterministic detector's 90% (Campaign 3).
         case noGain
-        /// The cut resolved, and the existing validator still refused it.
-        case validator(CaptureEscalationReason)
+        /// The cut resolved, and the existing validator still refused it. Carries how many
+        /// drafts the cut produced — without it a caller cannot tell a cut that was nearly
+        /// right from one that came apart, and a report scoring this cell would have to
+        /// substitute the deterministic count and quietly score the wrong artifact.
+        case validator(CaptureEscalationReason, fragments: Int)
 
         var label: String {
             switch self {
@@ -134,7 +137,7 @@ enum OnDeviceSegmenter {
             case .failed(let label): return "failed(\(label))"
             case .ungrounded: return "ungrounded"
             case .noGain: return "no-gain"
-            case .validator(let reason): return "validator(\(reason.rawValue))"
+            case .validator(let reason, _): return "validator(\(reason.rawValue))"
             }
         }
     }
@@ -300,7 +303,7 @@ enum OnDeviceSegmenter {
         // The validator, unchanged and authoritative. It is asked about the ORIGINAL text
         // — the signals it counts are the person's, not the cut's.
         if let reason = CaptureEscalation.reason(for: text, drafts: drafts) {
-            return .refused(.validator(reason))
+            return .refused(.validator(reason, fragments: drafts.count))
         }
         return .accepted(drafts: drafts, fragments: fragments.count)
     }

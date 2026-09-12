@@ -144,7 +144,24 @@ final class AppBrain {
         _ rawText: String, learned: [LearnedRule] = [],
         ownership: OwnershipContext = .none, now: Date = Date()
     ) -> [TaskDraft] {
-        let clauses = Segmentation.items(from: rawText)
+        drafts(
+            fromClauses: Segmentation.items(from: rawText), learned: learned,
+            ownership: ownership, now: now)
+    }
+
+    /// The provisional pass's second half, with the CLAUSES handed in rather than cut by
+    /// `Segmentation`.
+    ///
+    /// It exists because `OnDeviceSegmenter` produces the boundaries for exactly the
+    /// population `Segmentation` gets wrong — an unpunctuated spoken run-on — and the
+    /// clauses it produces must reach drafts through the same code that every other
+    /// capture uses. Two paths would be two places for the per-clause lineage, the
+    /// expansion fan-out and the ownership pass to drift.
+    @MainActor
+    static func drafts(
+        fromClauses clauses: [String], learned: [LearnedRule] = [],
+        ownership: OwnershipContext = .none, now: Date = Date()
+    ) -> [TaskDraft] {
         guard !clauses.isEmpty else { return [] }
         // Resolved per clause, so each draft is stamped with the clause it actually came
         // from. This used to resolve the whole batch and index drafts against clauses
@@ -240,6 +257,7 @@ final class AppBrain {
     ) async -> TriageRun {
         isProcessing = true
         defer { isProcessing = false }
+        Telemetry.log(.captureRouted(route: route, reason: escalation))
         // The parse clock starts HERE — before retrieval — so the recorded latency is
         // what the user experiences from the debounce surviving, not just generation.
         let parseStarted = Date()
@@ -256,7 +274,7 @@ final class AppBrain {
             // run took the rung it took, and "configured" cannot explain an on-device
             // parse on a build that has Firebase wired up. The Activity detail already
             // labels this row "Cloud reachable".
-            cloudAvailable: CloudModel.isReachable)
+            cloudAvailable: CloudModel.isReachable(for: .ramble))
         // Retrieval runs CONCURRENTLY with generation (audit A1): the model is
         // prompted the moment the debounce survives, with whatever candidate package
         // the CALLER prepared — the previous parse's retrieval, riding the rolling
@@ -366,7 +384,7 @@ final class AppBrain {
             switch route {
             case .local:
                 return nil
-            case .cloud where CloudModel.isReachable:
+            case .cloud where CloudModel.isReachable(for: .ramble):
                 return FoundationModelsEngine(sessionSource: .cloud)
             case .cloud:
                 // A cloud route with no reachable provider is not an error — it is the
@@ -860,7 +878,18 @@ final class AppBrain {
         // save here means the drafts are gone on next launch even though the
         // composer already showed "N tasks added".
         let saved = context.saveChanges()
-        if !created.isEmpty { metrics.recordFirstPayoffIfNeeded() }
+        if !created.isEmpty, metrics.recordFirstPayoffIfNeeded(),
+            let elapsed = metrics.timeToFirstPayoff
+        {
+            Telemetry.log(.firstPayoff(elapsed: DurationBucket(seconds: elapsed)))
+        }
+        // Counts as BUCKETS, and "corrected" as a bit: whether any confirm-card edit
+        // landed as a `Correction` — the capture-acceptance signal, observed without
+        // asking (`RequiredAttention.capture` is the exact local form).
+        Telemetry.log(
+            .captureCommitted(
+                created: CountBucket(created.count), merged: CountBucket(mergeTargets.count),
+                corrected: drafts.contains { !$0.corrections.isEmpty }))
         // The confirm tap's own wall clock — the other half of "instant capture", and
         // the number that decides whether the remaining commit-path work (the
         // per-created-task dependent rescan in `AttentionEngine.metadata`) is worth

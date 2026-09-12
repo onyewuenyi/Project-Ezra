@@ -54,7 +54,9 @@ enum DataReset {
 
     /// Defaults that belong to the person, not the work. `hasOnboarded` is here because
     /// a factory reset that skips the first run isn't one.
-    private static let identityKeys = ["hasOnboarded"]
+    /// `Telemetry.installIDKey` is identity too: a wiped install is a NEW install to the
+    /// product-telemetry boundary, so the anonymous id it was keyed on goes with the rest.
+    private static let identityKeys = ["hasOnboarded", Telemetry.installIDKey]
 
     /// Empty the store at `scope`. Returns the same `StoreResetRecord` the involuntary
     /// wipes write — durable, backup-carrying — and never throws: a clear the user asked

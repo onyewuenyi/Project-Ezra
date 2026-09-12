@@ -1201,6 +1201,7 @@ struct TaskDetailView: View {
             flagged: task.needsDecision && !task.status.isResolved,
             isJudgmentCall: task.isJudgmentCall,
             deferralCount: Int(task.deferralCount),
+            abandonedStarts: task.recentAbandonedStarts(within: StallDetector.quietThreshold),
             diagnosis: StallDetector.diagnose(task, among: allTasks),
             blockers: task.activeBlockerTasks(among: allTasks),
             blockersRenderedElsewhere: shape == .waiting,

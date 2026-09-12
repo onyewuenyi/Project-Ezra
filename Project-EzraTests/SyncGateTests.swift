@@ -124,14 +124,21 @@ struct SyncGateTests {
 
     // MARK: - The gate itself
 
-    @Test("The gate is still closed, and closing it is a deliberate act")
-    func gateRemainsClosed() {
-        // Flipping this is a one-way door: it turns on the inferred ownership rungs, the
-        // Brief's ownership filter and the publish boundary together, AND it closes the
-        // wipe-on-mismatch schema escape hatch, because a deployed CloudKit schema is
-        // additive-only with no server-side reset. It ships with the iCloud entitlement
-        // and `PersistenceStack.cloudKitContainerID`, never on its own.
-        #expect(HouseholdSync.isLive == false)
-        #expect(PersistenceStack.cloudKitContainerID == nil)
+    @Test("The gate is OPEN (2026-09-12), and it opened as one act: gate + container + entitlement")
+    func gateIsOpenAsOneAct() throws {
+        // Flipping this was the one-way door: it turned on the inferred ownership rungs,
+        // the day answer's ownership filter and the publish boundary together, AND it
+        // closed the wipe-on-mismatch schema escape hatch (`SchemaFreezeTests`). The
+        // three halves must agree — a live gate over a nil container would send tasks
+        // to people with no device in the graph, and a container the entitlement does
+        // not name fails at the first sync with nothing wrong in the code.
+        #expect(HouseholdSync.isLive == true)
+        let container = try #require(PersistenceStack.cloudKitContainerID)
+        let entitlements = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Project-Ezra/Project_Ezra.entitlements")
+        let plist = try String(contentsOf: entitlements, encoding: .utf8)
+        #expect(plist.contains("<string>\(container)</string>"), "the entitlement does not name \(container)")
+        #expect(plist.contains("<string>CloudKit</string>"))
     }
 }

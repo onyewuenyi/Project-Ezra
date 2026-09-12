@@ -118,14 +118,19 @@ struct TaskRankingTests {
 
     // MARK: - currentRelevance (the live layer inside the attention component)
 
-    @Test("Deferral pulls a task down within its band")
-    func deferralPullsDown() {
-        let deferred = score(TaskItem(title: "deferred", status: .todo), 50)
-        deferred.deferralCount = 5  // −7.5
-        let peer = score(TaskItem(title: "peer", status: .todo), 50)
-        let all = [deferred, peer]
-        #expect(precedes(peer, deferred, among: all))
-        #expect(!precedes(deferred, peer, among: all))
+    @Test("The live down-pull orders a neglected task below its peer within the band")
+    func stalenessPullsDown() {
+        // This was `deferralPullsDown` until 2026-09-12. It set `deferralCount = 5` — a
+        // field the app has been unable to write since the Brief was cut — so it proved
+        // the comparator reacts to a number nothing produces. The term it tested is gone;
+        // the PROPERTY it was really protecting is that a down-pull exists and orders
+        // correctly inside a band, and staleness is the live one.
+        let neglected = score(
+            TaskItem(title: "neglected", status: .todo, createdAt: days(-30)), 50)
+        let peer = score(TaskItem(title: "peer", status: .todo, createdAt: now), 50)
+        let all = [neglected, peer]
+        #expect(precedes(peer, neglected, among: all))
+        #expect(!precedes(neglected, peer, among: all))
     }
 
     @Test("Staleness reads the human clock — a system touch doesn't reset the decay")
@@ -218,8 +223,8 @@ struct TaskRankingTests {
 
     @Test("currentRelevance clamps to ±25 in both directions")
     func relevanceClamp() {
+        // A year untouched: staleness alone saturates the clamp several times over.
         let buried = TaskItem(title: "buried", status: .todo, createdAt: days(-365))
-        buried.deferralCount = 20
         let down = TaskRanking.currentRelevance(
             for: buried, now: now, recentlyGainedDependent: false, neighborDueDates: [])
         #expect(down == -TaskRanking.relevanceClamp)

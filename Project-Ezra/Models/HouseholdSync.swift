@@ -33,8 +33,14 @@ enum HouseholdSync {
 
     /// Whether household data actually reaches other people's devices.
     ///
-    /// `false` until CloudKit sharing is provisioned. Deliberately a compile-time
-    /// constant rather than a runtime check: the point is that the gated code paths
-    /// cannot run at all, not that they run and find nothing.
-    static let isLive = false
+    /// **`true` since 2026-09-12** — flipped in the same change that set
+    /// `PersistenceStack.cloudKitContainerID`, added the iCloud container to the
+    /// entitlements, and shipped the invite flow (`HouseholdSharing`). It stays a
+    /// compile-time constant rather than a runtime check: the gated paths (the inferred
+    /// ownership rungs, the day answer's ownership filter, the publish boundary) now run
+    /// unconditionally, and `SyncGateTests` had already exercised every one of them at
+    /// `true` before the flip. The door it closed behind it: `schemaGeneration` is frozen
+    /// (`Project_EzraApp.frozenSchemaGeneration`); every model change from here is a NEW
+    /// version, never a wipe.
+    static let isLive = true
 }

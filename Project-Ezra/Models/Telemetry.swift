@@ -1,0 +1,311 @@
+//
+//  Telemetry.swift
+//  Project-Ezra
+//
+//  Product telemetry — the ONE seam through which anything about how the app is used may
+//  leave the device, and the boundary that decides what "anything" can be.
+//
+//  **User data is local-first. Product telemetry is not.** (2026-09-12.) Until this file
+//  existed the two were one rule — "metrics are local-only, never transmitted" — which was
+//  the right rule for a product nobody but its author was running, and the wrong rule for
+//  one whose whole launch plan turns on questions this device cannot answer alone: did the
+//  second caretaker ever install; how many minutes from install to the first accepted
+//  capture; did the Advisor's advice make anything move. Those are questions about the
+//  PRODUCT, and the data that answers them is not the person's data. The boundary this
+//  file draws is the one OpenAI's and Anthropic's privacy policies draw between "usage
+//  data" and "content": which features were used, when, and whether they worked may be
+//  observed; what the person said, who is in their household, and what the model told
+//  them never leave through this door. (`CaptureRoute.transmitsRawCapture` is the ONE
+//  sanctioned raw-text transmission, and it is not this one.)
+//
+//  **The allowlist is a TYPE, not a review.** Every event is a case of `TelemetryEvent`,
+//  and every associated value is an enumeration or a bucket — there is no `String`
+//  parameter anywhere in the enum, and `TelemetryAllowlistTests` greps the source to keep
+//  it that way. A task title cannot be logged because there is no parameter it could go
+//  into. That is a stronger property than "redact PII before sending": redaction is a
+//  filter someone has to remember to route through, and a filter over free text is only
+//  as good as its regexes. This is the candidate-blind prompt's lesson pointed the other
+//  way — a capability that exists only if a caller remembers to thread it fails silently;
+//  a boundary that exists only if a caller remembers to redact leaks silently.
+//
+//  **Counts and durations are BUCKETED** (`CountBucket`, `DurationBucket`) rather than sent
+//  raw. A raw count is a fingerprint in a small cohort ("the household with 47 tasks"); a
+//  bucket answers the product question ("did the first capture land in under five
+//  minutes") with nothing left over.
+//
+//  **The domain never knows the vendor exists.** `Telemetry.log` writes to a
+//  `TelemetrySink`; `StatsigSink` (`AI/StatsigSink.swift`) is the only file that imports
+//  the vendor, and the allowlist test pins that. Swapping vendors — or going back to
+//  nothing — is one conformance and one line in `AppDelegate`.
+//
+//  **Opt-out, and the sink respects it before the vendor does.** `Telemetry.isEnabled`
+//  is a persisted preference the person flips in Settings, under the same card that says
+//  what leaves the device. A disabled sink logs nothing — the check is here, in front of
+//  the vendor, not delegated to a vendor option that might default differently in a
+//  future SDK.
+//
+//  **Feature gates are KILL SWITCHES, never floors.** `TelemetryGate` names the handful
+//  of remotely-switchable things (Ramble economics rule 5: a pillar's cloud arm may be
+//  switched off; a floor, a threshold or a routing invariant may not). Each gate is a
+//  kill switch with a safe default, so a vendor outage, an unconfigured key or a test host
+//  all read as "not killed".
+//
+
+import Foundation
+
+// MARK: - Buckets
+
+/// A count with its identifying precision removed.
+enum CountBucket: String, CaseIterable, Sendable {
+    case zero, one, twoToThree = "2-3", fourToSix = "4-6", sevenToTwelve = "7-12", thirteenPlus = "13+"
+
+    init(_ count: Int) {
+        switch count {
+        case ...0: self = .zero
+        case 1: self = .one
+        case 2...3: self = .twoToThree
+        case 4...6: self = .fourToSix
+        case 7...12: self = .sevenToTwelve
+        default: self = .thirteenPlus
+        }
+    }
+}
+
+/// A duration as the product reads it — the buckets are the launch plan's targets
+/// (install → first accepted capture under five minutes; a model call under a second).
+enum DurationBucket: String, CaseIterable, Sendable {
+    case underOneSecond = "<1s", oneToTwoSeconds = "1-2s", twoToFiveSeconds = "2-5s"
+    case fiveToFifteenSeconds = "5-15s", fifteenToSixtySeconds = "15-60s"
+    case oneToFiveMinutes = "1-5m", fiveToThirtyMinutes = "5-30m", overThirtyMinutes = "30m+"
+
+    init(seconds: TimeInterval) {
+        switch seconds {
+        case ..<1: self = .underOneSecond
+        case ..<2: self = .oneToTwoSeconds
+        case ..<5: self = .twoToFiveSeconds
+        case ..<15: self = .fiveToFifteenSeconds
+        case ..<60: self = .fifteenToSixtySeconds
+        case ..<300: self = .oneToFiveMinutes
+        case ..<1800: self = .fiveToThirtyMinutes
+        default: self = .overThirtyMinutes
+        }
+    }
+}
+
+// MARK: - Events
+
+/// How a capture arrived. Mirrors `CaptureSource` without depending on Core Data.
+enum TelemetryCaptureChannel: String, CaseIterable, Sendable {
+    case voice, typed, photo, siri, onboarding
+}
+
+/// Where an invite flow failed, if it did — the funnel the plan says to instrument
+/// from "invite sent" to "first action".
+enum TelemetryInviteStage: String, CaseIterable, Sendable {
+    case linkCreated = "link_created", linkFailed = "link_failed"
+    case accepted, acceptFailed = "accept_failed", identityLinked = "identity_linked"
+}
+
+/// Why a weekly digest did NOT go out. Silence is a decision and gets a reason.
+enum TelemetryDigestSkip: String, CaseIterable, Sendable {
+    case nothingToSay = "nothing_to_say", optedOut = "opted_out", noPermission = "no_permission"
+    case killed
+}
+
+/// The closed vocabulary of things the product may say about itself.
+///
+/// Every associated value is an enum or a bucket. **Never add a `String`, `Int`, `Date`,
+/// `UUID` or `Double` parameter** — a raw value is either a fingerprint or free text, and
+/// both are the person's, not the product's. Add a bucket or an enum instead.
+enum TelemetryEvent: Sendable {
+    /// The composer opened into a channel.
+    case captureStarted(channel: TelemetryCaptureChannel)
+    /// The router decided where the words go, and why.
+    case captureRouted(route: CaptureRoute, reason: CaptureEscalationReason?)
+    /// Confirm — the single publish boundary — fired.
+    case captureCommitted(created: CountBucket, merged: CountBucket, corrected: Bool)
+    /// Install → first committed capture. Fires once per install.
+    case firstPayoff(elapsed: DurationBucket)
+    /// A task reached `.done`.
+    case taskCompleted
+    /// The Advisor spoke, and what happened next.
+    case advisorOffered(move: AdvisorMove)
+    case advisorActed(move: AdvisorMove)
+    case advisorDismissed(move: AdvisorMove)
+    /// A model call, at the seam every call goes through.
+    case modelCall(feature: ModelFeature, served: Bool, latency: DurationBucket)
+    /// The second-caretaker funnel.
+    case invite(stage: TelemetryInviteStage)
+    /// Both caretakers acted within the window — the activation metric, observed on device.
+    case householdActivated
+    /// The Sunday digest.
+    case digestScheduled
+    case digestSkipped(reason: TelemetryDigestSkip)
+    case digestOpened
+
+    /// The wire name: snake_case, stable, never user-facing.
+    var name: String {
+        switch self {
+        case .captureStarted: return "capture_started"
+        case .captureRouted: return "capture_routed"
+        case .captureCommitted: return "capture_committed"
+        case .firstPayoff: return "first_payoff"
+        case .taskCompleted: return "task_completed"
+        case .advisorOffered: return "advisor_offered"
+        case .advisorActed: return "advisor_acted"
+        case .advisorDismissed: return "advisor_dismissed"
+        case .modelCall: return "model_call"
+        case .invite: return "invite"
+        case .householdActivated: return "household_activated"
+        case .digestScheduled: return "digest_scheduled"
+        case .digestSkipped: return "digest_skipped"
+        case .digestOpened: return "digest_opened"
+        }
+    }
+
+    /// The wire payload. Every value is a raw value of a closed type.
+    var metadata: [String: String] {
+        switch self {
+        case .captureStarted(let channel):
+            return ["channel": channel.rawValue]
+        case .captureRouted(let route, let reason):
+            var fields = ["route": route.metricName]
+            if let reason { fields["reason"] = reason.rawValue }
+            return fields
+        case .captureCommitted(let created, let merged, let corrected):
+            return [
+                "created": created.rawValue, "merged": merged.rawValue, "corrected": corrected ? "yes" : "no",
+            ]
+        case .firstPayoff(let elapsed):
+            return ["elapsed": elapsed.rawValue]
+        case .taskCompleted, .householdActivated, .digestScheduled, .digestOpened:
+            return [:]
+        case .advisorOffered(let move), .advisorActed(let move), .advisorDismissed(let move):
+            return ["move": move.rawValue]
+        case .modelCall(let feature, let served, let latency):
+            return ["feature": feature.rawValue, "served": served ? "yes" : "no", "latency": latency.rawValue]
+        case .invite(let stage):
+            return ["stage": stage.rawValue]
+        case .digestSkipped(let reason):
+            return ["reason": reason.rawValue]
+        }
+    }
+
+    /// One of every case, for the allowlist test and the DEBUG readout. Kept beside the
+    /// enum so a new case cannot be added without being enumerated here — the switch
+    /// above is exhaustive, and this list is what the test walks.
+    static var exemplars: [TelemetryEvent] {
+        [
+            .captureStarted(channel: .voice),
+            .captureRouted(route: .cloud, reason: .bigDump),
+            .captureRouted(route: .local, reason: nil),
+            .captureCommitted(created: .twoToThree, merged: .zero, corrected: true),
+            .firstPayoff(elapsed: .oneToFiveMinutes),
+            .taskCompleted,
+            .advisorOffered(move: .advise),
+            .advisorActed(move: .createSteps),
+            .advisorDismissed(move: .decide),
+            .modelCall(feature: .captureTriage, served: true, latency: .oneToTwoSeconds),
+            .invite(stage: .linkCreated),
+            .householdActivated,
+            .digestScheduled,
+            .digestSkipped(reason: .nothingToSay),
+            .digestOpened,
+        ]
+    }
+}
+
+// MARK: - Gates (kill switches)
+
+/// The remotely-switchable things. Each is a KILL switch: the vendor answering `true`
+/// turns the thing OFF, and every other state — no sink, no key, no network, a test
+/// host — reads as not killed. A gate that could turn a floor or a threshold would be a
+/// routing invariant living in a dashboard, which rule 5 forbids.
+enum TelemetryGate: String, CaseIterable, Sendable {
+    /// Ramble's cloud arm. Killed → every capture takes the deterministic read.
+    case killCloudCapture = "kill_cloud_capture"
+    /// The Advisor's cloud rung. Killed → deep judgments degrade to on-device.
+    case killCloudAdvisor = "kill_cloud_advisor"
+    /// The Sunday digest. Killed → nothing is scheduled, even for people opted in.
+    case killWeeklyDigest = "kill_weekly_digest"
+}
+
+// MARK: - Sink
+
+/// Where events go. One conformance per vendor, and the vendor is the only thing the
+/// conformance knows about. `nil` from `isKilled` means "no opinion" — the caller's safe
+/// default applies.
+protocol TelemetrySink: AnyObject {
+    func log(name: String, metadata: [String: String])
+    func isKilled(_ gate: String) -> Bool?
+}
+
+/// The DEBUG-visible sink: remembers the last few events so the diagnostics card can
+/// show that the boundary is being exercised without anyone opening a dashboard.
+final class RecordingTelemetrySink: TelemetrySink {
+    private(set) var events: [(name: String, metadata: [String: String])] = []
+    private(set) var killed: Set<String>
+    static let keep = 50
+
+    init(killed: Set<String> = []) { self.killed = killed }
+
+    func log(name: String, metadata: [String: String]) {
+        events.append((name, metadata))
+        if events.count > Self.keep { events.removeFirst(events.count - Self.keep) }
+    }
+
+    func isKilled(_ gate: String) -> Bool? { killed.contains(gate) }
+}
+
+// MARK: - The seam
+
+enum Telemetry {
+    /// The active sink. Installed once from `AppDelegate`; nil (nothing leaves) under
+    /// the unit-test host, with no key, or when the person opted out. Tests inject a
+    /// `RecordingTelemetrySink` here.
+    static var sink: TelemetrySink?
+
+    /// The one-way install id telemetry is keyed on: a UUID minted on first use, stored
+    /// in UserDefaults, never derived from the person's name, email or iCloud identity.
+    /// Reset with the store (`DataReset`) so a wiped install is a new one.
+    static let installIDKey = "telemetry.installID"
+    /// The opt-out preference. Default ON — telemetry is part of the research-preview
+    /// contract the landing page states ("free, changes weekly, we see which features are
+    /// used"), and the Settings card names exactly what that means and offers the switch.
+    static let enabledKey = "telemetry.enabled"
+
+    static func installID(defaults: UserDefaults = .standard) -> String {
+        if let existing = defaults.string(forKey: installIDKey) { return existing }
+        let minted = UUID().uuidString
+        defaults.set(minted, forKey: installIDKey)
+        return minted
+    }
+
+    static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: enabledKey) == nil ? true : defaults.bool(forKey: enabledKey)
+    }
+
+    static func setEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: enabledKey)
+    }
+
+    /// Log one event. The opt-out is checked HERE, in front of the vendor.
+    static func log(_ event: TelemetryEvent, defaults: UserDefaults = .standard) {
+        guard let sink, isEnabled(defaults: defaults) else { return }
+        sink.log(name: event.name, metadata: event.metadata)
+    }
+
+    /// Whether a kill switch is engaged. Unknown, absent or opted-out all read `false`:
+    /// a kill switch that fails open is a feature flag, and this is not one.
+    static func isKilled(_ gate: TelemetryGate, defaults: UserDefaults = .standard) -> Bool {
+        guard let sink, isEnabled(defaults: defaults) else { return false }
+        return sink.isKilled(gate.rawValue) ?? false
+    }
+
+    /// The sentence the data-boundary card adds when telemetry is live. Names no vendor,
+    /// and names what is NOT sent before what is — the reader's question is the first half.
+    static let boundarySentence =
+        "Ezra never sends your tasks, your words, or anyone's name. It may send anonymous "
+        + "product signals — which features were used and whether they worked — so the "
+        + "research preview can improve. You can turn that off below."
+}

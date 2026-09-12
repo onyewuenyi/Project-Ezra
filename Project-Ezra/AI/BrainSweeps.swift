@@ -113,6 +113,15 @@ extension AppBrain {
         }
         defaults.set(now, forKey: key)
         BrainSweeps.run(in: context, now: now)
+        // The activation reading rides the same hourly debounce: derived over the working
+        // set, and the ONE bit that leaves (`householdActivated`) fires the first time it
+        // flips and never again (`HouseholdActivation.recordIfNewlyActivated`).
+        if let household = Household.existing(in: context) {
+            let entries = (try? context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))) ?? []
+            let reading = HouseholdActivation.measure(
+                household: household, tasks: TaskItem.fetchAll(in: context), entries: entries, now: now)
+            HouseholdActivation.recordIfNewlyActivated(reading, defaults: defaults)
+        }
         // The destructive-tier exception rides the same debounce but never the
         // foreground: model judgments run behind a background deadline, hard-capped
         // per run, and the whole pass is absent off-device.

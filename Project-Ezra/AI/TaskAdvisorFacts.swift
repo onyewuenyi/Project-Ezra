@@ -43,7 +43,22 @@ struct TaskAdvisorFacts: Sendable, Equatable {
     var decisionShaped: Bool
     /// Full count — this IS the stall surface now; the Today advisor's 2–3 band
     /// deliberately does not apply here.
+    ///
+    /// **Permanently zero since 2026-09-02.** Its one writer was the Brief's day-rollover
+    /// and the Brief was cut; it is kept because the field is still read by the stall
+    /// diagnosis's headline and by `TaskRanking`, and removing it is a schema decision
+    /// rather than a router one. The depth router no longer reads it — see
+    /// `abandonedStarts`.
     var deferralCount: Int
+    /// **How many times the person picked this task up and put it back down** (closed
+    /// `.doing` visits). The depth router's third input, and the live replacement for
+    /// `deferralCount`: same hypothesis — *the obvious approach already failed* — with
+    /// evidence that still exists.
+    ///
+    /// **In the fingerprint**, unlike the two clocks beside it: abandoning a start is a
+    /// discrete human act that genuinely changes what the right reading is, so it SHOULD
+    /// buy a new judgment. A clock that ticks on its own must not.
+    var abandonedStarts: Int = 0
     /// Prompt-only; NOT in the fingerprint (the raw clock churns daily).
     var quietDays: Int
     var blockerTitles: [String]
@@ -123,6 +138,8 @@ struct TaskAdvisorFacts: Sendable, Equatable {
             isJudgmentCall: task.isJudgmentCall,
             decisionShaped: DecisionShape.reads(title: task.title),
             deferralCount: Int(task.deferralCount),
+            abandonedStarts: task.recentAbandonedStarts(
+                within: StallDetector.quietThreshold, now: now),
             quietDays: max(0, Int(now.timeIntervalSince(task.humanTouchedAt) / 86_400)),
             blockerTitles: blockers.map(\.title),
             blockerIDs: blockers.compactMap(\.uuid).sorted { $0.uuidString < $1.uuidString },
@@ -156,6 +173,7 @@ struct TaskAdvisorFacts: Sendable, Equatable {
         hasher.combine(needsDecision)
         hasher.combine(isJudgmentCall)
         hasher.combine(deferralCount)
+        hasher.combine(abandonedStarts)
         hasher.combine(blockerIDs)
         // External waits have no id, so `blockerIDs` cannot see them — without this,
         // adding or resolving one would never invalidate the cached reading.
@@ -187,6 +205,13 @@ struct TaskAdvisorFacts: Sendable, Equatable {
                     : "DECISION FLAG: open — filed with low confidence")
         }
         if decisionShaped { lines.append("WORDING: reads as a choice") }
+        // A fact in its own right, not a sub-line of the stall sensor: a task can be
+        // picked up and dropped twice without ever reading as stalled, and that is
+        // precisely the case where the model most needs to know it.
+        if abandonedStarts > 0 {
+            lines.append(
+                "PICKED UP AND PUT DOWN: \(abandonedStarts) time\(abandonedStarts == 1 ? "" : "s")")
+        }
         if let diagnosis {
             lines.append("SENSOR: stalled — \(Self.sensorLine(for: diagnosis))")
             if deferralCount > 0 {
@@ -248,13 +273,19 @@ struct TaskAdvisorFacts: Sendable, Equatable {
             lines.append(
                 "You've set this aside \(deferralCount) time\(deferralCount == 1 ? "" : "s") in a row")
         }
+        if abandonedStarts > 1 {
+            lines.append("You've started it \(abandonedStarts) times and put it back down")
+        }
         for blocker in blockerTitles { lines.append("It's waiting on “\(blocker)”") }
         for wait in externalWaits { lines.append("It's waiting on \(wait)") }
         if let overdueDays {
             lines.append("It's \(overdueDays) day\(overdueDays == 1 ? "" : "s") overdue")
         }
         if let stepLabel { lines.append(stepLabel) }
-        if diagnosis != nil, deferralCount == 0, quietDays > 0 {
+        // "No progress in N days" is false company for "you started it three times":
+        // the second says the task has been touched repeatedly. The deferral clause was
+        // already guarding against exactly this collision; abandonment joins it.
+        if diagnosis != nil, deferralCount == 0, abandonedStarts <= 1, quietDays > 0 {
             lines.append("No progress on it in \(quietDays) days")
         }
         if needsDecision { lines.append(Self.decisionFlagEvidence) }

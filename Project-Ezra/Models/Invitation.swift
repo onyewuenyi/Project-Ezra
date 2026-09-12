@@ -27,6 +27,15 @@ final class Invitation: NSManagedObject {
     /// CloudKit is live.
     @NSManaged var token: UUID?
     @NSManaged var shareURL: String?
+    /// Which roster member this link is FOR — model v4. The owner invites "Maya", a
+    /// `FamilyMember` that already exists; when the link is accepted on Maya's phone, her
+    /// private `UserProfile` links to THIS member (`linkedMemberID`), so the tasks the
+    /// owner already assigned her are hers on arrival and no "which one are you?" screen
+    /// is needed.
+    @NSManaged var memberID: UUID?
+    /// When the link was accepted — the anchor `HouseholdActivation` measures from. Nil
+    /// while pending.
+    @NSManaged var acceptedAt: Date?
 
     convenience init(
         email: String? = nil, status: InvitationStatus = .pending,
@@ -44,9 +53,11 @@ final class Invitation: NSManagedObject {
         set { statusRaw = newValue.rawValue }
     }
 
-    /// Marks the invitation accepted. Inert today (only flips status); the real CloudKit
-    /// share-acceptance + identity linking lands in Phase 3 (`HouseholdSyncService`).
-    func accept() {
+    /// Marks the invitation accepted and stamps when. Called on the ACCEPTING device
+    /// (`HouseholdSharing.accept`), and since the record rides the household's share the
+    /// owner's roster sees the state flip without a message being sent.
+    func accept(now: Date = Date()) {
         status = .accepted
+        acceptedAt = now
     }
 }

@@ -63,10 +63,10 @@ enum AdvisorDiagnostics {
             task.complete()
             return (task, [task])
         },
-        Fixture("repeated deferral, decision-shaped", expected: [.decide]) { context in
+        Fixture("repeatedly abandoned, decision-shaped", expected: [.decide]) { context in
             let task = TaskItem(
                 title: "Decide which pediatrician to switch to", status: .todo, in: context)
-            task.deferralCount = 4
+            abandonStarts(task, 2)
             return (task, [task])
         },
         Fixture("broad complex task", expected: [.createSteps]) { context in
@@ -81,7 +81,7 @@ enum AdvisorDiagnostics {
             let blocker = TaskItem(
                 title: "Get the replacement part quote", status: .todo, in: context)
             task.addTaskBlocker(blocker.uuid!, among: [task, blocker])
-            task.deferralCount = 3
+            abandonStarts(task, 2)
             return (task, [task, blocker])
         },
         Fixture("in progress, ready to continue", expected: [.advise, .nothing]) { context in
@@ -99,10 +99,27 @@ enum AdvisorDiagnostics {
         },
         Fixture("stalled with no other signal", expected: [.advise, .nothing]) { context in
             let task = TaskItem(title: "Sort the garage", status: .todo, in: context)
-            task.deferralCount = 5
+            abandonStarts(task, 2)
             return (task, [task])
         },
     ]
+
+    /// Picked up and put back down, `times` times — the state the three fixtures above
+    /// have always MEANT and, since 2026-09-02, could no longer express.
+    ///
+    /// They set `deferralCount`, whose only writer was the Brief's day-rollover; when the
+    /// Brief was cut the counter froze at whatever a fixture assigned and the app itself
+    /// could never reach that state again. The fixtures kept passing, and the one they
+    /// exist to exercise — the depth router's third hypothesis — silently stopped being
+    /// exercised at all. The counter is left in place because the stall headline and
+    /// `TaskRanking` still read it; the timeline is what the router reads now.
+    private static func abandonStarts(_ task: TaskItem, _ times: Int) {
+        let resting = task.status
+        for _ in 0..<times {
+            task.status = .doing
+            task.status = resting
+        }
+    }
 
     /// How many times each fixture runs. Three is the smallest number that can
     /// distinguish "usually" from "once" — a majority needs two, and two-of-two cannot

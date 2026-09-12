@@ -116,6 +116,44 @@ enum Instrument {
         setvbuf(stdout, nil, _IOLBF, 0)
     }
 
+    // MARK: - The run stamp (economics invariant 4)
+
+    /// **Every eval report carries the run stamp**, so a number can never be quoted
+    /// without the runtime it was measured on. That rule was written down on 2026-09-04
+    /// and applied by hand — which is to say, not applied: the beta-8 FM rows in
+    /// `docs/capture.md` carry their stamp because someone typed it, and the day someone
+    /// forgets, a GA number and a beta number sit in the same table looking comparable.
+    ///
+    /// `configuration` is the workload-specific half — the instructions, the schema, the
+    /// thresholds this particular arm ran with. It is fingerprinted rather than printed:
+    /// the point is to notice that it MOVED between two runs, and a hash does that in a
+    /// table cell where 1,861 tokens of instructions cannot.
+    static func runStamp(model: String, configuration: String) -> String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        var system = utsname()
+        uname(&system)
+        let machine = withUnsafeBytes(of: &system.machine) { raw in
+            String(cString: raw.baseAddress!.assumingMemoryBound(to: CChar.self))
+        }
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return
+            "run stamp: app \(short) (\(build)) · OS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion) · "
+            + "device \(machine) · model \(model) · config \(fingerprint(configuration)) · "
+            + "\(ISO8601DateFormatter().string(from: Date()))"
+    }
+
+    /// A short, stable fingerprint of a configuration string. Not cryptographic — it only
+    /// has to change when the configuration does, and fit in a cell.
+    static func fingerprint(_ text: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in Array(text.utf8) {
+            hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01b3
+        }
+        return String(hash % 0xffff_ffff, radix: 16)
+    }
+
     /// The pair of markers a report opens and closes with. A poller keys on the end
     /// marker; a report that returns early must still print it, which is why it is a
     /// value and not a string literal at each exit.

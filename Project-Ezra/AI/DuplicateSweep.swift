@@ -80,28 +80,48 @@ enum DuplicateSweep {
         suppressions: [RelationshipSuppression],
         vector: (String) -> [Double]?
     ) -> [CandidatePair] {
+        // **Each snapshot is prepared ONCE, and the cheap floor is checked first.**
+        //
+        // The first shape of this loop fetched the vector and re-tokenized the title
+        // inside the pair loop — O(n²) lock acquisitions and tokenizations for a job
+        // that needs O(n) of each — and ran the 512-dimension dot product before the
+        // word-overlap check, so every pair paid for the expensive floor whether or not
+        // it could pass the cheap one. At 206 open tasks that was 88ms on the main
+        // actor (Debug, simulator, `ZZAIPathPerfProbeTests`), hourly, growing with the
+        // square of the store; 23ms after. Both floors must clear, so checking the
+        // lexical one first is a pure reordering of an AND: same pairs, same scores,
+        // pinned against the original loop by
+        // `DuplicateSweepTests.fastPathMatchesTheNaiveOne`.
+        struct Prepared {
+            let snapshot: OpenTaskSnapshot
+            let vector: [Double]
+            let words: Set<String>
+        }
+        let prepared: [Prepared] = snapshots.compactMap { snapshot in
+            guard let vector = vector(snapshot.title) else { return nil }
+            let words = CorrectionProfile.significantWords(snapshot.title)
+            guard !words.isEmpty else { return nil }
+            return Prepared(snapshot: snapshot, vector: vector, words: words)
+        }
+
         var pairs: [CandidatePair] = []
-        for i in snapshots.indices {
-            guard let vectorA = vector(snapshots[i].title) else { continue }
-            let wordsA = CorrectionProfile.significantWords(snapshots[i].title)
-            guard !wordsA.isEmpty else { continue }
-            for j in snapshots.indices where j > i {
-                guard let vectorB = vector(snapshots[j].title) else { continue }
-                let similarity = EmbeddingStore.similarity(vectorA, vectorB)
-                guard similarity >= embeddingFloor else { continue }
-                let wordsB = CorrectionProfile.significantWords(snapshots[j].title)
-                guard !wordsB.isEmpty else { continue }
-                let overlap = Double(wordsA.intersection(wordsB).count)
-                let union = Double(wordsA.union(wordsB).count)
+        for i in prepared.indices {
+            let a = prepared[i]
+            for j in prepared.indices where j > i {
+                let b = prepared[j]
+                // Lexical first: a set intersection on a handful of words, and the floor
+                // most pairs fail. The dot product runs only for survivors.
+                let overlap = Double(a.words.intersection(b.words).count)
+                let union = Double(a.words.union(b.words).count)
                 guard union > 0, overlap / union >= lexicalFloor else { continue }
-                let a = snapshots[i]
-                let b = snapshots[j]
+                let similarity = EmbeddingStore.similarity(a.vector, b.vector)
+                guard similarity >= embeddingFloor else { continue }
                 guard
                     !suppressions.contains(where: {
-                        $0.suppressesPair(kind: .duplicateMerge, a.id, b.id)
+                        $0.suppressesPair(kind: .duplicateMerge, a.snapshot.id, b.snapshot.id)
                     })
                 else { continue }
-                pairs.append(CandidatePair(a: a, b: b, score: similarity))
+                pairs.append(CandidatePair(a: a.snapshot, b: b.snapshot, score: similarity))
             }
         }
         return
@@ -139,24 +159,41 @@ enum DuplicateSweep {
             // rung: background work nobody is waiting on has no business costing money.
             // The counter is here so that stays a measured fact rather than an intention.
             IntelligenceLedger.shared.record(.onDevice, for: .sweeps)
-            let result = await ModelRun.perform(
-                .duplicateSweep, deadline: ModelDeadline.seconds(for: .background)
-            ) {
-                let session = LanguageModelSession(instructions: Self.judgeInstructions)
-                return try await session.respond(
-                    to: Self.judgePrompt(pair), generating: DuplicateJudgment.self
-                ).content
-            }
-            guard case .success(let judgment) = result,
-                judgment.isDuplicate, judgment.confidence >= acceptThreshold
-            else { continue }
+            let result = await judge(pair)
+            guard case .success(let judgment) = result, accepts(judgment) else { continue }
             if mergeJudgedPair(pair, in: context, now: now) { merges += 1 }
         }
         if merges > 0 { context.saveChanges() }
         return merges
     }
 
-    private static let judgeInstructions = """
+    /// THE judgment — one pair in, the model's verdict out, no merge and no side effect.
+    ///
+    /// Lifted out of `run` so `-DuplicateSweepEval` measures the judge the product
+    /// actually uses. A harness with its own copy of the instructions and the prompt is a
+    /// harness that scores a second implementation and reports it as the first; this
+    /// codebase has already paid for that once (the confidence gate's scorer, whose ground
+    /// truth asked the wrong question).
+    static func judge(_ pair: CandidatePair) async -> ModelResult<DuplicateJudgment> {
+        await ModelRun.perform(
+            .duplicateSweep, deadline: ModelDeadline.seconds(for: .background)
+        ) {
+            let session = LanguageModelSession(instructions: Self.judgeInstructions)
+            return try await session.respond(
+                to: Self.judgePrompt(pair), generating: DuplicateJudgment.self
+            ).content
+        }
+    }
+
+    /// Whether a judgment clears the destructive tier. A function rather than an inline
+    /// condition so the eval can sweep the threshold instead of asserting the constant —
+    /// **0.85 is a number somebody chose, and a model-reported confidence is exactly the
+    /// kind of value whose calibration moves when the runtime does.**
+    static func accepts(_ judgment: DuplicateJudgment, threshold: Double = acceptThreshold) -> Bool {
+        judgment.isDuplicate && judgment.confidence >= threshold
+    }
+
+    static let judgeInstructions = """
         You judge whether two to-do items from one person's task list describe the \
         SAME underlying task. Different phrasings of one errand are duplicates \
         ("renew passport" / "passport renewal"). Related but distinct steps are NOT \
@@ -164,7 +201,7 @@ enum DuplicateSweep {
         are not duplicates.
         """
 
-    private static func judgePrompt(_ pair: CandidatePair) -> String {
+    static func judgePrompt(_ pair: CandidatePair) -> String {
         """
         Task A: \(pair.a.title) (category \(pair.a.category))
         Task B: \(pair.b.title) (category \(pair.b.category))

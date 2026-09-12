@@ -31,6 +31,11 @@ final class Household: NSManagedObject {
     @NSManaged var aiContext: HouseholdAIContext?
     @NSManaged var memories: NSSet?
     @NSManaged var invitations: NSSet?
+    /// Model v4 (2026-09-12): the tasks and the trail, so the whole plan travels with the
+    /// share. Inverses of `TaskItem.household` / `ChangeLogEntry.household`; nothing reads
+    /// them as collections (the lists still fetch), they exist so the graph is CONNECTED.
+    @NSManaged var tasks: NSSet?
+    @NSManaged var changes: NSSet?
 
     convenience init(
         name: String? = nil, photoData: Data? = nil,
@@ -62,12 +67,30 @@ final class Household: NSManagedObject {
         activeMembers.filter { $0.uuid != currentUserID }
     }
 
-    /// The single household for this install (fetch-first-or-create). One household
-    /// per device today; when CloudKit sharing lands this becomes the shared record.
+    /// The household this install works in (fetch-first-or-create).
+    ///
+    /// **Since sharing went live there can be TWO** (2026-09-12): the one this device
+    /// minted at first launch (private store) and one someone else owns and this person
+    /// accepted an invitation into (shared store). `existing(in:)` picks the one with the
+    /// most live members, oldest first on a tie — the shared household always has at least
+    /// the owner and this person, the private leftover has exactly one, so the invited
+    /// caretaker lands in the household they were invited to without a "which one?" step,
+    /// and the owner (who only ever has one) is unaffected. A person who is BOTH an owner
+    /// with a partner AND an invitee elsewhere is not a household shape this product
+    /// models; the larger roster wins and is stated here rather than left to fetch order.
     static func current(in context: NSManagedObjectContext) -> Household {
+        existing(in: context) ?? Household(in: context)
+    }
+
+    /// The working household, or nil when this install has none yet. Never creates —
+    /// `HouseholdStoreAffinity` reads it from inside a save, where inserting is not allowed.
+    static func existing(in context: NSManagedObjectContext) -> Household? {
         let request = NSFetchRequest<Household>(entityName: "Household")
-        request.fetchLimit = 1
-        if let existing = try? context.fetch(request).first { return existing }
-        return Household(in: context)
+        guard let all = try? context.fetch(request), !all.isEmpty else { return nil }
+        return all.min { lhs, rhs in
+            let l = lhs.activeMembers.count, r = rhs.activeMembers.count
+            if l != r { return l > r }
+            return lhs.createdAt < rhs.createdAt
+        }
     }
 }

@@ -137,6 +137,21 @@ enum CloudModel {
     /// twenty calls had failed.
     static var isReachable: Bool { isAvailable && CloudHealth.shared.isClosed() }
 
+    /// Reachability for ONE pillar — `isReachable` AND that pillar's remote kill switch
+    /// is not engaged (`TelemetryGate`, Ramble economics rule 5: a console may switch a
+    /// pillar's cloud arm off, never a floor or a threshold). The two capture and
+    /// judgment call sites read this so the switch turns off exactly one arm and the
+    /// deterministic tail beneath it carries on. Unknown, unconfigured or opted-out all
+    /// read as "not killed" — a kill switch that fails open is a feature flag.
+    static func isReachable(for workload: IntelligenceWorkload) -> Bool {
+        guard isReachable else { return false }
+        switch workload {
+        case .ramble: return !Telemetry.isKilled(.killCloudCapture)
+        case .advisor: return !Telemetry.isKilled(.killCloudAdvisor)
+        default: return true
+        }
+    }
+
     /// What the DEBUG readout calls this rung: `cloud(gemini-flash)`.
     static var label: String { "cloud(\(provider.identifier))" }
 }

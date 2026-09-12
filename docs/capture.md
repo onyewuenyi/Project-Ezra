@@ -62,6 +62,225 @@ The invariants are in `CLAUDE.md` (the capture bullets); this is the why.
 - **The 2026-09-04 surface pass — nine small honesties, each closing a place the arc quietly worked against the person.** (1) **Discard is reachable from the reveal**, not only the canvas: the reveal is where "no, never mind" is most often decided, and its only exit was Close, which PARKED the capture and resurfaced it at the top of Tasks as unfinished work already decided against. (2) **Removing a card can be undone** — an in-place `UndoNotice` ("Removed “X”" · Undo) restores the card to the place it held and `RemovedDraftSet.forget` reverses the bookkeeping, so a re-read keeps it; before this, one mis-tap on the X was the only irreversible act on the surface and the merge then kept the card out of every re-read. (3) **The Create CTA says what pressing it does** (`ComposerView.createTitle(created:merged:)`): "Create 2 tasks · merge 1", never "Create 3 tasks" over a set with a merge in it — the commit pill used to correct the button a second later. (4) **The subtitle carries the ask** (`revealSubtitle(count:asks:)`: "3 things · 1 needs a date") — the one thing on the page that wants something back was findable by sighted users only by scanning every card for a "When?" chip, while VoiceOver users were told at the reveal. (5) **The transcript is captioned** in the register of its channel ("What I heard — edit it if I misheard." / "What you wrote — …" / "What the photo said — …"): under "Here's what I understood", an unlabelled editable box read as a notes field and its editability, the whole reason it is on the page, went unnoticed. (6) **"Nothing actionable" has a way forward the person owns** — `CaptureFlow.keepAsOneTask` makes ONE draft from the words as said (resolver-backfilled, confidence 1, `aiOriginal.title == title` so commit diffs no phantom correction), landing through `editableDrafts`, the user's own path: the system proposed nothing, the person vouched for it. (7) **The posture chip sits on the listening surface too** — the door most people use — above the controls row as an overlay so the orb keeps its size; it lived only on the typed canvas's bar, so someone opening INTO listening could not see or set whether a private thought would stay on the device without leaving the surface first. (8) **A parked capture says how old it is and can be let go without opening it** (`ParkedCapturesRow.age`, "2h ago"; long-press → Discard behind the same confirmation the composer wears): a row dismissable only by resuming it and finding Discard nags by construction. (9) **Just-created rows wash in** (`TaskRow.isFreshArrival`, `confirmedAt` within 8s; `Motion.arrivalWashHold`/`arrivalWashFade`): Create dismisses immediately and states no count, so the list has to show WHICH rows arrived or the receipt is a list that looks the same with more in it — a soft `accentSoft` tint held past the sheet's dismissal, then dissolved; never a badge, gated on the window so a relaunch or a later scroll never re-washes. Plus ⌘↩ on Ramble and Create for hardware keyboards. Pinned in `CaptureSurfaceTests`.
 
 
+## 2026-09-12 — embeddings have never worked on the dogfooding phone
+
+Found by the duplicate-sweep eval's prefilter line on the DEVICE — "no sentence embedding
+on this host" — and confirmed independently from the device store: **70 tasks, 0
+`EmbeddingCache` rows.** `persistFresh` writes a row for every fresh vector, so zero rows
+over weeks of daily use means `NLEmbedding.sentenceEmbedding(for: .english)` (or its
+`vector(for:)`) has returned nil on this iPhone 15 Pro Max for the whole dogfooding period.
+
+What that has silently meant, all of it invisible to every test and every prior eval:
+
+- **`ContextRetrieval` has been lexical-only.** The capture-time candidate package — the
+  only ids the model may cite for duplicate/child proposals — was ranked on word overlap,
+  category and recency, never on meaning. A paraphrased duplicate ("passport renewal" for
+  "Renew passport") could not reach the prompt.
+- **`DuplicateSweep` has never judged a single pair.** `candidatePairs` skips any pair it
+  has no vector for (correctly — it only reasons over evidence it has), so with no vectors
+  it skips everything. The judge measured today at zero false merges and perfect separation
+  has never once run in production.
+- `EmbeddingStore`'s own header says nil means "the simulator". It meant the phone too.
+
+Why no test caught it: `DuplicateSweepTests` inject a vector table; `ContextRetrieval`'s
+tests exercise the lexical degrade path; the app degrades gracefully by design. **A feature
+that degrades gracefully with no meter on the degrade is a feature that can be off for a
+month.** The candidate-blind capture prompt (inert for weeks, every test green) was this
+same shape; this is the third instance.
+
+**Not yet diagnosed, deliberately.** Whether the sentence-embedding asset is absent on this
+iOS 27 beta, not downloaded, or refused for this locale is the next question, and it is a
+device question — the fix must not be guessed at from a Mac. What is decided: the
+availability gets a METER (the DEBUG diagnostics card should say `sentence embedding:
+unavailable · 0 cached vectors`, so the degrade is a visible state rather than a silent one),
+and the duplicate-sweep eval's PRODUCTION quadrant stays vacuous — and says so — until it
+reads "available".
+
+
+## 2026-09-12 — the destructive gate, measured before the runtime moves
+
+`DuplicateSweep` is the auto-accept invariant's one named exception: everything else the app
+infers is auto-accepted because the confirm card is the human boundary and a wrong guess costs
+an edit, but a merge takes an EXISTING task off the person's list, in the BACKGROUND, gated on
+`confidence >= 0.85` — a number the model reports about itself.
+
+`DuplicateSweepTests` covers the plumbing thoroughly: both prefilter floors, suppression, the
+caps, best-first ordering, the kill/undo round trip, the judgment-call carve-out, the
+off-device no-op. **Every one of those tests runs with no model, because the test host has
+none — so the judge had never been scored, on device or in CI.** That was tolerable while the
+runtime was frozen. It stops being tolerable the week the model changes: a self-reported
+confidence is precisely the kind of value whose CALIBRATION moves between runtimes, and 0.85
+was chosen against a model that is being replaced. A judge that becomes slightly more
+confident under GA merges tasks a beta build left alone, silently, hourly, with an Activity
+row as the only trace.
+
+`-DuplicateSweepEval` answers three questions in the order they matter: how often does the
+judge merge two tasks that are not the same (FALSE MERGE, printed first, ceiling zero); is
+0.85 the right line (SWEPT, not asserted — the confidence distributions for true and false
+pairs printed separately with a SEPARABLE/OVERLAPPING verdict, and false/true merge counts at
+each candidate threshold, so the number is an output the way a routing percentage is); and
+does the prefilter even let the duplicates through (a judge with perfect precision behind a
+filter that drops half the real duplicates is a feature that does not work, and measuring only
+the judge would report it as flawless).
+
+The corpus is **paired**, the `gateAdversarialSet` shape, and its near-misses are built from
+their partner's words — "book the dentist" / "book the vet", "order Mum's birthday present" /
+"order Dad's", "fix the leaking tap in the bathroom" / "…in the kitchen". `DuplicateSweepEvalTests`
+enforces that: a negative sharing no vocabulary with its positive measures nothing twice over,
+since word overlap alone would ace it AND the production lexical floor would drop the pair
+before the judge ever saw it. **That test failed on the first draft of the corpus** and caught
+one such pair.
+
+**`DuplicateSweep.judge` and `.accepts` were lifted out of `run`** so the harness measures the
+judge the product uses. A harness carrying its own copy of the instructions and the prompt
+scores a second implementation and reports it as the first — this codebase has paid for that
+once already, in the confidence gate's scorer.
+
+**And the first run tried to ship a false alarm.** It printed
+`real duplicates reaching the judge: 0/10 ← the floors, not the model, are the ceiling on this
+feature`, which reads as a devastating product finding. It was the simulator: with no
+`NLEmbedding.sentenceEmbedding`, `candidatePairs` correctly skips every pair for want of a
+vector. The report now distinguishes "the floors rejected this pair" from "there was nothing
+here to judge with", prints JUDGE and PRODUCTION quadrants apart, and **refuses a verdict when
+the production gate could not have merged anything** — because a vacuous zero in the
+false-merge cell is the most dangerous number this report could print.
+
+
+## 2026-09-12 — the boundary pass: the model draws the boundaries, the app does the cutting
+
+**Built, measurable, off.** `AI/OnDeviceSegmenter.swift` + `AI/FMPrimitives.swift`
+(`-FMPrimitives`) are WS4/Campaign 5's instrument and its candidate arm, landed together
+two days before the iOS 27 GA runtime arrives so that reopening the routing decision costs
+one launch argument instead of a week of deciding what to measure.
+
+**The shape, and why it is this shape.** Capture escalates today when the deterministic read
+looks under-segmented — connective, time and interior-verb signals exceeding the draft count
+by two or more. That is a BOUNDARY failure and nothing else: the deterministic pipeline
+already fills every field of a draft in microseconds, and the only thing it demonstrably
+cannot do is find the seams inside an unpunctuated spoken run-on. So the arm asks the
+on-device model for exactly that and nothing else — for each outcome, the first three or four
+words, copied verbatim — and the app locates each anchor by TOKEN (the model reproduces the
+words reliably and the spacing, case and trailing commas of a dictation unreliably) and cuts
+there. Fragments go through the same `HeuristicEngine` → `IntentResolver` path every other
+capture uses, via the extracted `AppBrain.drafts(fromClauses:)`, and the same
+`CaptureEscalation.reason` judges the result.
+
+Asking for anchors rather than tasks is Campaign 1's finding applied: 62% of FM's 20-second
+capture latency was OUTPUT VOLUME, and a `TriageResult` array re-emits every title, category
+and date the app is about to recompute anyway. Five words per outcome is the smallest artifact
+that answers the question. It is the same move as `IntentResolver.expand` (*parse the intent in
+the model, expand the schedule in app code*) and as `sourceQuote` (*the model names its
+evidence and the SYSTEM verifies it*).
+
+**Three properties fall out of cutting rather than generating,** and they are the reason this
+shape beat a smaller `TriageResult`: nothing can be **invented** (every fragment is a substring
+of what the person said — there is no path by which a printer-paper errand appears); nothing
+can be **lost** (the fragments tile the text, so coverage is 100% by construction and
+`lowCoverage` is unreachable from this arm); and grounding is **total rather than sampled** —
+an anchor not found verbatim rejects the WHOLE artifact, because dropping one boundary silently
+merges two outcomes back together, which is the exact failure the arm exists to fix. Rejection
+costs a cloud call, which is what would have happened anyway.
+
+**The arm can only ever remove a transmission.** It is unreachable on any escalation reason but
+`underSegmented` (`bigDump` goes straight to the authority by standing policy rather than
+paying twice; `emptyRead` has nothing to re-cut; `conversation` needs the authority's permission
+to return nothing; `unresolvedDetail`/`lowCoverage` are field and content failures, not boundary
+ones), it cannot propose anything the existing validator has not cleared, and
+`OnDeviceSegmenterTests` greps the file for `CloudModel.`/`GeminiProvider`/`FirebaseAI` the way
+Private Capture's does. **The one real cost, stated: a refused pass spends its own latency in
+front of a cloud call it did not avoid** — paid only by captures that already escalate, bounded
+by `generationCapSeconds` (3.5s, a wedge guard in `PrivateCaptureEngine`'s sense, set tighter
+because a cheaper arm is waiting behind it).
+
+**Why it ships off.** `isRoutingEnabled` is false, and that is not the posture's
+"wait for the benchmark" default — it is this document's own standing decision: production
+routing reopens after the GA evaluation, by a human over the report. `-OnDeviceSegment` runs
+the arm live for dogfooding before then.
+
+### The posture stops being a quality trade
+
+The arm's second call site is the one that surprised the design. On the ON-DEVICE posture,
+one thought ran `PrivateCaptureEngine` (measured p50 1.8s, grounding 100%) and **several
+things fell to a single deterministic read of the whole run-on** — the very read whose
+under-segmentation is what escalates on the open posture. So choosing "Read here only" cost
+you segmentation on exactly the captures where boundaries are hardest, and the cost was
+invisible: the confirm card looked the same, with fewer cards on it.
+
+`CaptureFlow.Arm.boundaryPass` closes that. The two on-device envelopes are complementary by
+construction — `soundsLikeSeveralThings` asks precisely "one thought or several?" — so one
+thought keeps the private engine and several things get the boundary pass, behind the same
+orb, onto the same confirm card. A refusal falls to the same deterministic read it would have
+got anyway, because the posture forbids the network either way: **the person gets the better
+of the two answers this device can give, and never a worse one than before.**
+
+`boundaryPassAvailable` is a REQUIRED parameter of `CaptureFlow.plan` rather than a default
+reading `isRoutingEnabled`, and that is scar tissue rather than style: this codebase has twice
+shipped a capability decided by an unset default — the candidate-blind capture prompt (a
+feature silently off for weeks, every test green) and `triage`'s `route:` defaulting to
+`.cloud` (a new user's first brain dump silently transmitted). A capability the caller does not
+name is a capability nobody is deciding about.
+
+### `-FMPrimitives`: the report that flips it
+
+P-A (segment) and P-D (artifact acceptance) — the two WS4 questions the decision rule turns
+on. P-B is `-QuickCaptureDiag` Q1 and is not re-implemented; P-C needs a pair fixture that does
+not exist, and a placeholder for it would be precisely the instrument-that-looks-like-a-
+measurement §11 warns about. Gates, stated before the numbers and fixed for the campaign:
+**false accept == 0** (the only cell that can hurt a person — a cut the validator cleared whose
+count is still wrong is a confident misreading revealed as final; it is the routing quadrant's
+`falseKeep`, asked of this arm), **exact fragments ≥ 70%** on the reachable cohort, **p50 ≤ 2s /
+p95 ≤ 2.5s** (the renegotiated Private Capture envelope, which this arm inherits by sitting in
+the same beat).
+
+**Three cohorts, and printing all three is the point.** REACHABLE is what escalates as
+`underSegmented` today — what the open posture's arm is worth as wired. **POSTURE** is what
+the on-device posture's arm sees, which is its own population: it fires on the deterministic
+multi-intent detector, not on the escalation reason, so it reaches rows REACHABLE never sees.
+POTENTIAL is every unstructured row whose local read has the wrong count *and* whose label is
+a boundary problem at all (`expected >= 2`; a row labeled zero tasks or one task cannot be
+fixed by finding boundaries, and counting it would credit the arm with a population no
+segmenter can serve). Scoring only on POTENTIAL would credit the arm for captures production
+never hands it — the wrong-question failure in its most flattering direction; scoring only
+REACHABLE would leave a live call site measured by nothing, which is the "documented and
+untrue" shape.
+
+**Posture regret**, printed under the POSTURE cohort, is the one number the two call sites do
+not share. On the open posture a refused cut costs nothing — Gemini runs and answers. On the
+on-device posture there is nothing behind the refusal but the deterministic read the cut was
+trying to improve on, so strict validator acceptance can discard a cut that was *closer to the
+truth* in exchange for no gain at all. The line counts exactly that: validator-refused cuts
+whose fragment count was nearer the label than the read the person got instead. It is **not**
+an argument for relaxing the validator — "closer to the label" is knowable in a corpus and
+unknowable at runtime, where the validator is the only signal there is. It is printed so a
+non-zero number becomes a named decision (find a runtime signal, or accept the regret) rather
+than a cost nobody measured. Scoring it correctly is also why
+`Refusal.validator` carries the CUT's own draft count: substituting the deterministic count —
+which the first version of the scorer did — makes a cut that came apart and a cut that was
+nearly right print identically.
+
+**First run (sim, 2026-09-12, no model assets — numbers are cohort structure only, not P-A):**
+86 labeled rows → 76 unstructured → **REACHABLE 3 · POTENTIAL 6**, and today's correct local
+resolution rate on that corpus is **91% (69/76)**. The reachable cohort being three rows is a
+real finding rather than a broken run: **as wired, the ESCALATION SIGNAL bounds this win, not
+the model.** Whether that signal should widen is a separate, named decision the report
+deliberately refuses to make quietly.
+
+**The run also earned §11's lesson a tenth time — five instrument bugs, zero product bugs.**
+An unclamped `LanguageModelError` description is eight lines of nested NSError and one of them
+destroyed the table it landed in; `String(format:)` ignores a width specifier on `%@` here, so
+every column ran together; the latency tail was built from calls that never served
+("p90 2479ms" from nine errors); an empty latency list percentiles to zero and prints as a
+triumph; and the POTENTIAL cohort swept in anti-invention rows. All five are fixed and the pure
+half is pinned in `FMPrimitivesTests`, which is the durable answer — a scorer that only runs on
+the two device sittings a campaign gets is a scorer nobody is watching. What the run got RIGHT
+is the more important half: the model never served, and the harness said `DEGRADED · served
+0/9` and refused a decision rather than reporting the fallback's numbers under the arm's name.
+
+`Instrument.runStamp` landed with it, so economics invariant 4 (**every eval report carries the
+run stamp**) is now structural rather than a rule each new harness has to remember — the failure
+mode being a GA number and a beta number sitting in the same table looking comparable.
+
+
 ## 2026-09-04 — Ramble economics: unlimited to the person, bounded for the machine
 
 The rules are in `CLAUDE.md` (the *Ramble economics* capture bullet); this is the why, the
@@ -290,7 +509,9 @@ quarantined real corpus; `captureNeverBlocks`.
 | same | tier300 instructions + minimal schema | 4.5 s | — | Campaign 2: seg 5/5 incl. case 50; pre-first-token ~1.5 ms/instruction-token over a ~1.4 s fixed base |
 | same · 2026-08-30 | zero instructions (Apple's intercept) | 1.34 s pre-first-token | — | Campaign 3 Q3: the 500 ms p50 gate is runtime-bound out of reach on this runtime |
 | same | single-object `PrivateCaptureRead`, ~55-tok instructions | 1.8 s | 2.4 s | Campaign 3 Q1: seg 42/43, grounding 43/43, p99 3.1 s — the shipped Private Capture envelope |
-| iOS 27 GA · same phone | the four primitives above | *Campaign 5* | | every row carries the run stamp from then on |
+| iOS 27.0 (beta) · iPhone16,2 · 2026-09-12 13:53 · config 90271fd1 | **boundary pass** (`-FMPrimitives`): 17 rows, served 17/17 | 1.41 s | 2.60 s (p95) | **FALSE ACCEPT 0 on both cohorts, precision 100%**; case 50 (nine outcomes) cut 9/9; exact 6/9 on POSTURE, 1/3 on REACHABLE — the two REACHABLE misses are FM answering "one thing" on the adversarial pairs (`no-gain`, correctly refused); p95 96 ms over the ceiling on the single nine-outcome row. **Verdict: hold** (two gates fail). The pre-GA baseline row. |
+| same · 13:52 · config 7f4bc032 | **duplicate judge** (`-DuplicateSweepEval`): 20 pairs, served 20/20 | 1.62 s | 1.88 s (p90) | **FALSE MERGE 0**; every near-miss 0.50, every duplicate 0.90–1.00, gap 0.40 — SEPARABLE, threshold has room. BUT the prefilter could not run: **no sentence embedding on the phone** (see below). |
+| iOS 27 GA · same phone | the two rows above, re-run | *Campaign 5* | | every row carries the run stamp from then on |
 
 The gates (p50 <500 ms / p95 <1.5 s / p99 <3 s) stay the tripwire; the renegotiated Private
 Capture envelope (p50 <2 s / p95 <2.5 s / p99 <3.2 s) stays the shipped promise. The earlier

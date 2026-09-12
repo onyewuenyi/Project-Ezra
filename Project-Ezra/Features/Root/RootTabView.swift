@@ -150,6 +150,12 @@ struct RootTabView: View {
             ComposerView(resuming: session.resuming, autoSubmit: session.autoSubmit)
         }
         .sheet(isPresented: $showActivity) { ActivityView() }
+        // The arriving caretaker's "which one is you?" — presented by `HouseholdSharing`
+        // when an accepted share's household has landed and the phone cannot tell which
+        // member the person is. Mounted here, once, like the other three sheets.
+        .sheet(item: Bindable(HouseholdSharing.shared).pendingLink) { pending in
+            IdentityLinkSheet(pending: pending)
+        }
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView {
                 hasOnboarded = true
@@ -185,6 +191,13 @@ struct RootTabView: View {
             await FMDiagnostics.runIfRequested(brain: brain)
             // Campaign 3: the Private Capture envelope (bounded single-intent FM).
             await QuickCaptureDiagnostics.runIfRequested(brain: brain)
+            // Campaign 5 / WS4: the boundary pass on the GA runtime — P-A segment and
+            // P-D artifact acceptance, the two questions the routing decision turns on.
+            await FMPrimitives.runIfRequested(brain: brain)
+            // The one model judgment that destroys user data — scored before the runtime
+            // changes underneath its 0.85 confidence gate.
+            await EmbeddingDiagnostics.runIfRequested()
+            await DuplicateSweepEval.runIfRequested(brain: brain)
             await AdvisorDiagnostics.runIfRequested()
             // Gold-standard-first routing discovery: which cases measurably need depth.
             await AdvisorBenchmark.runIfRequested()

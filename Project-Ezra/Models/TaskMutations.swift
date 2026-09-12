@@ -94,6 +94,7 @@ extension TaskItem {
         transition(to: .done, now: now)
         completedAt = now
         killedAt = nil
+        Telemetry.log(.taskCompleted)
     }
 
     /// Explicitly kill — resolved, but recorded as a kill so resolution honesty

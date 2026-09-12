@@ -29,6 +29,10 @@ struct SettingsView: View {
     @FetchRequest(sortDescriptors: []) private var correctionsResults: FetchedResults<Correction>
 
     @State private var photoItem: PhotosPickerItem?
+    /// `Telemetry.enabledKey` — read here so the boundary card re-renders on the flip.
+    @AppStorage(Telemetry.enabledKey) private var telemetryEnabled = true
+    /// The digest switch — seeded from the household rule in `.task`, written by its setter.
+    @State private var digestOn = false
     @State private var pendingReset: StoreResetRecord?
     @State private var exportURL: URL?
     @State private var backupArchiveURL: URL?
@@ -64,6 +68,7 @@ struct SettingsView: View {
                     // user did not choose and needs to know about.
                     if let reset = pendingReset { resetCard(reset) }
                     profileCard
+                    digestCard
                     dataBoundaryCard
                     dataCard
                     diagnosticsCard
@@ -82,6 +87,7 @@ struct SettingsView: View {
             .onDisappear { context.saveChanges() }
             .task {
                 UserProfile.bootstrapIdentity(in: context)
+                digestOn = WeeklyDigest.isEnabled(caretakerCount: caretakerCount, defaults: .standard)
                 pendingReset = StoreResetLog.pending()
                 if let name = pendingReset?.backupName {
                     backupArchiveURL = PersistenceStack.zippedBackup(named: name)
@@ -154,6 +160,52 @@ struct SettingsView: View {
         context.saveChanges()
     }
 
+    // MARK: - The week's edition
+
+    /// The one notification — see `WeeklyDigest` and the carve-out in the guardrails. The
+    /// switch reads the household rule until the person decides (on for two caretakers,
+    /// off for one), and a decision here is final for this install.
+    private var digestCard: some View {
+        settingsCard(title: "Your week") {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                // The side effect rides the SETTER, never an `onChange` on the state:
+                // seeding the state from the household rule echoed through `onChange`
+                // as a flip and asked for notification permission on opening Settings
+                // (caught on-sim 2026-09-12) — the one moment the digest must not ask.
+                Toggle(
+                    "Sunday evening digest",
+                    isOn: Binding(
+                        get: { digestOn },
+                        set: { on in
+                            digestOn = on
+                            digestChanged(to: on)
+                        }))
+                    .font(.supporting)
+                    .foregroundStyle(Palette.primaryText)
+                    .tint(Palette.accentFlat)
+                Text(
+                    "Once a week, what the coming week holds for your household — due dates, "
+                        + "anything overdue, decisions waiting. Nothing is sent on a week with nothing to say."
+                )
+                .metadataStyle()
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var caretakerCount: Int {
+        Household.existing(in: context).map(HouseholdActivation.caretakerIDs)?.count ?? 1
+    }
+
+    /// A flip here is the person's decision, persisted under `WeeklyDigest.enabledKey`.
+    private func digestChanged(to on: Bool) {
+        UserDefaults.standard.set(on, forKey: WeeklyDigest.enabledKey)
+        Task {
+            if on { await WeeklyDigestScheduler.shared.requestPermissionIfNeeded() }
+            WeeklyDigestScheduler.shared.refresh(tasks: tasks, caretakerCount: caretakerCount)
+        }
+    }
+
     // MARK: - What leaves this device
 
     /// The data boundary — and the only thing this screen says about how Ezra thinks.
@@ -173,13 +225,28 @@ struct SettingsView: View {
     private var dataBoundaryCard: some View {
         settingsCard(title: "What leaves this device") {
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                ForEach(DataBoundary.current(cloudReachable: CloudModel.isAvailable).sentences, id: \.self) {
-                    sentence in
+                ForEach(
+                    DataBoundary.current(
+                        cloudReachable: CloudModel.isAvailable,
+                        telemetry: Telemetry.sink != nil && telemetryEnabled
+                    ).sentences, id: \.self
+                ) { sentence in
                     Text(sentence)
                         .font(.supporting)
                         .foregroundStyle(Palette.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                // The opt-out sits under the sentence that describes it, not in a
+                // separate privacy screen: the switch and the promise are one thought.
+                // Rendered only when a sink exists — a toggle for a transmission this
+                // build cannot make would be theatre.
+                if Telemetry.sink != nil {
+                    Toggle("Share anonymous product signals", isOn: $telemetryEnabled)
+                        .font(.supporting)
+                        .foregroundStyle(Palette.primaryText)
+                        .tint(Palette.accentFlat)
+                        .padding(.top, Spacing.xs)
                 }
             }
         }
@@ -241,6 +308,21 @@ struct SettingsView: View {
                 // that improves one stage while raising net attention is spend, not
                 // progress.
                 Text(requiredAttention.footerLine)
+                    .metadataStyle()
+                // The launch plan's household metrics — activated (both caretakers acted
+                // inside the window), retained this week, single-caretaker tracked apart
+                // — derived here, never shown as a score anywhere a user would read one.
+                if let household = Household.existing(in: context) {
+                    Text(
+                        HouseholdActivation.measure(
+                            household: household, tasks: tasks, entries: Array(changesResults)
+                        ).footerLine
+                    )
+                    .metadataStyle()
+                }
+                // Product telemetry: whether a sink is installed and the last events it
+                // saw. Confirms the boundary is exercised without opening a dashboard.
+                Text(Telemetry.sink == nil ? "telemetry: no sink" : "telemetry: on · \(telemetryEnabled ? "sharing" : "opted out")")
                     .metadataStyle()
                 // Per-capability model outcomes — the evidence behind the deadlines.
                 // Local only; nothing here is ever transmitted.

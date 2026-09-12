@@ -76,15 +76,53 @@ struct ReasoningBudgetTests {
         #expect(AdvisorRouting.depthReason(mixed) == .multiStep)
     }
 
-    @Test("Repeat deferral is live evidence that the obvious advice already failed")
-    func repeatDeferralIsHard() {
+    @Test("Repeatedly picking a task up and putting it down is live evidence the obvious approach failed")
+    func repeatedAbandonmentIsHard() {
         var almost = plainFacts()
-        almost.deferralCount = AdvisorRouting.repeatDeferralFloor - 1
+        almost.abandonedStarts = AdvisorRouting.abandonedStartFloor - 1
         #expect(AdvisorRouting.depthReason(almost) == nil)
 
         var repeated = plainFacts()
-        repeated.deferralCount = AdvisorRouting.repeatDeferralFloor
-        #expect(AdvisorRouting.depthReason(repeated) == .repeatDeferred)
+        repeated.abandonedStarts = AdvisorRouting.abandonedStartFloor
+        #expect(AdvisorRouting.depthReason(repeated) == .repeatedlyAbandoned)
+    }
+
+    @Test("the third depth reason can actually FIRE — the router is three hypotheses, not two")
+    func everyDepthReasonIsReachable() {
+        // This is the test that would have caught the real defect. `.repeatDeferred` read
+        // `deferralCount`, whose only writer was the Brief's day-rollover; the Brief was
+        // cut on 2026-09-02 and the counter has been permanently zero since, so one of the
+        // three hypotheses `-AdvisorBenchmark` exists to falsify could never fire — while
+        // the code, the docs and the report all described three. A depth reason no input
+        // can produce is not a hypothesis.
+        var reached: Set<AdvisorRouting.DepthReason> = []
+        var decision = plainFacts()
+        decision.needsDecision = true
+        var multi = plainFacts()
+        multi.blockerTitles = ["passport"]
+        multi.openStepTitles = ["book it"]
+        var abandoned = plainFacts()
+        abandoned.abandonedStarts = AdvisorRouting.abandonedStartFloor
+        for facts in [decision, multi, abandoned] {
+            if let reason = AdvisorRouting.depthReason(facts) { reached.insert(reason) }
+        }
+        #expect(reached.count == AdvisorRouting.DepthReason.allCases.count)
+    }
+
+    @Test("the depth signal comes from the task's own timeline, not from a counter nothing writes")
+    func abandonedStartsComesFromTheTimeline() {
+        // Picked up, put down, picked up, put down: two CLOSED `.doing` visits.
+        let task = TaskItem(title: "sort the loft", status: .todo)
+        task.status = .doing
+        task.status = .todo
+        task.status = .doing
+        task.status = .todo
+        #expect(task.abandonedStartCount == 2)
+        // The currently-open visit is not an abandonment — it has not been put down yet.
+        task.status = .doing
+        #expect(task.abandonedStartCount == 2)
+        // And `hasBeenStarted` answers a different question, so it must not be reused here.
+        #expect(task.hasBeenStarted)
     }
 
     @Test("The ordinary task stays shallow — the deep band is narrow on purpose")
@@ -253,12 +291,20 @@ struct PrecomputeBudgetTests {
 @Suite("Data boundary (what leaves this device)")
 struct DataBoundaryTests {
 
-    @Test("Three sentences in both configurations — no more, no fewer")
-    func alwaysThreeSentences() {
-        // The shape is the promise: one idea per line, readable in a glance. A fourth
-        // sentence is where hedging starts; a second paragraph is where nobody reads it.
-        #expect(DataBoundary.current(cloudReachable: true).sentences.count == 3)
-        #expect(DataBoundary.current(cloudReachable: false).sentences.count == 3)
+    @Test("Three core sentences in both configurations; one more each for sync and telemetry, only while each is TRUE")
+    func coreIsThreeSentences() {
+        // The shape is the promise: one idea per line, readable in a glance. The three
+        // core lines never grow. Since 2026-09-12 two more may FOLLOW them — the household
+        // share (while `HouseholdSync.isLive`) and product telemetry (while a sink is
+        // installed and the person has not opted out) — each present only while its
+        // transmission is real, because a sentence about a transmission that is not
+        // happening is the mirror-image dishonesty the offline case guards against.
+        for reachable in [true, false] {
+            #expect(DataBoundary.current(cloudReachable: reachable, telemetry: false, syncLive: false).sentences.count == 3)
+            #expect(DataBoundary.current(cloudReachable: reachable, telemetry: true, syncLive: true).sentences.count == 5)
+        }
+        let live = DataBoundary.current(cloudReachable: true)
+        #expect(live.sentences.count == (HouseholdSync.isLive ? 4 : 3), "the default follows the live gate")
     }
 
     @Test("With no provider, nothing is claimed to leave")

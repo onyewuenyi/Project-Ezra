@@ -619,6 +619,11 @@ struct ComposerView: View {
         // this, a voice capture followed by a typed Re-read would stamp the earlier
         // run's silence-window measurement onto the typed receipt.
         if !fromVoice { pendingSinceLastWordMs = nil }
+        // The channel, as one of five words — never the words themselves (`Telemetry`).
+        Telemetry.log(
+            .captureStarted(
+                channel: resuming?.source == .siri
+                    ? .siri : capturedImageRef != nil ? .photo : fromVoice ? .voice : .typed))
 
         let localStarted = Date()
         let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
@@ -634,7 +639,9 @@ struct ComposerView: View {
         // otherwise the device-first router decides, voice-aware.
         let plan = CaptureFlow.plan(
             text: captured, localRead: local, fromVoice: fromVoice, posture: posture,
-            privateModelAvailable: PrivateCaptureEngine.modelAvailable())
+            privateModelAvailable: PrivateCaptureEngine.modelAvailable(),
+            boundaryPassAvailable: OnDeviceSegmenter.isRoutingEnabled
+                && PrivateCaptureEngine.modelAvailable())
         let decision = (route: plan.route, escalation: plan.escalation)
         let route = decision.route
         structureSource = route.metricName
@@ -659,10 +666,56 @@ struct ComposerView: View {
         // version of this and double-counted every model parse.
         switch route {
         case .local:
-            // On-device posture + one thought + a model present: the single-thought
+            // On-device posture, SEVERAL things: the boundary pass. Same orb, same confirm
+            // card, and — because the posture forbids the network — a refusal lands on the
+            // deterministic read rather than on the authority. The person gets the better
+            // of the two answers this device can give, and never a worse one than before.
+            if plan.arm == .boundaryPass {
+                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
+                understandingSince = .now
+                Motion.withMotion(Motion.heroSettle) { phase = .understanding }
+                parkIfUnfinished(force: true)
+                parse.parseTask?.cancel()
+                parse.parseTask = Task {
+                    let learned = sessionRules()
+                    let outcome = await OnDeviceSegmenter.segment(
+                        text: captured, learned: learned, ownership: ownershipSnapshot)
+                    guard !Task.isCancelled else { return }
+                    var run = CaptureRunTelemetry.local(
+                        segmentation: Segmentation.structure(of: captured).label,
+                        cloudAvailable: CloudModel.isReachable(for: .ramble))
+                    run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
+                    let final: [TaskDraft]
+                    if case .accepted(let drafts, let fragments) = outcome {
+                        run.rung = IntelligenceRung.onDevice.rawValue
+                        run.engineName = "on-device(segment→\(fragments))"
+                        final = drafts
+                    } else {
+                        // The refusal is provenance, not an error: it is how the arm's
+                        // shortfalls get tuned, and the person sees the same read they
+                        // would have seen with the arm switched off.
+                        if case .refused(let refusal) = outcome {
+                            run.outcome = Instrument.oneLine(refusal.label)
+                        }
+                        final = local
+                    }
+                    lastRun = run
+                    await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
+                    guard !Task.isCancelled else { return }
+                    parse.parseTask = nil
+                    if interpretation.propose(final) {
+                        reveal()
+                    } else {
+                        ModelMetrics.shared.recordRefusedProposal()
+                    }
+                    parkIfUnfinished(force: true)
+                }
+                return
+            }
+            // On-device posture + ONE thought + a model present: the single-thought
             // envelope the local model was measured to win (Private Capture's engine),
-            // behind the same orb, landing on the same confirm card. Several things, or
-            // no model, fall to the deterministic read exactly as before.
+            // behind the same orb, landing on the same confirm card. With no model, both
+            // on-device arms fall to the deterministic read exactly as before.
             if plan.arm == .privateEngine {
                 IntelligenceLedger.shared.record(.onDevice, for: .ramble)
                 understandingSince = .now
@@ -675,7 +728,7 @@ struct ComposerView: View {
                     guard !Task.isCancelled else { return }
                     var run = CaptureRunTelemetry.local(
                         segmentation: Segmentation.structure(of: captured).label,
-                        cloudAvailable: CloudModel.isReachable)
+                        cloudAvailable: CloudModel.isReachable(for: .ramble))
                     run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
                     run.rung = IntelligenceRung.onDevice.rawValue
                     lastRun = run
@@ -696,7 +749,7 @@ struct ComposerView: View {
             // to beat, and a baseline with no number can't be one. Measured p50: 3ms.
             var run = CaptureRunTelemetry.local(
                 segmentation: Segmentation.structure(of: captured).label,
-                cloudAvailable: CloudModel.isReachable)
+                cloudAvailable: CloudModel.isReachable(for: .ramble))
             run.parseMs = localMs
             // The local route's cost, recorded where it is actually paid. It is the
             // baseline the cloud arm is judged against, and a baseline nobody measures
@@ -795,6 +848,50 @@ struct ComposerView: View {
             let suppressions = sessionSuppressions()
             let ownership = ownershipSnapshot
             EmbeddingStore.warmUp(openTaskIDs: Set(openTasks.map(\.id)), in: context)
+
+            // THE BOUNDARY PASS, before anything is transmitted (WS4 / Campaign 5).
+            //
+            // The deterministic read under-segmented this capture, which is a BOUNDARY
+            // failure and the one thing the on-device model is being asked for. It names
+            // where each outcome begins, the app cuts the person's own words there, and
+            // the existing validator judges the result. Accepted, the capture never leaves
+            // the device and the orb's beat covers the whole pass; refused, the cloud arm
+            // below runs exactly as it does today. The arm can only ever REMOVE a
+            // transmission — it is unreachable on any other escalation reason, and it
+            // cannot propose anything the validator has not cleared.
+            //
+            // Inert until `OnDeviceSegmenter.isRoutingEnabled` (see that file's header:
+            // the GA report flips it, not an argument here).
+            let segmentStarted = Date()
+            if OnDeviceSegmenter.attempts(escalation),
+                case .accepted(let segmented, let fragments) = await OnDeviceSegmenter.segment(
+                    text: captured, learned: learned, ownership: ownership)
+            {
+                guard !Task.isCancelled else { return }
+                parse.parseTask = nil
+                var receipt = CaptureRunTelemetry.local(
+                    segmentation: Segmentation.structure(of: captured).label,
+                    cloudAvailable: CloudModel.isReachable(for: .ramble))
+                receipt.rung = IntelligenceRung.onDevice.rawValue
+                receipt.engineName = "on-device(segment→\(fragments))"
+                // The receipt still names the reason the capture was ABOUT to transmit —
+                // that is the provenance the escalation signals are tuned from, and the
+                // arm's whole claim is that this reason was answered without the network.
+                receipt.escalationReason = escalation?.rawValue
+                receipt.parseMs = Int(Date().timeIntervalSince(segmentStarted) * 1000)
+                lastRun = receipt
+                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
+                await holdOrbToMinimumDwell(floor: Motion.orbMinimumDwellSeconds)
+                guard !Task.isCancelled else { return }
+                if interpretation.propose(segmented) {
+                    reveal()
+                } else {
+                    ModelMetrics.shared.recordRefusedProposal()
+                }
+                parkIfUnfinished(force: true)
+                return
+            }
+
             // No partial handler: streamed snapshots would expose structure growing,
             // which is the whole thing this architecture exists to prevent. The
             // deadline's salvage still applies — it becomes the timeout path into
@@ -1044,7 +1141,8 @@ struct ComposerView: View {
             // carry accessibility labels, so they yield first. "Speak instead" survives
             // wherever it fits.
             ViewThatFits(in: .horizontal) {
-                inputModeRow(mic: canSubmit ? "Speak instead" : "Speak", photo: "Add a photo", postureLabelled: true)
+                inputModeRow(
+                    mic: canSubmit ? "Speak instead" : "Speak", photo: "Add a photo", postureLabelled: true)
                 inputModeRow(mic: "Speak", photo: "Photo", postureLabelled: true)
                 inputModeRow(mic: nil, photo: nil, postureLabelled: true)
                 inputModeRow(mic: nil, photo: nil, postureLabelled: false)
@@ -1109,7 +1207,9 @@ struct ComposerView: View {
         }
         .buttonStyle(.pressable)
         .minimumHitTarget()
-        .accessibilityLabel(posture == .onDevice ? "Captures stay on this device" : "Captures may use the cloud")
+        .accessibilityLabel(
+            posture == .onDevice ? "Captures stay on this device" : "Captures may use the cloud"
+        )
         .accessibilityHint("Switches the capture privacy posture")
         .accessibilityAddTraits(posture == .onDevice ? .isSelected : [])
     }
@@ -2374,7 +2474,6 @@ final class LiveParseState {
         .environment(AppBrain())
         .environment(\.managedObjectContext, PersistenceStack.scratch)
 }
-
 
 /// A `Label` that keeps its icon and drops its title on the input-mode row's tightest
 /// widths. A style rather than two `Label`s so the capsule's font, padding and height are

@@ -42,6 +42,9 @@ struct AdvisorView: View {
     let flagged: Bool
     let isJudgmentCall: Bool
     let deferralCount: Int
+    /// How many times the person picked this up and put it back down (windowed). The
+    /// stall headline's honest branch — see `StallDiagnosis.headline`.
+    let abandonedStarts: Int
     /// The deterministic diagnosis, for the off-device fallback content.
     let diagnosis: StallDiagnosis?
     /// Active blockers, for the openBlocker move's rows.
@@ -542,7 +545,7 @@ struct AdvisorView: View {
     private var fallbackContent: some View {
         if let diagnosis {
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text(diagnosis.headline(deferralCount: deferralCount))
+                Text(diagnosis.headline(deferralCount: deferralCount, abandonedStarts: abandonedStarts))
                     .font(.supporting)
                     .foregroundStyle(Palette.primaryText)
                     .fixedSize(horizontal: false, vertical: true)

@@ -52,6 +52,79 @@ struct DuplicateSweepTests {
         #expect(Set([pairs[0].a.id, pairs[0].b.id]) == Set([a, b]))
     }
 
+    @Test("Any faster candidatePairs must return exactly what the naive one does")
+    func fastPathMatchesTheNaiveOne() {
+        // THE ORACLE for `candidatePairs` (88ms for 206 tasks before 2026-09-12, 23ms
+        // after). The rewrite is a pure reordering of an AND plus hoisting per-snapshot
+        // work out of the pair loop, so its output must be identical to the original
+        // loop — which is kept here verbatim, run over a seeded pseudo-random store where
+        // a meaningful share of pairs clears one floor but not the other. A sweep that
+        // merges the user's tasks must not change which pairs it finds as a side effect
+        // of getting faster.
+        func naive(
+            _ snapshots: [OpenTaskSnapshot], vector: (String) -> [Double]?
+        ) -> [(UUID, UUID, Double)] {
+            var out: [(UUID, UUID, Double)] = []
+            for i in snapshots.indices {
+                guard let va = vector(snapshots[i].title) else { continue }
+                let wa = CorrectionProfile.significantWords(snapshots[i].title)
+                guard !wa.isEmpty else { continue }
+                for j in snapshots.indices where j > i {
+                    guard let vb = vector(snapshots[j].title) else { continue }
+                    let sim = EmbeddingStore.similarity(va, vb)
+                    guard sim >= DuplicateSweep.embeddingFloor else { continue }
+                    let wb = CorrectionProfile.significantWords(snapshots[j].title)
+                    guard !wb.isEmpty else { continue }
+                    let overlap = Double(wa.intersection(wb).count)
+                    let union = Double(wa.union(wb).count)
+                    guard union > 0, overlap / union >= DuplicateSweep.lexicalFloor else { continue }
+                    out.append((snapshots[i].id, snapshots[j].id, sim))
+                }
+            }
+            return out
+        }
+
+        // Deterministic LCG so the fixture is the same on every run.
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        func next() -> Double {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Double(seed >> 11) / Double(1 << 53)
+        }
+        let words = ["renew", "passport", "book", "flights", "call", "dentist", "pay", "bill", "fix", "tap"]
+        var table: [String: [Double]] = [:]
+        var snapshots: [OpenTaskSnapshot] = []
+        for _ in 0..<80 {
+            let count = 1 + Int(next() * 3)
+            let title = (0..<count).map { _ in words[Int(next() * Double(words.count))] }.joined(
+                separator: " ")
+            // Two clusters of vectors so some pairs are near and most are not.
+            let angle = next() < 0.5 ? next() * 0.2 : 1.0 + next() * 0.2
+            table[title] = [cos(angle), sin(angle)]
+            snapshots.append(OpenTaskSnapshot(id: UUID(), title: title))
+        }
+        let vector: (String) -> [Double]? = { table[$0] }
+
+        // The production function sorts best-first (uuid tiebreak) and caps at
+        // `maxPairsPerRun`; the oracle must too, or it compares 20 pairs against every
+        // pair and fails against the ORIGINAL loop — which is exactly how the first
+        // shape of this test misreported a correct rewrite as a broken one.
+        let expected = Array(
+            naive(snapshots, vector: vector)
+                .sorted {
+                    if $0.2 != $1.2 { return $0.2 > $1.2 }
+                    return $0.0.uuidString < $1.0.uuidString
+                }
+                .prefix(DuplicateSweep.maxPairsPerRun))
+        let actual = DuplicateSweep.candidatePairs(among: snapshots, suppressions: [], vector: vector)
+        // Compare as sets keyed on the pair, with the score — the sort is the same in both.
+        let expectedKeys = Set(expected.map { "\($0.0)|\($0.1)|\($0.2)" })
+        let actualKeys = Set(actual.map { "\($0.a.id)|\($0.b.id)|\($0.score)" })
+        #expect(actualKeys == expectedKeys)
+        // And the fixture actually exercised both floors, or the parity proves nothing.
+        #expect(!expected.isEmpty, "the fixture produced no pairs — widen the clusters")
+        #expect(expected.count < 80 * 79 / 2, "every pair passed — the floors were not exercised")
+    }
+
     @Test("A pair missing a vector is skipped — the sweep only reasons over evidence it has")
     func missingVectorSkips() {
         let pairs = DuplicateSweep.candidatePairs(

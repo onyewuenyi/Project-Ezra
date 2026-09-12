@@ -32,10 +32,11 @@ spec says *what* and *why*, and these say *how it is built* and *how it must loo
 | `docs/advisor.md` | The Advisor in full — rung 0's floor, the fingerprint, the validation contract, the lift metric, per-rung deadlines. | In force |
 | `docs/surfaces.md` | The shell (one surface, two verbs — the tab bar, the Brief and the Ask tab are all gone as of 2026-09-02, with the archaeology kept), My Tasks, the parked-captures row, and the shape-driven task detail. | In force |
 | `prev-docs/design-system-managing-chaos.md` | Palette, type scale, spacing, motion, the calm-intelligence principle. | In force |
-| `prev-docs/product-guardrails.md` | What the product refuses to build. The one notification carve-out **closed** on 2026-09-02 when the Brief was cut — the product now sends zero notifications. Cited by the spec's §09. | In force |
+| `prev-docs/product-guardrails.md` | What the product refuses to build. The daily-nudge carve-out **closed** on 2026-09-02 with the Brief; a NEW one — the Sunday household digest — was argued from scratch on 2026-09-12, with seven conditions that are code. Also home to the 2026-09-12 telemetry boundary: user data local-first, product telemetry not. Cited by the spec's §09. | In force |
 | `docs/platform-notes.md` | The iOS 27 beta specifics verified the hard way — the four capability/profile traps, Liquid Glass, guided generation. Extracted from `CLAUDE.md` 2026-09-03. | In force |
+| `docs/kinly-launch-plan.md` | The 2026-09-12 launch positioning (Kinly) layered over Product Shape v8, verbatim, plus the map of its six build-order items onto the repo — what was already true, what was built that day (telemetry boundary, live sync + one-link invite, Sunday digest, activation derivations, onboarding screenshot input), and what is deliberately not done (the rename, until the name check). A go-to-market plan, not a spec: where it and v8 disagree, v8 wins. | In force |
 | `docs/cohort0-checklist.md` | The flows and failure modes the Cohort 0 Readiness Audit checks, plus the findings already ruled on. The routine reads this file rather than carrying its own list — **update it in the same change that changes a flow.** | In force |
-| `prev-docs/household-architecture.md` | The identity/ownership substrate multiplayer will surface. | In force, dormant |
+| `prev-docs/household-architecture.md` | The identity/ownership substrate multiplayer surfaces — LIVE since 2026-09-12 (`HouseholdSync.isLive`, the one-link invite in `HouseholdSharing`). | In force |
 
 `docs/capture.md`, `docs/advisor.md` and `docs/surfaces.md` were extracted verbatim from
 `CLAUDE.md` on 2026-09-02, when that file crossed its 150k-character limit. **CLAUDE.md keeps the invariants; these keep the

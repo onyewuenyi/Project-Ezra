@@ -7,6 +7,127 @@ behaviour, and keep the two in sync: a rule that changes here changes there.
 
 - **The Advisor is a judgment layer, not a feature catalog** (`TaskAdvisorStore` · `TaskAdvisorService` · `AdvisorView`, spec in `docs/task-model.md` — the 2026-08-12 S4→Advisor pivot; memory `task-advisor-pivot-2026-08-12`). The three capability cards (Thinking Partner · Breakdown · Unstick) collapsed into ONE ambient surface answering *"what would make this task easier right now?"* — an observation · guidance · next move, with the intervention type hidden metadata. **The pivot reverses "deterministic triggers decide which card"** the way the Today plan reversed "the model never ranks": the model judges the shape of help (`AdvisorMove`: `nothing/advise/decide/createSteps/openBlocker` — `start` is deliberately NOT a move; readiness is advice, the pinned CTA owns the lifecycle), while the deterministic system stays authoritative three ways — **sensors** (`StallDetector`/`BreakdownEligibility`/`DecisionShape` become FACT lines in `TaskAdvisorFacts` the model interprets but cannot invent or contradict), the **gate** (`TaskCapabilities.advisorWorthy` — documented as a *cost heuristic, never a semantic verdict*; must not calcify), and the **off-device fallback** (template diagnosis content; `.fallback` is an execution path, not a judgment). **Rung 0 always has an answer, and that is a promise the ladder makes** (`AI/DeterministicReading.swift`, 2026-08-24). The no-model path used to render `StallDiagnosis.headline`, which exists for exactly ONE of the gate's nine worthy reasons — `.decisionFlag` is excluded by a guard inside `diagnose`, and `.blocked`/`.doing`/`.overdue` are the non-stalled residue by construction — so a device run measured `stalled: 0` against 12 worthy tasks, i.e. **every one of them drew the ADVISOR kicker over an empty box**. A labelled empty box is worse than either honest outcome: silence is a judgment and renders as *nothing*. `DeterministicReading.make(from:)` now returns a `ValidatedReading` built from facts alone (so the existing renderer is reused, not duplicated), `.advise` almost everywhere because rung 0 must never fabricate options or steps to earn a button, and nil where there is nothing factual to say. **`.timedOut` and `.failed` degrade to it too** — §07's rule is *cloud fails → on-device → facts*, and the last arm was missing: the model can report `.available` and still fail (an empty model catalog, a 429), which shipped as "That didn't finish. Try again." — an error string offering a retry that cannot succeed. `.failed` survives only where rung 0 is also empty, so the retry seam still exists for that case. It is **not counted as an `offer`** (a fallback is an execution path, and folding it into the move stats would put model-free readings in the denominator progression lift is measured against). **The floor never restates the spine (2026-08-25):** `DeterministicReading` is shape-aware (`TaskShape.of(facts)` — legal because shape ⊆ fingerprint) and returns nil for the fact the page's spine already renders — a purely blocked task's floor is silent (the waiting spine names the wait), a bare flag is the obligation block's to state (that ladder arm is deleted — the block renders whenever the flag is set, so the sentence was always the block repeated in prose), and a container's step-progress line yields to the steps spine; the same facts stay ADDITIVE on other shapes (a flagged blocked task's floor still names the blocker). The dependents arm joined the suppression on 2026-09-12, found by screenshotting the waiting page: "Book flights for the trip" (blocked on the passport, with two dependents) showed *"Finishing this frees up 'Request time off work' and 1 other thing."* in the pinned bar under an **Unblock** CTA, while "Renew passport" — the same dependents, unblocked — showed nothing. The inversion is the GATE's doing, not the copy's: the floor runs only past `advisorWorthy`, `.plain` closes it for the passport, `.blocked` opens it for the flights, the blocker arms are correctly silent on `.waiting`, and the ladder falls through to the one sentence that is false there. `spine != .waiting` on that arm, and a purely blocked task with dependents is silent — the spine names the wait and the page draws the frees-up rows itself. `-AdvisorCoverage` prints `rung-0 floor: N/M worthy tasks speak`, where "speaks" counts spine OR diagnosis template OR floor — counting only the floor would report the suppression rule as a regression when it moved the fact to a better surface. **External waits were invisible to every rung until this landed**: `activeBlockerTasks` resolves `taskID`, so a `.externalWait` blocker ("waiting on the landlord") was dropped before it reached the facts — the task read as blocked to the gate and unblocked to everything else, *including the prompt*. `TaskAdvisorFacts.externalWaits` now carries them into the prompt, the evidence, and the fingerprint (they have no id for `blockerIDs` to hash, so without that a new wait would never re-judge). **Every task detail has an Advisor; its judgment is usually silence** — `.quiet(.gate)` (free, deterministic) and `.quiet(.model)` (the model's honest `nothing`) are both first-class judgments occupying zero visual attention. **The loop must actually close** (2026-08-13 fix): `ACTION → task state changes → Advisor re-evaluates` shipped documented and untrue — `ensure` ran only at mount and on `isActive` flips, so a reading survived the action that invalidated it. Two hooks close it: `onChange(of: task.updatedAt)` (every mutation helper bumps it, so one hook covers advisor actions, chip edits and status changes) and `onChange(of: openedBlocker)` on return (resolving a blocker changes the BLOCKER's state, invisible to the first). The **golden scenarios** (`TaskAdvisorGoldenTests`) are the product acceptance gate, run against an injected judge — `TaskAdvisorStore.init(judge:isModelAvailable:)`, because `ModelRun` AND `AppBrain.onDeviceModelAvailable()` are both hard-false under XCTest and would otherwise hide the loop behind a gate tests can't open. **What the loop closes TO is usually silence, and that is correct**: a task normally stops being advisor-worthy the moment the user acts, and "you're unblocked now" is the Advisor narrating the user's own action back at them (work still `.doing` stays worthy and does get the closing read). **The facts fingerprint is the calm invariant** (fields pinned in `TaskAdvisorFactsTests`; the raw staleness clock deliberately excluded): same task + same meaningful context → same reading — *continuously understanding ≠ continuously generating* — and `AdvisorRevealGate` structurally refuses a second reveal per fingerprint (the `Interpretation` lesson), so the reading arrives as a single thought and never churns. **Dismiss binds to the fingerprint** (the Advisor had an opinion; the human declined — counted, never resurfaced until facts change). **Model output is untrusted transport; `ValidatedReading` is the contract** (`validated(against:)` drops/degrades, never substitutes: options 2–4 with the verbatim grounded-recommendation rule kept from the Thinking Partner; steps 2–5 clamped, committing through `splitInto` + Corrections; `openBlocker` requires a real blocker; unknown moves degrade to `advise` — the forward-tolerance seam for research/draft/schedule/delegate later). **A flagged decision keeps its reason line and its clearing button unconditionally** — `resolveDecision()` is the only clearer. The button reads **"I've decided"** (2026-09-11): it shares a page with a pinned CTA reading "Decide", and the collision is resolved by grammatical PERSON rather than vocabulary — the CTA is imperative because the system is offering a move, a control reporting a state the human already reached speaks as the human, and "I've decided" answers the block's own sentence where "Mark decided" narrated it from outside. **Every advisor action routes through `advisorActed`** — the acted metric (recording the status it acted FROM) + `touchHuman` while a stall diagnosis is present (a card its own buttons can't dismiss is a scold). **The Advisor never competes with the task's primary action**: `accentGradient` on a full-width capsule belongs to the pinned CTA alone (the shipped flagged-decision card broke this with a second gradient clearing button; it is now a bordered secondary, and the Advisor's own controls never exceed that). **The reading renders CONTAINERLESS and LABEL-LESS (2026-08-25)** — an interpretation belongs in the task's own body rhythm, not a bolted-on AI card, and the "ADVISOR" kicker is deleted: no badge tells the user which sentences came from a model, the observation renders in secondary text (the intelligence is the sentence being right, not the frame around it), and a failed generation renders NOTHING (`RetryLine` deleted; `AdvisorView.isVisible` excludes `.failed`, the floor already spoke wherever there was a fact to state, and the re-judge loop is the retry — an error string taught the user the Advisor can fail and offered a retry that often could not succeed). Only the flagged-decision block keeps card chrome + the Needs-Decision stroke, because that is a standing human obligation rather than an interpretation — and it now renders ABOVE the reading, since a standing duty outranks an interpretation of it. On a `.decide` reading the evidence surfaces INLINE as up to three "what matters" fact lines (no disclosure tap before a choice); everywhere else "Why this?" stays collapsed. One hairline separates understanding from action ("everything above = what I noticed, everything below = what you can do"), there is at most ONE button, and a `decide` with no grounded recommendation gets NO button at all — when the system doesn't know the user's preference the options themselves are the action. **"Why this?" shows EVIDENCE, never reasoning** (`TaskAdvisorFacts.userVisibleEvidence` → `ValidatedReading.evidence`, bound to the reading so it can't drift): deterministic fact lines only, the model contributes nothing, and `workIntent` is excluded because axis 2 must never become accidental UI. Loading is reserved rhythm — no spinner, no hairline, no "analyzing" copy. **The quality signal is progression LIFT, not AI activity** — v5 sharpened this from "% of advised tasks that moved", which reads like evidence and isn't: the Advisor speaks on SELECTED tasks (the stuck, decision-shaped, repeat-deferred ones), so 62% could mean the interventions work or that hard tasks move anyway, and the number cannot tell those apart. A metric that cannot fail cannot support the claim the product rests on. `AdvisorMetrics.progression(among:)` now compares the advised cohort against a CONTROL of tasks the Advisor **looked at and judged silence on** (`SilentEvent`, recorded only for model-judged `.nothing` — gate skips are trivial by construction, so using them would measure task difficulty and call it Advisor quality). A task in both cohorts counts as advised; the footer prints `lift +31pt` **signed always** (a negative lift is the most important reading this footer can show) and `lift n/a` when either cohort is empty, because "no difference measured" and "no measurement possible" are different claims. : `AdvisorMetrics` (local-only, DEBUG footer `advisor: gated 12 · zip 6 · adv 1/4 · …` + `moved 62% · re-int 1.3`) tracks offered/acted/dismissed per move plus % of advised tasks that later moved; **gate skips are counted apart from judged silence** ("are we skipping too much?" and "does the Advisor know when to shut up?" are different questions, and gate skips accumulate on every fingerprint change of every trivial task); the acceptance test is the `-AdvisorDiagnostics` judgment eval (curated task states → expected moves, run on device). **Latency is a product budget PER RUNG** (`ModelDeadline.advisorSeconds(rung:presenceTime:)`): on-device keeps `cardSeconds` (20s); a PRECOMPUTED deep read gets the generous budget (60s — nobody is waiting, so correctness beats speed and the only risk is a hung call); a PRESENCE-TIME deep read gets a tighter one (25s), because a wait the user is watching should end in a cheaper answer rather than a longer wait. A single deadline for every rung shipped as a silent bug — 20s is right for a local read and far too short for deep reasoning, so the paid rung would have timed out routinely while the code, the tests and the docs all said it worked. **A timed-out deep read salvages DOWN A RUNG** rather than surfacing `.failed`: running out of time doesn't prove there is nothing to say, only that this rung couldn't say it in the time available (guarded on `.cloud` so it cannot recurse). **V1 is otherwise deliberately call-shaped** (`ModelRun.perform(.taskAdvisor, …)`, `CapabilityProfiles.taskAdvisor` prior 0.5/`.moderate`/500; the move is constrained at the DECODER via `@Guide(.anyOf(AdvisorMove.allCases…))` — the first `.anyOf` in the codebase — while the field stays a `String` behind `lenient:` so the app keeps an escape hatch the model can no longer need) — tool calling, streaming+salvage, and per-task sessions are each deferred behind a named tripwire (context-starved readings · device timeout counts · the evolving-loop wanting continuity). Naming: `AI/BriefSession.swift` is the daily BRIEF session (renamed from `AdvisorSession` in the v2 collapse, so "Advisor" names one thing); everything per-task is `TaskAdvisor*`. **The Start tap still earns a kickoff line, and rung 0 answers before the model may (2026-08-26)**: a CONTAINER's first move is already stored — `TaskItem.nextOpenStep(among:)`, the one derivation the spine's pointer and the kickoff line both read, so they cannot disagree and the line lands instantly with no generation; a DECIDING task gets NO kickoff at all (the options are the move, and a generated "first step" under a Decide button answers a question nobody asked); everything else still asks `KickoffService`, silence as the fallback. **The primary CTA is pinned** (`safeAreaInset(edge: .bottom)`, solid surface, hidden while editing) with the kickoff line riding in the bar and re-fetching on revisit of a `.doing` task. **The umbrella can't be finished before its steps, and that fact is DERIVED — never a stored wait** (`TaskItem.openSteps`/`stepProgress` → `StepProgress`). Writing it as a `.blocks` edge on the parent was tried and REVERSED (2026-08-11): it fuses the two graphs `children(among:)` warns about. The split writes exactly one edge per step, ON the step, so deleting the step is the whole undo. **A container is not stuck, so it never renders as Blocked**: the row shows `StepProgressIndicator` ("1/3"), the detail shows a read-only Steps section, `containerRecede` keeps the umbrella out of its steps' way, and closing it early is allowed but never silent (`UndoNotice.resolution(steps:)`). **`TaskChainGrouping.prerequisites(of:within:)` is where the two graphs meet**, and the ONLY place they do: for display order, blockers and open steps answer the same question, so a breakdown renders as one chain stack with its steps in front. **The stack is a ROW that looks deeper, not a container** (2026-09-01): the in-list expander was removed — it gave a stack the only row in the list with two tap targets, and its 44pt button sat exactly where `TaskRow` draws the due label. The count is now an indicator beside the step count (`ChainDepthIndicator`), and what the expander did is done better elsewhere — `TaskDetailPeers.flatten` already unrolls a chain root-first, so opening the row and paging walks the members, and the detail's spines render them with status, wait age and navigation.
 
+## 2026-09-12 — the guard: a field nothing writes must not decide anything
+
+Three of the four defects found that day were **one bug wearing three hats**. The Brief was
+cut on 2026-09-02, `deferralCount`'s only writer went with it, and the field kept being READ —
+by the depth router, by the stall sensor's avoidance arm, by the `.dying` headline. Each
+reader silently became a branch that could not fire, and the code, the docs and
+`-AdvisorBenchmark`'s own report went on describing behaviour the app no longer had.
+
+**Every test stayed green because the tests set the field directly.** A stall test that writes
+`task.deferralCount = 3` proves the sensor reacts to a number; it says nothing about whether
+anything in the app can produce that number. That is the gap, and finding the three instances
+by hand is not a strategy for the next deletion.
+
+`InertSignalTests` closes it with a grep in the same idiom as the privacy pins: a curated table
+of fields the app can no longer write, an allowlist per field with a stated reason, and a
+failure that names the decision being made ("either give the field a writer, or read the live
+signal, or say why this mention is harmless"). Two deliberate choices:
+
+- **A list, not a derivation.** "Which fields have no writer" cannot be computed from Swift
+  source without a real index, and a half-working detector would be one more instrument nobody
+  can trust — §11's whole lesson.
+- **A mirror check**, so the allowlist cannot rot into a graveyard of files that stopped
+  touching the field years ago. A stale allowlist is a guard with invisible holes.
+
+**It failed twice on first run, and both failures were worth having.** First it matched PROSE —
+flagging four files whose only mention was a doc comment explaining that the field is dead,
+including this fix's own explanation. That is exactly the lesson `PrivateCaptureEngineTests`
+records about its cloud grep ("prose may NAME the cloud; code may not touch it"), which is a
+good sign the rule is real and a bad sign about how easily it is forgotten. With comments
+stripped it then flagged the two files that genuinely still write the field — **both
+fixtures**: `AdvisorDiagnostics.fixtures` and, more importantly, `EvalCorpus`, the dogfooding
+seed. Its one "stalled by avoidance" task had been seeding a state the app cannot reach, so
+the on-device walkthrough could not have surfaced the avoidance diagnosis since 2026-09-02. A
+fixture describing an unreachable state is worse than no fixture: it makes the surface look
+covered.
+
+Both now abandon starts instead. `carriedOverCount` is in the table too — it never had a
+behavioural reader, so it went inert without breaking anything, which is precisely why nobody
+would notice one being added.
+
+The last reader, `TaskRanking.currentRelevance`, was **removed rather than repointed** — and
+working out why is the most useful thing in this whole thread. The obvious repair is to point
+`deferralPenalty` at the live avoidance signal. That is wrong in DIRECTION. A deferral is a
+soft no — *not today* — and burying what the person keeps declining is right. An abandoned
+start is not a no: it is *I tried and could not*, the signal that the task needs help. A
+pull-down there would sink exactly the task the Advisor is meanwhile spending its deepest
+reasoning on (`.repeatedlyAbandoned`), and the two layers would be pulling against each other
+over the same evidence.
+
+There is no live equivalent of the soft no — the rollover was the only thing that ever
+recorded one — so the term is gone. Deleting a term multiplied by a permanent zero changes no
+ranking anywhere; leaving it in place was a loaded gun. **The general form: when a signal's
+writer disappears, "find a new input for this reader" is not automatically the fix. Ask what
+the reader was actually claiming, and whether the replacement claims the same thing.** Three
+of the four readers here wanted "the obvious approach failed" and got a better input; the
+fourth wanted "they keep saying no" and had to be retired.
+
+Its two tests had been asserting on a field the app cannot write, so they were repointed at
+staleness — the surviving live down-pull.
+
+
+## 2026-09-12 — the stall sensor lost its avoidance signal, and nobody noticed for ten days
+
+The depth-router fix above turned out to be the small half. `StallDetector.isStalled` has
+always had **two independent signals, either sufficient**: repeated avoidance, and silence.
+
+```
+if task.deferralCount >= deferralThreshold { return true }   // ← dead since 2026-09-02
+return now.timeIntervalSince(task.humanTouchedAt) > quietThreshold
+```
+
+The avoidance arm read `deferralCount`, whose only writer was the Brief's day-rollover. When
+the Brief was cut, **the only surviving route to "stalled" became neglect by SILENCE.** A
+person actively bouncing off a task — picking it up, putting it down, week after week — was
+invisible to the sensor built to catch exactly that, and everything behind the sensor went
+with it: the whole Advisor diagnosis ladder (`blocked` / `tooBig` / `reallyADecision` /
+`dying`) simply never opened for them.
+
+And the `.dying` headline had a dead branch of its own, so the one thing it could still say
+was the wrong one:
+
+> `deferralCount >= 2 ? "You've set this aside N times." : "This has gone quiet."`
+
+A task you have started three times and abandoned three times has not gone quiet — it is the
+loudest thing on your list — and that is precisely what it was being told.
+
+**The fix is the same live signal as the router's**, with two properties that keep it from
+becoming a nag:
+
+- **Windowed, not lifetime.** `TaskItem.recentAbandonedStarts(within:now:)` counts closed
+  `.doing` visits inside `quietThreshold`. `deferralCount` was consecutive-and-cleared
+  precisely so a lifetime counter could not "pin *This keeps sliding* to the task forever";
+  windowing restores that guarantee by a different route — the signal decays once the person
+  stops abandoning the task.
+- **Silent while the task is `.doing`.** The open visit is not an abandonment, and telling
+  someone they keep avoiding the thing they are doing right now is nagging. Starting the task
+  silences the diagnosis for as long as they are working — the same dismissability
+  `touchHuman` used to provide, since starting it is the action the diagnosis would offer.
+
+Threshold **2**, matching the depth router's, for the same reason: a deferral is one tap and
+often means nothing about the task; an abandoned start is a declared start and an abandoned
+one.
+
+`TaskAdvisorFacts` now carries the windowed count, so the router inherits both properties for
+free, and the evidence gained a line — with a guard, because *"No progress on it in 12 days"*
+is false company for *"you've started it 3 times"*. The deferral clause was already guarding
+against that exact collision; abandonment joined it.
+
+**`StallDiagnosis.headline` takes both counts as REQUIRED parameters.** A default would be how
+this branch stayed dead a second time — the same failure as `ChatAdvisorLine.citedTasks`
+(shipped unset, rendered no citations at all for a day, every test green) and `triage`'s
+`route:` defaulting to `.cloud`. Three times is a pattern: **in this codebase, a capability
+decided by a default parameter is a capability nobody is deciding about.**
+
+**What made all of this invisible:** every test of the stall sensor passed throughout, because
+they set `deferralCount` directly. The tests were exercising a field the app could no longer
+write. That is the same shape as the `AdvisorDiagnostics` fixtures next door, and the reason
+`AbandonedStartsTests` asserts through `task.status` transitions instead of through the
+counter.
+
+
 ## 2026-09-12 — the depth router's third hypothesis could not fire
 
 `AdvisorRouting.depthReason` is three falsifiable hypotheses about where deep reasoning

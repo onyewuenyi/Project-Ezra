@@ -53,6 +53,11 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// The household chat — the Ask tab's model arm (`InquiryService`, household scope). Floor
     /// answers never reach here: only questions the model actually took.
     case householdChat
+    /// The boundary pass — the on-device model naming where each outcome begins inside a
+    /// run-on that the deterministic read under-segmented (`OnDeviceSegmenter`). Recorded
+    /// per attempt, so the arm's served ratio and its latency tail are readable before
+    /// anyone argues about whether it should be on.
+    case captureSegment
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -66,6 +71,7 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .privateCapture: return "privCapture"
         case .advisorChat: return "chat"
         case .householdChat: return "askChat"
+        case .captureSegment: return "segment"
         }
     }
 }

@@ -65,6 +65,36 @@ struct TaskAdvisorFactsTests {
         #expect(fingerprint(task, among: [task], now: now) != base)
     }
 
+    @Test("Abandoning a start flips the fingerprint; the clock inside it does not")
+    func abandonedStartFlips() {
+        // The depth router's third input (2026-09-12). It belongs in the fingerprint
+        // where the two clocks beside it do not, and the difference is the rule: putting
+        // a task back down is a discrete human act that changes what the right reading
+        // IS, so it should buy a new judgment; a counter that ticks with the calendar
+        // must not.
+        let context = context()
+        let now = Date()
+        let task = TaskItem(title: "Sort the loft", status: .todo, in: context)
+        let base = fingerprint(task, among: [task], now: now)
+
+        // Picked up — a status change, which already flips.
+        task.status = .doing
+        let started = fingerprint(task, among: [task], now: now)
+        #expect(started != base)
+
+        // Put back down. Same STATUS as the base, so without `abandonedStarts` in the
+        // fingerprint this would collide with it and serve the pre-attempt reading back.
+        task.status = .todo
+        #expect(task.abandonedStartCount == 1)
+        #expect(fingerprint(task, among: [task], now: now) != base)
+
+        // And the same state an hour later is the same judgment.
+        let later = now.addingTimeInterval(3_600)
+        #expect(
+            fingerprint(task, among: [task], now: later)
+                == fingerprint(task, among: [task], now: now))
+    }
+
     @Test("Gaining a blocker, a child, or a completed step flips the fingerprint")
     func graphChangesFlip() {
         let context = context()

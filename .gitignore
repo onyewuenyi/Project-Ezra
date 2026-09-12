@@ -42,3 +42,6 @@ GoogleService-Info.plist
 
 # Test + profiling artifacts
 *.xcresult
+
+# Device eval reports pulled by scripts/device-evals.sh (run-stamped; quote from docs, not from here)
+eval-reports/

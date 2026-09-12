@@ -56,7 +56,9 @@ enum Metrics {
 // MARK: - Counted signals (persisted)
 
 /// The two signals that can't be derived after the fact: self-initiated opens and
-/// time-to-first-payoff (install → first committed capture, target <60s).
+/// time-to-first-payoff (install → first committed capture; the launch plan's target is
+/// under five minutes, and `first_payoff` reports it as a `DurationBucket` whose edges
+/// are that target).
 @MainActor
 @Observable
 final class MetricsRecorder {
@@ -90,11 +92,14 @@ final class MetricsRecorder {
         defaults.set(selfInitiatedOpens, forKey: Key.opens)
     }
 
-    /// Stamp the first committed capture; later commits are no-ops.
-    func recordFirstPayoffIfNeeded(now: Date = Date()) {
-        guard firstPayoffAt == nil else { return }
+    /// Stamp the first committed capture; later commits are no-ops. Returns whether THIS
+    /// call was the stamp, so the one-per-install telemetry event fires exactly once.
+    @discardableResult
+    func recordFirstPayoffIfNeeded(now: Date = Date()) -> Bool {
+        guard firstPayoffAt == nil else { return false }
         firstPayoffAt = now
         defaults.set(now, forKey: Key.firstPayoffAt)
+        return true
     }
 
     /// Wipe the counted signals (Settings ▸ Reset everything). The install stamp restarts
@@ -262,6 +267,17 @@ final class ModelMetrics {
             defaults.set(label, forKey: Key.lastError(feature))
         }
         stats[feature] = entry
+        // The product-telemetry mirror of this tally: the feature, served-or-not and a
+        // latency BUCKET — never the prompt, never the answer (`Telemetry`'s allowlist).
+        let served: Bool
+        switch outcome {
+        case .success, .salvaged: served = true
+        case .timedOut, .failed: served = false
+        }
+        Telemetry.log(
+            .modelCall(
+                feature: feature, served: served,
+                latency: DurationBucket(seconds: Double(max(latencyMs, 0)) / 1000)))
         defaults.set(entry.successes, forKey: Key.successes(feature))
         defaults.set(entry.timeouts, forKey: Key.timeouts(feature))
         defaults.set(entry.salvaged, forKey: Key.salvaged(feature))
@@ -517,11 +533,13 @@ final class AdvisorMetrics {
     }
 
     func recordOffered(_ move: AdvisorMove) {
+        Telemetry.log(.advisorOffered(move: move))
         stats[move, default: Stats()].offered += 1
         defaults.set(stats[move]?.offered ?? 0, forKey: Key.offered(move))
     }
 
     func recordActed(_ move: AdvisorMove, taskID: UUID?, status: TaskStatus, now: Date = Date()) {
+        Telemetry.log(.advisorActed(move: move))
         stats[move, default: Stats()].acted += 1
         defaults.set(stats[move]?.acted ?? 0, forKey: Key.acted(move))
         guard let taskID else { return }
@@ -536,6 +554,7 @@ final class AdvisorMetrics {
     }
 
     func recordDismissed(_ move: AdvisorMove) {
+        Telemetry.log(.advisorDismissed(move: move))
         stats[move, default: Stats()].dismissed += 1
         defaults.set(stats[move]?.dismissed ?? 0, forKey: Key.dismissed(move))
     }

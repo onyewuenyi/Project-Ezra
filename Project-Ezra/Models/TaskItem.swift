@@ -360,6 +360,14 @@ final class TaskItem: NSManagedObject {
     /// staleness and the plan-reconcile deferral discriminator read THIS, falling
     /// back to `createdAt` while nil.
     @NSManaged var lastHumanTouchAt: Date?
+    /// The household this task belongs to — model v4 (2026-09-12), additive. This is the
+    /// edge that puts a task INSIDE the household's CloudKit share: `NSPersistentCloudKitContainer`
+    /// shares the object graph reachable from the share's root (`Household`), so a task
+    /// with no path to it would stay in the owner's private zone and the second caretaker
+    /// would never see it. Set by `HouseholdStoreAffinity` at save for every inserted task
+    /// (one choke point, not per creation site); nil is legal for fixtures. NOT the
+    /// ownership axis — `ownerID` says whose it is, this says whose it is VISIBLE to.
+    @NSManaged var household: Household?
 
     /// The honest untouched-since clock for staleness-style reads: the last human
     /// touch, or birth when no human has touched it yet.
@@ -651,6 +659,50 @@ final class TaskItem: NSManagedObject {
     /// the only thing that knows which one you are looking at.
     var hasBeenStarted: Bool {
         stateTimeline.contains { $0.state == TaskStatus.doing.rawValue && $0.exitedAt != nil }
+    }
+
+    /// **How many times this task was picked up and put back down** — closed `.doing`
+    /// visits in the timeline.
+    ///
+    /// `hasBeenStarted` answers the CTA's question ("Start" or "Resume"); this answers the
+    /// Advisor's, which is a different one: *how many times has the obvious approach
+    /// already failed?* One abandonment is an interruption. Two is a pattern, and it is
+    /// the strongest evidence the product holds that a task needs a better reading rather
+    /// than a louder one — it is a human act, recorded at the moment it happened, with no
+    /// clock in it and nothing the AI authored.
+    ///
+    /// It replaced `deferralCount` as the depth router's third input. That counter had
+    /// exactly one writer, the Brief's day-rollover, and the Brief was cut on 2026-09-02 —
+    /// so it has been permanently zero ever since, and every reader of it (this router's
+    /// `.repeatDeferred`, `TaskRanking`'s deferral penalty, the stall headline's variant)
+    /// has been describing a signal that cannot fire. The hypothesis was always right; its
+    /// evidence had been deleted out from under it.
+    var abandonedStartCount: Int {
+        stateTimeline.filter { $0.state == TaskStatus.doing.rawValue && $0.exitedAt != nil }.count
+    }
+
+    /// Abandoned starts inside a window — the DISMISSABLE form of the count above, and
+    /// the one every consumer should use.
+    ///
+    /// The lifetime count would pin "you keep bouncing off this" to a task forever, which
+    /// is exactly the failure `deferralCount`'s consecutive-and-cleared design existed to
+    /// avoid ("a lifetime counter would pin *This keeps sliding* to the task forever", per
+    /// `StallDetector`). Windowing restores that guarantee by a different route: the
+    /// signal decays on its own once the person stops abandoning the task.
+    ///
+    /// The other half of the guarantee is the caller's: **an abandonment signal must not
+    /// fire while the task is currently `.doing`.** The open visit is not an abandonment —
+    /// it has not been put down yet — so `StallDetector` checks the status, and the effect
+    /// is that starting the task silences the diagnosis for as long as the person is
+    /// actually working. Nagging someone about avoiding the thing they are doing right now
+    /// is the shape this product refuses.
+    func recentAbandonedStarts(within window: TimeInterval, now: Date = Date()) -> Int {
+        stateTimeline.filter { visit in
+            guard visit.state == TaskStatus.doing.rawValue, let exited = visit.exitedAt else {
+                return false
+            }
+            return now.timeIntervalSince(exited) <= window
+        }.count
     }
 
     /// Capture → resolution. Nil until the task is resolved.

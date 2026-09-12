@@ -33,6 +33,37 @@ re-engagement loops (the PRD's V1 learning guardrail, promoted to a standing rul
 Optimize instead for: reduced interaction, faster completion, higher AI confidence,
 lower cognitive load. A feature that increases sessions but not trust is a regression.
 
+## User Data Is Local-First. Product Telemetry Is Not.
+
+(2026-09-12.) Until this date "metrics are local-only, never transmitted" was one rule.
+It is now two, and the line between them is the one OpenAI's and Anthropic's privacy
+policies draw between *content* and *usage data*:
+
+- **The person's data stays on the device unless a named rule sends it.** Their words
+  (one sanctioned transmission: `CaptureRoute.transmitsRawCapture`), their tasks
+  (structured snapshots to the Advisor's cloud rung; the household's share to the people
+  they invite), their corrections and their history (never).
+- **Product telemetry — which features were used, whether they worked, how long they
+  took — may leave**, through ONE seam (`Models/Telemetry.swift`), to ONE vendor
+  (`AI/StatsigSink.swift`, the only file that knows its name), keyed on an anonymous
+  install id, with an opt-out under the same Settings card that states what leaves.
+
+**The allowlist is a type, not a review.** `TelemetryEvent` has no `String`, `Int`,
+`Date` or `UUID` payload anywhere (`TelemetryAllowlistTests` greps for one); every value is
+an enum's raw value or a bucket. A task title cannot be logged because there is no
+parameter for it to go into. Redaction was considered and rejected: a filter over free
+text is only as good as its regexes, and a boundary that exists only if a caller remembers
+to redact leaks silently.
+
+**Never in telemetry:** a task title, a note, a transcript, a roster name, a family
+member id, a relationship, a prompt, a model's answer, a raw count, a raw duration, a
+location. **Allowed:** event names, enumerated outcomes, feature variants, latency and
+count buckets, app/OS version.
+
+**Feature gates are kill switches.** A remote flag may turn a pillar's cloud arm or the
+digest OFF (`TelemetryGate`); it may never move a floor, a threshold or a routing
+invariant, and every gate fails closed as "not killed" when the vendor is unreachable.
+
 **Ramble is unlimited to the person and bounded for the machine** (2026-09-04). The bound
 lives in infrastructure — attestation, console quotas, a budget alert, a kill switch — never
 in the interface: no usage counter, no credits, no "remaining", and a cloud failure shows
@@ -66,6 +97,48 @@ The reasoning: the Today sequence is a once-a-day moment that only happens if yo
 remember it, and a moment you have to remember is a chore. The rule is about not
 optimizing for sessions; a self-scheduled alarm that actively skips days you already
 showed up for does the opposite.
+
+### The second carve-out: the Sunday household digest (opened 2026-09-12, argued from scratch)
+
+**The new evidence is the product's new shape.** On 2026-09-12 the product became a
+SHARED household plan for two caretakers (`HouseholdSync.isLive`), and the positioning
+became "split the load". A daily reminder to one person to come look at their own list was
+an engagement mechanic wearing a helpful face — the argument above stands and is not
+reopened. A once-a-week edition of a plan two people share is a different object: it is the
+plan's weekly issue, the household's Sunday-night "what's this week", and families already
+run on that rhythm (the school email lands Friday; the week is planned Sunday). The digest
+does not ask anyone to remember a moment; it arrives at the moment the household already
+keeps.
+
+**What it is** (`Features/Digest/WeeklyDigest.swift`): one local notification, Sunday
+18:00, composed deterministically from the record — what is due in the coming week (at
+most two named), what is overdue, how many decisions are waiting. Content never leaves the
+device; a tap opens Tasks, the record, nothing special.
+
+**The conditions, each of which is code and each of which is a tripwire:**
+
+1. **Silence when there is nothing to say.** `WeeklyDigest.compose` returns nil for an
+   empty week and nil schedules nothing (`digestSkipped(nothing_to_say)` is counted). A
+   notification that fires to announce nothing is the failure the first carve-out named.
+2. **One type, one identifier, one per week.** Scheduling REPLACES under
+   `WeeklyDigest.identifier`. A second notification type — for any reason — is the signal
+   this carve-out has been abused, exactly as the first one said of itself.
+3. **A household artifact, not a personal nudge.** On by default only once the household
+   has two caretakers; off for a household of one; one switch in Settings ("Your week")
+   turns it off for good. Permission is asked ONCE, at the moment the household becomes
+   shared, and a denial is the answer.
+4. **No badge, no count, no escalation, no sound.** `interruptionLevel = .passive`.
+5. **It cannot inflate the one honest pull metric.** A foreground the digest solicited is
+   excluded from `Metrics.selfInitiatedOpens` (`WeeklyDigestScheduler.consumeNotificationOpen`).
+6. **Suppressed while the app is open.** The record is already on screen.
+7. **Remotely killable, never remotely reworded.** `TelemetryGate.killWeeklyDigest` can turn
+   it off; nothing remote can change what it says or when.
+
+**What this costs, stated:** the product has a weekly return surface again, and a
+weekly rhythm can decay into a weekly nag if the content stops earning it. The measure is
+the plan's own: day-30 household retention above 40%, read beside `digest_opened` — if the
+digest is opened and the household then does nothing, it is noise and condition 1 should
+tighten, not the copy improve.
 
 ## Performance Budgets (engineering constraints, not aspirations)
 
