@@ -67,6 +67,9 @@ struct TaskSearchView: View {
                                     ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                                     ownerPhotoData: task.ownerPhotoData(among: othersRoster),
                                     interactive: !task.status.isResolved,
+                                    // A hit that is a step of something says so — "hotel"
+                                    // finds "Book the hotel / Part of Trip to Lagos".
+                                    subtitle: outcomeSubtitle(for: task, among: tasks),
                                     // Resolving from search routes through the SAME
                                     // undo-aware seams the record surface uses. Without
                                     // these the row still completed correctly, but did it

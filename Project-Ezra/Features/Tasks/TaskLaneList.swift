@@ -91,6 +91,15 @@ func cancelTask(
     }
 }
 
+/// "Part of <outcome>" for a step, nil for a task with no parent in the set.
+@MainActor
+func outcomeSubtitle(for task: TaskItem, among tasks: [TaskItem]) -> String? {
+    guard let parentID = task.parentTaskID,
+        let parent = tasks.first(where: { $0.uuid == parentID })
+    else { return nil }
+    return "Part of \(parent.title)"
+}
+
 /// The outcome this step's resolution just readied — its parent's title when the parent is
 /// still open and now has no open steps left — or nil. Read AFTER the step resolved, so the
 /// step itself no longer counts as open.
@@ -217,6 +226,10 @@ struct TaskLaneEntryView: View {
                 ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                 ownerPhotoData: task.ownerPhotoData(among: othersRoster),
                 interactive: !resolved,
+                // A step standing alone — its deck dissolved by a filter, or its umbrella
+                // resolved — says which outcome it belongs to; inside a deck the caption
+                // says it once for every card.
+                subtitle: outcomeSubtitle(for: task, among: allTasks),
                 // An umbrella whose last step just resolved has just SURFACED from behind
                 // its deck; the wash marks it the way it marks a new row.
                 surfacedAt: stepProgress?.isComplete == true

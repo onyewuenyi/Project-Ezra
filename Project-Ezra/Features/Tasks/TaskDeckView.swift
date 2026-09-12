@@ -248,11 +248,11 @@ struct TaskDeckView: View {
             allTasks: allTasks,
             glyphInteractive: task.recommendedAction(among: allTasks, currentUserID: currentUserID)
                 != nil,
-            blockerLineVisible: true,
             blockerSummary: blockerSummary(task),
             stepProgress: task.stepProgress(among: allTasks),
             ownerDisplayName: ownerDisplayName(task),
             ownerPhotoData: ownerPhotoData(task),
+            subtitle: blockerSummary(task),
             onComplete: { onComplete(task) },
             onCancel: onCancel.map { cb in { cb(task) } },
             onOpen: { onOpen(task) }

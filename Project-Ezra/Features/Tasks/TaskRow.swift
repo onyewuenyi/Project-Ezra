@@ -45,13 +45,6 @@ struct TaskRow: View {
     /// row's explicit completion target — one control, in the one column that already
     /// means "state". Picks route through the same undo-aware seams as the menu.
     var glyphInteractive: Bool = false
-    /// Whether a blocked row SAYS what it waits on, under the title ("after Renew
-    /// passport" · "waiting on the contractor"). Off on the plain list row, which stays
-    /// one line and carries the wait as the dim + hourglass alone. ON inside a deck: a
-    /// card you paged to because you wanted to see the stuck one owes you the reason,
-    /// and the deck is exactly where "after X" is the point — it is the chain's story
-    /// told one card at a time.
-    var blockerLineVisible: Bool = false
     /// The "waiting on X" phrase — kept ONLY to drive the blocked dim + marker (the
     /// text itself is no longer rendered on the row). Nil when nothing blocks it.
     var blockerSummary: String? = nil
@@ -68,6 +61,12 @@ struct TaskRow: View {
     /// queue entry. (It used to also mean "the leading glyph is a tappable state menu";
     /// the glyph is an indicator now, so this governs the menu alone.)
     var interactive: Bool = true
+    /// A second line under the title, when the row has something to SAY about where it
+    /// sits: a deck card names what it waits on ("after Renew passport"); a step rendered
+    /// outside its deck — its siblings filtered away, or a search hit — names its outcome
+    /// ("Part of Trip to Lagos"). Nil on the ordinary list row, which stays one line and
+    /// carries a wait as the dim + hourglass alone.
+    var subtitle: String? = nil
     /// A second arrival: when this row SURFACED rather than was created. A container's
     /// row is hidden behind its deck while steps remain and appears the moment the last
     /// one resolves — the list passes that moment here so the row washes in exactly like
@@ -148,12 +147,12 @@ struct TaskRow: View {
                     .foregroundStyle(Palette.primaryText)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                // Only when there is a wait to name. Reserving the line on every card was
-                // tried — a blank second line reads as a card missing its subtitle, the
-                // title floating above the glyph's centre — so a deck's cards may differ
-                // in height by a line, and the deck aligns their TOPS (`TaskDeckView`).
-                if blockerLineVisible, let blockerSummary {
-                    Text(blockerSummary)
+                // Only when there is something to say. Reserving the line on every deck
+                // card was tried — a blank second line reads as a card missing its
+                // subtitle, the title floating above the glyph's centre — so a deck's
+                // cards may differ in height by a line, and the deck aligns their TOPS.
+                if let subtitle {
+                    Text(subtitle)
                         .supportingStyle()
                         .foregroundStyle(Palette.mutedText)
                         .lineLimit(1)
@@ -383,6 +382,7 @@ struct TaskRow: View {
         // the reader open the task to learn the same thing the row was already carrying.
         if isBlocked { parts.append(blockerSummary.map { "blocked, \($0)" } ?? "blocked") }
         if let stepProgress { parts.append(stepProgress.label) }
+        if let subtitle, !isBlocked { parts.append(subtitle) }
         if let ownerDisplayName {
             parts.append("owned by \(ownerDisplayName)")
         } else if task.ownerID == nil {
