@@ -165,6 +165,11 @@ file. See *Keeping this file current* at the bottom.
   steps, or a done member still in the deck is a finding. The deck's cards carry NO
   lifecycle swipes (horizontal is navigation there) — the glyph is the completion target
   and must route through the undo-aware complete/cancel seams like every other row.
+- **The home survives accessibility text sizes.** Render My Tasks with
+  `-UIPreferredContentSizeCategoryName UICTContentSizeCategoryAccessibilityL`: the header
+  wraps rather than pushing the filter off screen, no caption folds into a column of
+  letters (the parked row's age did, 2026-09-12), decks keep their caption and card. A
+  control that leaves the screen or a word that breaks per letter is a finding.
 - **An empty list under a filter names the filter and offers the way out.** A filtered
   My Tasks that matches nothing is indistinguishable from a list with tasks missing — a
   trust failure, not a discoverability one. The empty state must say which filter is on

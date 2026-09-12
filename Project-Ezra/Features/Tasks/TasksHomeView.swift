@@ -26,6 +26,12 @@ struct TasksHomeView: View {
     /// too, so it has exactly one mount point and neither surface owns it.
     @Environment(\.openActivity) private var openActivity
     @Environment(\.openAsk) private var openAsk
+    /// At accessibility text sizes three pills and a filter no longer fit one row, and a
+    /// row that cannot shrink its children overflows off the screen — the filter was the
+    /// first thing to go. There the header WRAPS (`FlowLayout`), the filter following the
+    /// pills onto a second line with its summary intact; the `GeometryReader` host follows
+    /// the measured height. At the default sizes nothing changes.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var tab: MyTasksTab = .assigned
     @State private var statusFilter: TaskStatus?
@@ -275,7 +281,27 @@ struct TasksHomeView: View {
     /// Alone, the filter takes the leading edge — anchored to the title and the list's
     /// content column, rather than floating in an otherwise empty corner. With tabs it
     /// yields the lead to them and trails, because ownership is the coarser question.
+    @ViewBuilder
     private var headerRow: some View {
+        if headerWraps {
+            // A wrapping header sizes itself from its proposal — no offered-width
+            // arithmetic, no reader, no state-fed frame (which lagged the wrapped height
+            // and let the second line overlap the parked-captures row).
+            FlowLayout(spacing: Spacing.sm, lineSpacing: Spacing.xs) {
+                ForEach(MyTasksTab.allCases) { candidate in
+                    tabButton(candidate)
+                }
+                if MyTasksHeader.showsFilter(othersRoster: othersRoster.count) {
+                    filterControl(offeredWidth: 0)
+                }
+            }
+            .frame(minHeight: LayoutMetrics.tasksHeaderRow)
+        } else {
+            headerRowMeasured
+        }
+    }
+
+    private var headerRowMeasured: some View {
         // Hosted in a `GeometryReader` for ONE number: the width the row is OFFERED. A
         // row of one-line pills grows past its proposal rather than shrinking, and every
         // view sized by it — the row, its padding, a `Color` sibling in a ZStack (placed
@@ -290,6 +316,8 @@ struct TasksHomeView: View {
         }
         .frame(height: headerRowHeight)
     }
+
+    private var headerWraps: Bool { dynamicTypeSize.isAccessibilitySize && showsTabs }
 
     private func headerRowContent(offeredWidth: CGFloat) -> some View {
         HStack(spacing: Spacing.sm) {
@@ -412,7 +440,8 @@ struct TasksHomeView: View {
     /// the capsule, against the row. True until measured, so the first frame renders the
     /// fuller control and the probe has something to measure.
     private func filterShowsSummary(offeredWidth: CGFloat) -> Bool {
-        guard showsTabs, offeredWidth > 0, labelledFilterWidth > 0 else { return true }
+        // A wrapping header always has room for the words — that is what wrapping buys.
+        guard showsTabs, !headerWraps, offeredWidth > 0, labelledFilterWidth > 0 else { return true }
         return pillsWidth + 2 * Spacing.sm + labelledFilterWidth <= offeredWidth
     }
 
