@@ -158,14 +158,22 @@ struct TaskChainStackView: View {
             onCancel: onCancel.map { cb in { cb(task) } },
             onOpen: { onOpen(task) }
         )
-        .padding(.horizontal, Spacing.md)
-        .background(
-            Palette.primarySurface,
-            in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-        )
-        .overlay {
+        // **The chrome bleeds OUTWARD; it never insets the row.** Padding the content
+        // instead pushed the root's status glyph a full `Spacing.md` right of every other
+        // row's, and that column is the list's strongest structural cue — one row leaving
+        // it reads as a different kind of thing, which is exactly what a chain stack is
+        // NOT ("a ROW that looks deeper, not a container"). Expanding the background into
+        // the list's own gutter buys the card the same breathing room without moving a
+        // single glyph, and `Spacing.md` against a `Spacing.lg` gutter leaves the card
+        // inset from the screen edge rather than running off it.
+        .background {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Palette.border, lineWidth: 0.5)
+                .fill(Palette.primarySurface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .strokeBorder(Palette.border, lineWidth: 0.5)
+                }
+                .padding(.horizontal, -Spacing.md)
         }
     }
 }
