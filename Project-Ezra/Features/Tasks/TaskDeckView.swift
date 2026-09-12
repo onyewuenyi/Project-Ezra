@@ -117,6 +117,21 @@ struct TaskDeckView: View {
         .onChange(of: members.map(\.objectID)) { _, ids in
             if let shownID, !ids.contains(shownID) { self.shownID = nil }
         }
+        .onAppear { openRequestedPage() }
+    }
+
+    /// Deterministic verification seam. `-DeckPage N` opens every deck on its Nth card
+    /// (1-based), so a paged state — the caption's position, a waiting card's line — is
+    /// screenshot-reachable: the swipe is a gesture, and gestures are blocked headlessly.
+    /// Never fires in normal runs; compiled out of Release.
+    private func openRequestedPage() {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        guard let flag = args.firstIndex(of: "-DeckPage"), args.indices.contains(flag + 1),
+            let page = Int(args[flag + 1]), members.indices.contains(page - 1)
+        else { return }
+        shownID = members[page - 1].objectID
+        #endif
     }
 
     // MARK: - Caption: the outcome, and where you are in it
@@ -229,6 +244,7 @@ struct TaskDeckView: View {
             allTasks: allTasks,
             glyphInteractive: task.recommendedAction(among: allTasks, currentUserID: currentUserID)
                 != nil,
+            blockerLineVisible: true,
             blockerSummary: blockerSummary(task),
             stepProgress: task.stepProgress(among: allTasks),
             ownerDisplayName: ownerDisplayName(task),

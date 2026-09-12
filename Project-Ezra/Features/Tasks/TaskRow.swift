@@ -45,6 +45,13 @@ struct TaskRow: View {
     /// row's explicit completion target — one control, in the one column that already
     /// means "state". Picks route through the same undo-aware seams as the menu.
     var glyphInteractive: Bool = false
+    /// Whether a blocked row SAYS what it waits on, under the title ("after Renew
+    /// passport" · "waiting on the contractor"). Off on the plain list row, which stays
+    /// one line and carries the wait as the dim + hourglass alone. ON inside a deck: a
+    /// card you paged to because you wanted to see the stuck one owes you the reason,
+    /// and the deck is exactly where "after X" is the point — it is the chain's story
+    /// told one card at a time.
+    var blockerLineVisible: Bool = false
     /// The "waiting on X" phrase — kept ONLY to drive the blocked dim + marker (the
     /// text itself is no longer rendered on the row). Nil when nothing blocks it.
     var blockerSummary: String? = nil
@@ -135,14 +142,23 @@ struct TaskRow: View {
             )
             .recessed(isBlocked)
 
-            Text(task.title)
-                .taskTitleStyle()
-                .foregroundStyle(Palette.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                // Crisp, never blurred — a blocked row recedes via a contrast-aware dim
-                // plus the marker below, not by frosting its own text (glass-on-content).
-                .recessed(isBlocked)
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text(task.title)
+                    .taskTitleStyle()
+                    .foregroundStyle(Palette.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if blockerLineVisible, let blockerSummary {
+                    Text(blockerSummary)
+                        .supportingStyle()
+                        .foregroundStyle(Palette.mutedText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            // Crisp, never blurred — a blocked row recedes via a contrast-aware dim
+            // plus the marker below, not by frosting its own text (glass-on-content).
+            .recessed(isBlocked)
 
             if isBlocked { BlockedIndicator() }
             if let stepProgress { StepProgressIndicator(progress: stepProgress) }
