@@ -237,6 +237,11 @@ struct TaskDeckView: View {
                 ForEach(members, id: \.objectID) { member in
                     card(member)
                         .containerRelativeFrame(.horizontal) { length, _ in length - Self.peek }
+                        // Its own ideal height, whatever the stack proposes: the lazy
+                        // stack sizes itself from the first card it lays out, and a
+                        // taller card paged to later was given that height and spilled
+                        // its second line past the card chrome at accessibility sizes.
+                        .fixedSize(horizontal: false, vertical: true)
                         .id(member.objectID)
                 }
             }
@@ -274,7 +279,12 @@ struct TaskDeckView: View {
             ownerDisplayName: ownerDisplayName(task),
             ownerPhotoData: ownerPhotoData(task),
             interactive: advanceable,
-            subtitle: blockerSummary(task),
+            // In a deck with a waiting member EVERY card reserves the second line: the
+            // horizontal scroll view takes its height from the first card it lays out,
+            // and a taller card paged to later was clipped — `fixedSize` gave the card
+            // its height, not the scroll view. Uniform from the first layout is the
+            // only shape that neither clips nor hops. Decks with no waits stay one line.
+            subtitle: blockerSummary(task) ?? (waitingCount > 0 ? " " : nil),
             onComplete: { onComplete(task) },
             onCancel: onCancel.map { cb in { cb(task) } },
             onOpen: { onOpen(task) }
