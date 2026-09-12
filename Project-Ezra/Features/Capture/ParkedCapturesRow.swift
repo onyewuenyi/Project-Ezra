@@ -124,11 +124,13 @@ struct ParkedCapturesRow: View {
             // The label is the fixed part and the excerpt is the flexible one: without
             // saying so, the HStack let the excerpt keep its single line and broke "2
             // unfinished captures" over two, so the row read as a wrapped caption with
-            // a quote beside it. The label holds; the excerpt is what truncates.
+            // a quote beside it. Priority, not `fixedSize`: the label is served first
+            // and the excerpt takes what is left, but at an accessibility size where the
+            // label alone outgrows the row it still truncates instead of overflowing.
             Text(text)
                 .supportingStyle()
                 .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
             Text("“\(detail)”")
                 .supportingStyle()
                 .foregroundStyle(Palette.mutedText)
