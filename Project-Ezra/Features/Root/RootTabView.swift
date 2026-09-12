@@ -107,7 +107,6 @@ struct RootTabView: View {
     /// capture bar owns that space while a keyboard is showing.
     @State private var keyboardUp = false
 
-
     var body: some View {
         // The orb belongs to the BAR, and the keyboard covers the bar. Both
         // `.overlay` on the TabView and a ZStack sibling with `.ignoresSafeArea(.keyboard)`
@@ -173,11 +172,7 @@ struct RootTabView: View {
             // Brief: nothing schedules that notification any more, and an assignment to a
             // destination the bar renders as unavailable is exactly the kind of dead path
             // that quietly comes back. the app now sends no notifications at all.
-            if ProcessInfo.processInfo.arguments.contains("-SeedFlowFixtures") {
-                // Flow fixtures own their identity setup (a named "you" member + owned
-                // tasks), so bootstrap is deliberately not called here.
-                seedFlowFixturesIfRequested()
-                       } else {
+            if await seedFixturesIfRequested() == false {
                 // Guarantee the current user exists as a real household member before any
                 // surface computes `isMine` or any capture stamps ownership.
                 UserProfile.bootstrapIdentity(in: context)
@@ -240,8 +235,10 @@ struct RootTabView: View {
     /// blocks here. The screen that has to prove "every AI action is undoable" should
     /// stay reviewable without one. Never fires in normal runs.
     private func openActivityIfRequested() {
+        #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("-OpenActivity") else { return }
         showActivity = true
+        #endif
     }
 
     /// Deterministic verification seam. Launch with `-OpenCapture ["text"]` to present
@@ -253,6 +250,7 @@ struct RootTabView: View {
     /// `-NoSubmit` holds the capture canvas, and `-AutoCreate` taps Create so the ✓
     /// receipt and the return are reachable too. Never fires in normal runs.
     private func openCaptureIfRequested() async {
+        #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         guard let flag = args.firstIndex(of: "-OpenCapture") else { return }
         var target: Capture?
@@ -267,6 +265,7 @@ struct RootTabView: View {
         // Let the launch render pass settle before presenting over it.
         try? await Task.sleep(for: .milliseconds(300))
         presentComposer(resuming: target)
+        #endif
     }
 
     /// The one way the composer is presented. Every entry point (the FAB, `openCapture`,
@@ -400,11 +399,41 @@ struct RootTabView: View {
     /// floating next to the bar.
     private static let captureOrbDiameter: CGFloat = 40
 
+    /// **The one gate on every seeding seam, and the reason it is `#if DEBUG` rather
+    /// than an argument check.**
+    ///
+    /// `-ResetAndSeedEvalCorpus` destroys the store. Guarded only on its own name it was
+    /// compiled into Release, where the safety it relies on — "nobody passes launch
+    /// arguments to a shipped app" — is a property of how the app is usually started,
+    /// not of the binary. Release hygiene asks the opposite question: can a seam reach a
+    /// cohort member's real work AT ALL? Compiled out, the answer is no by construction,
+    /// and the destructive path stops being something a reviewer has to reason about.
+    ///
+    /// Returns true when a fixture seed ran and built its own household — those seeds
+    /// construct a named "you" member and owned tasks, so `onLaunch` must NOT also
+    /// bootstrap an identity or the store ends up with two. Returning the fact, rather
+    /// than testing the argument list in both places, is what keeps the seeding arm and
+    /// the bootstrapping arm exhaustive together: a new seed added here cannot forget to
+    /// suppress the bootstrap, because there is only one place that decides.
+    private func seedFixturesIfRequested() async -> Bool {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains(where: Self.fixtureSeedArgs.contains) else {
+            return false
+        }
+        seedFlowFixturesIfRequested()
+        seedEvalCorpusIfRequested()
+        return true
+        #else
+        return false
+        #endif
+    }
 
     /// Deterministic verification seam. Launch with `-SeedSampleData` to run the
     /// sample brain-dump through the active engine and skip onboarding. Never fires
-    /// in normal runs.
+    /// in normal runs, and is compiled out of Release entirely — a seam that writes a
+    /// working set into the user's store has no business existing in the shipped binary.
     private func seedIfRequested() async {
+        #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("-SeedSampleData") else { return }
         let existing = (try? context.count(for: NSFetchRequest<TaskItem>(entityName: "TaskItem"))) ?? 0
         guard existing == 0 else {
@@ -433,8 +462,10 @@ struct RootTabView: View {
         context.saveChanges()
         hasOnboarded = true
         showOnboarding = false
+        #endif
     }
 
+    #if DEBUG
     /// Deterministic verification seam. Launch with `-SeedFlowFixtures` to populate
     /// hand-built data covering every core user flow except onboarding, bypassing
     /// the AI engine so status/confidence/autonomy are exact. The fixtures below are
@@ -451,6 +482,61 @@ struct RootTabView: View {
         hasOnboarded = true
         showOnboarding = false
     }
+
+    /// The seeds that build their own household, so `onLaunch` skips the identity
+    /// bootstrap for them. Listed once rather than tested one-by-one: the arm that
+    /// bootstraps and the arm that seeds have to stay exhaustive together, and a new
+    /// seed added to only one of them creates a second "You" nobody notices.
+    private static let fixtureSeedArgs = [
+        "-SeedFlowFixtures", "-SeedEvalCorpus", "-ResetAndSeedEvalCorpus",
+    ]
+
+    /// Deterministic verification seam. `-SeedEvalCorpus` seeds the hands-on evaluation
+    /// corpus — the flow fixtures plus every surface they leave unreachable — under the
+    /// same empty-store guard as its two siblings.
+    ///
+    /// `-ResetAndSeedEvalCorpus` is the destructive twin, and the one that matters on a
+    /// device already holding real work: nothing else here can reach a known state,
+    /// because every seed above refuses a non-empty store. It routes through
+    /// `DataReset.clear`, which already takes a safety copy and writes the
+    /// `StoreResetRecord` Settings surfaces with a link to the backup — a second wipe
+    /// path is a second place that has to remember to do that.
+    ///
+    /// The scope is `.everything`, not `.work`, for two reasons. `SampleFlowFixtures`
+    /// constructs a profile and a household unconditionally, so surviving identity would
+    /// leave two of each and an ambiguous `current(in:)`. And an evaluation wants the
+    /// local metrics starting from zero: a kept-rate carrying months of real dogfooding
+    /// is not a reading of the corpus in front of you. `.everything` re-bootstraps an
+    /// identity on its way out, which the sweep below removes so the fixtures land on the
+    /// empty store they were written against.
+    ///
+    /// The arg name is the confirmation — nothing destructive happens under the plain
+    /// `-SeedEvalCorpus` name. Never fires in normal runs.
+    private func seedEvalCorpusIfRequested() {
+        let args = ProcessInfo.processInfo.arguments
+        let resets = args.contains("-ResetAndSeedEvalCorpus")
+        guard resets || args.contains("-SeedEvalCorpus") else { return }
+        if resets {
+            DataReset.clear(
+                .everything, in: context, metrics: brain.metrics,
+                provenance: .shared, verdicts: .shared, readings: .shared)
+            for name in ["UserProfile", "FamilyMember", "Household", "HouseholdSettings"] {
+                let request = NSFetchRequest<NSManagedObject>(entityName: name)
+                (try? context.fetch(request))?.forEach(context.delete)
+            }
+            context.saveChanges()
+        } else {
+            let existing = (try? context.count(for: NSFetchRequest<TaskItem>(entityName: "TaskItem"))) ?? 0
+            guard existing == 0 else {
+                hasOnboarded = true
+                return
+            }
+        }
+        EvalCorpus.seed(into: context)
+        hasOnboarded = true
+        showOnboarding = false
+    }
+    #endif
 
 }
 

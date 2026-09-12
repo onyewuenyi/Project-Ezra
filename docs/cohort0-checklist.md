@@ -112,7 +112,11 @@ file. See *Keeping this file current* at the bottom.
 
 - Diagnostic launch seams (`-SeedSampleData`, `-RambleEval`, `-ResetAndSeedEvalCorpus`,
   every `-Open*`) are inert or compiled out in Release, and none of them can destroy a real
-  store on a device a cohort member is holding.
+  store on a device a cohort member is holding. **Compiled out, not argument-guarded** —
+  "nobody passes launch arguments to a shipped app" is a property of how the app is
+  usually started, not of the binary (fenced 2026-09-11; `ReleaseSeamTests` greps the
+  shell, and `RootTabView.seedFixturesIfRequested` is the one gate a new seed goes
+  behind). A new seam guarded only on its own name is a finding.
 - No vendor name, model id, token count or spend figure in customer-facing copy
   (`DataBoundary` is the sanctioned wording).
 
@@ -127,10 +131,6 @@ say why rather than restating the finding.
   breaking the build is the accepted cost.
 - **Beta toolchain (Xcode 27 / iOS 27 SDK)** — deliberate posture, not a risk to manage
   down. "Wait for GA" is not a finding.
-- **`.decomposed` advisor gate reason is emitted by nothing** — known, unfixed
-  (2026-09-04 walkthrough).
-- **Doubled "deserve you first for you" in the Ask opener** — known, unfixed
-  (2026-09-04 walkthrough).
 - **`CapacityLog` / `CapacityBaseline` are inert** — frozen schema after the Brief cut.
 - **No notifications at all** — the carve-out closed 2026-09-02. Absence is the design.
 
