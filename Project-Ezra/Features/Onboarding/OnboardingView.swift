@@ -153,6 +153,18 @@ struct OnboardingView: View {
             }
         }
         .padding(Spacing.lg)
+        // **The app's first screen asks one question; the keyboard answers it.**
+        // `nameFocused` existed with only its dismiss half wired — it was set false in
+        // `finishWelcome` and true nowhere — so a single-field form made every new user
+        // tap the field before they could answer it. The composer's rule is that every
+        // keyboard raise is a DELIBERATE decision; this is one. After the entrance fade,
+        // so the field is settled in place before the keyboard slides under it rather
+        // than both moving at once.
+        .task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard phase == .welcome else { return }
+            nameFocused = true
+        }
     }
 
     private var hasName: Bool {
