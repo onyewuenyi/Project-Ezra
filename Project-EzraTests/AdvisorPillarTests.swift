@@ -258,6 +258,26 @@ struct DayAnswerTests {
         #expect(HouseholdChatFloor.shape(of: "Why is the passport stuck?", facts: facts) == nil)
     }
 
+    /// **The predicate the Ask sheet's keyboard now reads.** It used to rise
+    /// unconditionally — reasoning written before the day answer became the sheet's
+    /// opener — and covered two of the five rows the sheet had just named as what
+    /// deserves you first. `composing = store.messages.isEmpty` mirrors the task chat,
+    /// and `InquiryStore.open` seats exactly one message when this returns non-nil
+    /// (pinned generically in `InquiryTests.openerOnce`), so what is left to pin here is
+    /// that the household scope answers it the way the sheet assumes.
+    @Test("The household scope opens with the day answer, and with nothing when nothing is open")
+    func openerIsTheDayAnswer() {
+        let facts = HouseholdChatEval.fixture()
+        let opener = HouseholdInquiryScope(facts: facts).opener()
+        #expect(opener != nil)
+        #expect(opener?.citedTaskIDs.isEmpty == false)
+        #expect(opener?.text == HouseholdChatFloor.answer(question: "what deserves me today", facts: facts)?.text)
+
+        // Nothing open — no rows to cover, so the sheet lands ready to type.
+        let empty = HouseholdChatFacts(now: facts.now, members: facts.members, open: [], done: [])
+        #expect(HouseholdInquiryScope(facts: empty).opener()?.citedTaskIDs.isEmpty != false)
+    }
+
     @Test("The orientation question leads the starter chips whenever anything is open")
     func starterLeads() {
         let facts = HouseholdChatEval.fixture()

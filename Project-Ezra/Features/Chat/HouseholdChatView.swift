@@ -95,16 +95,22 @@ struct HouseholdChatView: View {
                 .sensoryFeedback(.impact(flexibility: .rigid), trigger: stopPulse)
                 .chatReplyLanding(store.messages)
                 .onAppear {
-                    // The person SUMMONED this (F-12: Ask is a sheet, not a tab), so the
-                    // keyboard rises with it — the same rule as the task chat with no
-                    // reading to read — and the household session warms on the picture
-                    // as it stands. The starter chips sit above the keyboard either way.
                     let scope = HouseholdInquiryScope(facts: facts)
                     InquiryService.shared.prewarm(scope)
                     // The unasked turn: Ask opens with the day answer as its first line —
                     // the Brief's job, in the place orientation now lives (G2 · F-11).
                     store.open(scope: scope)
-                    composing = true
+                    // **The keyboard rises only when `open` seated nothing to read.** It
+                    // used to rise unconditionally, on the reasoning that a SUMMONED sheet
+                    // should be ready to type into — written before the day answer became
+                    // its opener, and left standing after. With the opener there it covered
+                    // two of the five rows the sheet had just named as what deserves you
+                    // first, which is the one thing the person opened it to see. This is
+                    // the task chat's rule, and the rule `send` below already applies to
+                    // every answer AFTER the first: a floor answer with rows is something
+                    // to LOOK at. The starter chips sit above the keyboard either way, so
+                    // the empty-household case still lands ready to type.
+                    composing = store.messages.isEmpty
                     #if DEBUG
                     // Verification seam: `-FocusAsk` raises the keyboard so the bar and
                     // the orb can be checked against it headlessly.
