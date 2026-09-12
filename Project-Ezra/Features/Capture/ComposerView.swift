@@ -992,21 +992,35 @@ struct ComposerView: View {
             .supportingStyle()
 
         imageChip
-        composerField
-            // GROWS with the words, between a floor and a ceiling. Never
-            // `maxHeight: .infinity`: the field's ZStack holds a TextEditor (itself
-            // scrollable and greedy) and with no ceiling the layout pass doesn't settle —
-            // the composer never presents at all. The floor keeps an empty canvas
-            // inviting; the ceiling stops a long dump from pushing Ramble off screen,
-            // after which the editor scrolls internally. Before this the box was a fixed
-            // 200–460pt, so one typed line sat in a large empty rectangle with the
-            // keyboard up — the canvas read as unfinished rather than generous.
-            .frame(height: clampedCanvasHeight)
-            .animation(Motion.settle, value: clampedCanvasHeight)
-            .overlay { transcriptHeightOracle }
-            .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
-
-        Spacer(minLength: 0)
+        // GROWS with the words, between a floor and a ceiling — and never past the ROOM.
+        // Never `maxHeight: .infinity`: the field's ZStack holds a TextEditor (itself
+        // scrollable and greedy) and with no ceiling the layout pass doesn't settle —
+        // the composer never presents at all. The floor keeps an empty canvas inviting;
+        // the ceiling stops a long dump from pushing Ramble off screen, after which the
+        // editor scrolls internally. Before this the box was a fixed 200–460pt, so one
+        // typed line sat in a large empty rectangle with the keyboard up — the canvas
+        // read as unfinished rather than generous.
+        //
+        // **The room clamp is what keeps Ramble above the keyboard, and it was measured
+        // in, not reasoned in (2026-09-12).** With the keyboard up, the content region
+        // above the bar shrinks to whatever the keyboard leaves; the title, subtitle and
+        // this field's 160pt floor add up to more than that once the 154pt bar (Ramble
+        // present) is subtracted, and a VStack that cannot shrink its children OVERFLOWS
+        // — the inset bar rode 31pt under the keyboard, and the bottom of the primary
+        // CTA with it. The bar had already been reordered once so the secondary row
+        // took the loss instead; that moved the symptom, not the cause. A GeometryReader
+        // in the field's slot reports exactly the room the stack has left, the field
+        // takes at most that, and the bar is never pushed anywhere. The floor below is
+        // one line, so the editor never collapses to a hairline on a short screen.
+        GeometryReader { room in
+            let height = min(
+                clampedCanvasHeight, max(Self.canvasCompressedFloor, room.size.height))
+            composerField
+                .frame(height: height)
+                .animation(Motion.settle, value: height)
+                .overlay { transcriptHeightOracle }
+                .matchedGeometryEffect(id: Self.rambleMorphID, in: rambleMorph)
+        }
     }
 
     /// The canvas's control bar — the design system's pinned-CTA pattern (solid
@@ -1019,11 +1033,18 @@ struct ComposerView: View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             dictationHint
                 .animation(Motion.fade, value: speech.state)
-            HStack(spacing: Spacing.sm) {
-                micButton(canSubmit ? "Speak instead" : "Speak")
-                imageButton
-                Spacer(minLength: 0)
-                postureChip
+            // Three capsules in one row do not fit every width with their full labels,
+            // and a capsule whose label wraps to two lines ("Speak / instead", "Add a /
+            // photo") reads as a rendering fault on the product's front door. Every label
+            // is single-line and fixed-width, so a candidate that would wrap is one that
+            // does not fit — and the row degrades in the order the labels earn their
+            // room: full labels, then the posture chip to its glyph (its meaning is in
+            // its accessibility label and in Settings either way), then the two verbs
+            // to their short forms. "Speak instead" survives wherever it fits.
+            ViewThatFits(in: .horizontal) {
+                inputModeRow(mic: canSubmit ? "Speak instead" : "Speak", photo: "Add a photo", postureLabelled: true)
+                inputModeRow(mic: canSubmit ? "Speak instead" : "Speak", photo: "Add a photo", postureLabelled: false)
+                inputModeRow(mic: "Speak", photo: "Photo", postureLabelled: false)
             }
             // Ramble appears only once there is something to ramble about. A disabled
             // primary button on an empty canvas is a dead affordance occupying the
@@ -1046,18 +1067,34 @@ struct ComposerView: View {
         .background(Palette.background)
     }
 
+    /// One candidate width of the input-mode row. See the `ViewThatFits` in `captureBar`.
+    private func inputModeRow(mic: String, photo: String, postureLabelled: Bool) -> some View {
+        HStack(spacing: Spacing.sm) {
+            micButton(mic)
+            imageButton(photo)
+            Spacer(minLength: 0)
+            postureChip(labelled: postureLabelled)
+        }
+    }
+
     /// The privacy posture, as a control beside the door (F-03). Bordered secondary,
     /// never the gradient; the accent marks the ON state only. Its state is also what
     /// `DataBoundary` says in Settings, so the sentence and the switch cannot disagree.
-    private var postureChip: some View {
+    private var postureChip: some View { postureChip(labelled: true) }
+
+    private func postureChip(labelled: Bool) -> some View {
         Button {
             postureRaw = posture.toggled.rawValue
         } label: {
             HStack(spacing: Spacing.xxs) {
                 Image(systemName: posture.glyph)
                     .font(.glyphCaption())
-                Text(posture.label)
-                    .font(.chipLabel)
+                if labelled {
+                    Text(posture.label)
+                        .font(.chipLabel)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
             .foregroundStyle(posture == .onDevice ? Palette.accentFlat : Palette.secondaryText)
             .padding(.horizontal, Spacing.sm)
@@ -1578,6 +1615,10 @@ struct ComposerView: View {
     }
     private static let canvasMinHeight: CGFloat = 160
     private static let canvasMaxHeight: CGFloat = 420
+    /// The floor under the room clamp: one input line. Below this the editor is a
+    /// hairline with a cursor in it, which is worse than letting the bar lose a few
+    /// points on a screen that short — and no portrait phone this app runs on is.
+    private static let canvasCompressedFloor: CGFloat = LayoutMetrics.hitTarget
 
     /// A short capture must still read as a box, not a chip.
     private static let transcriptMinHeight: CGFloat = 88
@@ -1962,10 +2003,14 @@ struct ComposerView: View {
     /// is out-of-process, so no privacy prompt); the live camera is the recorded
     /// fast-follow. Recognized text streams into the SAME field the keyboard and
     /// the mic feed, so the rolling parse needs no new path.
-    private var imageButton: some View {
+    private var imageButton: some View { imageButton("Add a photo") }
+
+    private func imageButton(_ title: String) -> some View {
         PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
-            Label(readingImage ? "Reading…" : "Add a photo", systemImage: "photo")
+            Label(readingImage ? "Reading…" : title, systemImage: "photo")
                 .font(.controlLabel)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(readingImage ? Palette.accentFlat : Palette.primaryText)
                 .padding(.horizontal, Spacing.md)
                 .frame(height: 40)
@@ -2085,6 +2130,8 @@ struct ComposerView: View {
             // "Instead" only once there is something to do instead OF.
             Label(title, systemImage: "mic.fill")
                 .font(.controlLabel)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(micUsable ? Palette.primaryText : Palette.mutedText)
                 .padding(.horizontal, Spacing.md)
                 .frame(height: 40)
