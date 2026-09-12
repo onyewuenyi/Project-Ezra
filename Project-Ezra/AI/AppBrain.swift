@@ -119,7 +119,17 @@ final class AppBrain {
         // behind the sheet-presentation animation.
         FoundationModelsEngine.prewarmCaptureSession()
         // The confidence gate runs BEFORE the parse and is the only thing standing
-        _ = EmbeddingStore.sentenceEmbedding
+        // Touch the embedding early so the model is resident before the first capture —
+        // and, because the first lookup in a process can return nil (see
+        // `EmbeddingStore.sentenceEmbedding`), ask again shortly after off the main
+        // actor. The accessor caches a success and retries a nil, so this is at most one
+        // extra catalog check; without it the first capture's retrieval is the retry.
+        if EmbeddingStore.sentenceEmbedding == nil {
+            Task.detached(priority: .utility) {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                _ = EmbeddingStore.sentenceEmbedding
+            }
+        }
         EmbeddingStore.warmUp(in: context)
     }
 

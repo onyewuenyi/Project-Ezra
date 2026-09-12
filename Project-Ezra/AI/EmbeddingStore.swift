@@ -66,11 +66,58 @@ enum EmbeddingStore {
     /// The current `NLEmbedding` model revision — rows from any other revision are stale.
     nonisolated static let revision: Int = NLEmbedding.currentRevision(for: .english)
 
-    /// The sentence-embedding model, loaded once per process. Nil when unavailable
-    /// (the simulator) → retrieval degrades to lexical scoring. `nonisolated(unsafe)`
-    /// because NLEmbedding is not marked Sendable and not documented thread-safe —
-    /// which is exactly why `lock` is held across every `vector(for:)` call.
-    nonisolated(unsafe) static let sentenceEmbedding = NLEmbedding.sentenceEmbedding(for: .english)
+    /// The sentence-embedding model. **A retrying accessor, not a `static let` — and the
+    /// difference was weeks of silently-degraded retrieval on the dogfooding phone.**
+    ///
+    /// `NLEmbedding.sentenceEmbedding(for: .english)` returns nil on the FIRST call in a
+    /// process and succeeds on a later one — measured on an iPhone 15 Pro Max, iOS 27.0,
+    /// 2026-09-12 (`-EmbeddingDiag`: a direct call at the top of the seam → NIL; the same
+    /// call seconds later → present, dim 512, `vector(for:)` OK; the assets were there
+    /// throughout). The old `static let` was touched at launch by `AppBrain.prewarm`, so it
+    /// captured that first nil and served it for the life of the process: retrieval fell
+    /// to lexical scoring, `DuplicateSweep` skipped every pair for want of a vector, and
+    /// the device store held **0 `EmbeddingCache` rows against 70 tasks**. The header
+    /// used to say nil meant "the simulator". It meant every launch.
+    ///
+    /// Now: a successful load is cached forever; a nil is retried on the next access. The
+    /// lookup is a catalog check, not a model load, so re-asking is cheap, and a process
+    /// that never gets one still degrades exactly as before — the change is that it now
+    /// RECOVERS. `nonisolated(unsafe)` because NLEmbedding is not marked Sendable and not
+    /// documented thread-safe — which is exactly why `lock` is held across every
+    /// `vector(for:)` call, and why this accessor takes it too.
+    nonisolated static var sentenceEmbedding: NLEmbedding? {
+        lock.withLock {
+            if let loaded = loadedSentenceEmbedding { return loaded }
+            let attempt = NLEmbedding.sentenceEmbedding(for: .english)
+            loadedSentenceEmbedding = attempt
+            sentenceEmbeddingAttempts += 1
+            return attempt
+        }
+    }
+    nonisolated(unsafe) private static var loadedSentenceEmbedding: NLEmbedding?
+    /// How many times the lookup has been asked — the meter's way of saying "nil and
+    /// never retried" from "nil so far".
+    nonisolated(unsafe) private(set) static var sentenceEmbeddingAttempts = 0
+
+    /// Ask until the lookup answers, or give up after `attempts`. The first lookup in a
+    /// process can be nil; the second is usually not. `AppBrain.prewarm` retries once
+    /// after a pause, and tests that compare two retrievals call this first so both see
+    /// the same world. Returns whether an embedding is available afterwards.
+    @discardableResult
+    nonisolated static func settle(attempts: Int = 3) -> Bool {
+        for _ in 0..<attempts where sentenceEmbedding == nil { continue }
+        return sentenceEmbedding != nil
+    }
+
+    /// The DEBUG diagnostics line. The degrade this store performs is graceful by design,
+    /// and a graceful degrade with no meter is how it stayed off for weeks.
+    static func statusLine() -> String {
+        let available = sentenceEmbedding != nil
+        let cached = lock.withLock { memo.count }
+        return
+            "sentence embedding: \(available ? "available" : "UNAVAILABLE") · "
+            + "\(cached) cached vector\(cached == 1 ? "" : "s") · \(sentenceEmbeddingAttempts) lookup\(sentenceEmbeddingAttempts == 1 ? "" : "s")"
+    }
 
     /// One lock for every touch of the mutable statics AND the shared NLEmbedding
     /// instance. The compute surface went `nonisolated` so retrieval can run off the
@@ -246,6 +293,8 @@ enum EmbeddingStore {
     /// Test seam: drop all in-process state (memo + warm-up flag).
     static func resetForTesting() {
         lock.withLock {
+            loadedSentenceEmbedding = nil
+            sentenceEmbeddingAttempts = 0
             memo.removeAll()
             persistedHashes.removeAll()
             warmedUp = false

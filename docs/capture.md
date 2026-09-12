@@ -88,13 +88,26 @@ that degrades gracefully with no meter on the degrade is a feature that can be o
 month.** The candidate-blind capture prompt (inert for weeks, every test green) was this
 same shape; this is the third instance.
 
-**Not yet diagnosed, deliberately.** Whether the sentence-embedding asset is absent on this
-iOS 27 beta, not downloaded, or refused for this locale is the next question, and it is a
-device question — the fix must not be guessed at from a Mac. What is decided: the
-availability gets a METER (the DEBUG diagnostics card should say `sentence embedding:
-unavailable · 0 cached vectors`, so the degrade is a visible state rather than a silent one),
-and the duplicate-sweep eval's PRODUCTION quadrant stays vacuous — and says so — until it
-reads "available".
+**Diagnosed on the device the same afternoon (`-EmbeddingDiag`), and it was neither the
+asset nor the locale.** In ONE process: a direct `NLEmbedding.sentenceEmbedding(for:
+.english)` at the top of the seam → **NIL**; `NLEmbedding.wordEmbedding` present; the
+`NLContextualEmbedding` assets present and loadable; then `EmbeddingStore.sentenceEmbedding`,
+touched seconds later → **present, dim 512, `vector(for:)` OK**. The lookup fails on the
+FIRST call in a process and succeeds on a later one. `EmbeddingStore.sentenceEmbedding` was a
+`static let`, touched at launch by `AppBrain.prewarm`, so it captured that first nil and
+served it for the life of every process — which is the whole finding. And the simulator was
+the same: `EmbeddingStore`'s "nil means the simulator" had been the frozen first nil the
+entire time, on both hosts.
+
+**The fix is a retrying accessor.** A successful load is cached forever; a nil is asked again
+on the next access (a catalog check, not a model load); `settle()` asks up to three times
+for callers that need both of two comparisons in the same world; `AppBrain.prewarm` asks once
+more after two seconds off the main actor. A process that never gets an embedding degrades
+exactly as before — the change is that it now RECOVERS. `EmbeddingStore.statusLine()` is the
+meter in the DEBUG diagnostics card (`sentence embedding: available · N cached vectors · M
+lookups`), because a graceful degrade with no meter is how this stayed off for weeks.
+`EmbeddingAvailabilityTests` pins the shape in both worlds: a success is never re-asked, a nil
+always is.
 
 
 ## 2026-09-12 — the destructive gate, measured before the runtime moves

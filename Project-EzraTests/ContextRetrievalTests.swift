@@ -26,6 +26,10 @@ struct ContextRetrievalTests {
 
     @Test("Detached execution produces byte-identical output to the synchronous call")
     func detachedEqualsSynchronous() async {
+        // Both calls must see the same embedding world. The FIRST lookup in a process can
+        // be nil (see `EmbeddingStore.sentenceEmbedding`); before the accessor retried,
+        // both calls here got the same frozen nil and were trivially identical.
+        EmbeddingStore.settle()
         // The ranking went `nonisolated` so `AppBrain.triage` can run it off the main
         // actor. The move must be invisible: same input → same output, on any executor.
         let now = Date(timeIntervalSince1970: 1_700_000_000)

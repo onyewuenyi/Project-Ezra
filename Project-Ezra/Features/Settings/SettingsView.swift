@@ -179,10 +179,11 @@ struct SettingsView: View {
                         set: { on in
                             digestOn = on
                             digestChanged(to: on)
-                        }))
-                    .font(.supporting)
-                    .foregroundStyle(Palette.primaryText)
-                    .tint(Palette.accentFlat)
+                        })
+                )
+                .font(.supporting)
+                .foregroundStyle(Palette.primaryText)
+                .tint(Palette.accentFlat)
                 Text(
                     "Once a week, what the coming week holds for your household — due dates, "
                         + "anything overdue, decisions waiting. Nothing is sent on a week with nothing to say."
@@ -276,6 +277,9 @@ struct SettingsView: View {
                 // inert and the smart governor stays unbuilt — which is the answer we
                 // are hoping for.
                 Text(CloudBudget.statusLine())
+                // The retrieval substrate's meter (2026-09-12): the phone ran for weeks with
+                // this reading UNAVAILABLE and nothing said so.
+                Text(EmbeddingStore.statusLine())
                     .metadataStyle()
                 // The one deadline in this build that cannot be undone once it passes.
                 // Prose in a header is not a reminder; a line that counts down is. When
@@ -322,8 +326,12 @@ struct SettingsView: View {
                 }
                 // Product telemetry: whether a sink is installed and the last events it
                 // saw. Confirms the boundary is exercised without opening a dashboard.
-                Text(Telemetry.sink == nil ? "telemetry: no sink" : "telemetry: on · \(telemetryEnabled ? "sharing" : "opted out")")
-                    .metadataStyle()
+                Text(
+                    Telemetry.sink == nil
+                        ? "telemetry: no sink"
+                        : "telemetry: on · \(telemetryEnabled ? "sharing" : "opted out")"
+                )
+                .metadataStyle()
                 // Per-capability model outcomes — the evidence behind the deadlines.
                 // Local only; nothing here is ever transmitted.
                 ForEach(ModelMetrics.shared.footerLines(), id: \.self) { line in
