@@ -273,10 +273,17 @@ struct AssignedSectionsView: View {
             )
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: Spacing.lg) {
-                    ForEach(sections) { section in
-                        VStack(alignment: .leading, spacing: 0) {
-                            sectionHeader(section)
+                // `Section`s directly in the lazy stack, never a `VStack` per section: a
+                // lazy stack instantiates only its DIRECT children on demand, and a section
+                // wrapped in a VStack is one child — every row in it was built the moment
+                // the section scrolled into view, so a long Todo built its whole membership
+                // (each row a context menu, two swipes, a press sensor and its graph
+                // derivations) at once. With sections, rows are built as they arrive. The
+                // section gap rides on the header rather than the stack's `spacing`, which
+                // would otherwise open between every row.
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                        Section {
                             ForEach(section.entries) { entry in
                                 TaskLaneEntryView(
                                     entry: entry, allTasks: allTasks, othersRoster: othersRoster,
@@ -299,6 +306,9 @@ struct AssignedSectionsView: View {
                                 .accessibilityHint(
                                     "Filter to \(section.status.label) to see every entry")
                             }
+                        } header: {
+                            sectionHeader(section)
+                                .padding(.top, index == 0 ? 0 : Spacing.lg)
                         }
                     }
                 }

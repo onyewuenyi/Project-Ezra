@@ -54,6 +54,26 @@ struct MyTasksSlicesTests {
         }
     }
 
+    @Test("The ledger reads newest-resolved first, and the inline cap keeps the most recent")
+    func ledgerOrdersByResolution() {
+        let me = UUID()
+        let now = Date()
+        // Seven done tasks, resolved at distinct times, inserted in scrambled order.
+        let tasks: [TaskItem] = (0..<7).map { i in
+            let t = TaskItem(title: "done \(i)", status: .todo, ownerID: me)
+            t.complete(now: now.addingTimeInterval(-Double(i) * 3600))
+            return t
+        }.shuffled()
+        let sections = MyTasksSlices.assigned(tasks: tasks, currentUserID: me)
+        #expect(sections.count == 1)
+        let ledger = sections[0]
+        #expect(ledger.status == .done)
+        // Five inline, and they are the five MOST RECENT, newest first — a record of what
+        // was just finished, never the five highest-scoring.
+        #expect(ledger.entries.map(\.anchor.title) == ["done 0", "done 1", "done 2", "done 3", "done 4"])
+        #expect(ledger.hiddenCount == 2)
+    }
+
     @Test("Needs Decision floats to the top within its section")
     func needsDecisionFloatsInSection() {
         let me = UUID()

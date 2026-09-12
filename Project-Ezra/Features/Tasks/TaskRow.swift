@@ -98,6 +98,13 @@ struct TaskRow: View {
     /// the ONE `DueLabel` the detail chip also reads, so the two can't drift again.
     private var dueLabel: DueLabel? { DueLabel.make(for: task, style: .compact) }
 
+    /// How long since a resolved row was resolved — the ledger's WHEN. Nil on live work
+    /// (the due label owns that slot) and on a resolved task with no recorded moment.
+    private var resolvedAge: String? {
+        guard task.status.isResolved, let at = task.completedAt else { return nil }
+        return RelativeAge.compact(at)
+    }
+
     var body: some View {
         HStack(spacing: Spacing.sm) {
             // The user's attention Signal surfaces as a leading mark here (the record
@@ -142,6 +149,14 @@ struct TaskRow: View {
                     .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
                     .monospacedDigit()
                     .recessed(isBlocked)
+            } else if let age = resolvedAge {
+                // A resolved row is a record, and a record says when. Same slot, the
+                // quietest register, in `RelativeAge`'s vocabulary ("2h ago") rather than
+                // the due label's ("Fri") so the two never read as the same claim.
+                Text(age)
+                    .font(.chipLabel)
+                    .foregroundStyle(Palette.mutedText)
+                    .monospacedDigit()
             }
 
             trailingAvatar
@@ -326,6 +341,8 @@ struct TaskRow: View {
         // overdue" is a sentence, and the overdue arm already says the word.
         if let due = DueLabel.make(for: task, style: .full) {
             parts.append(due.isOverdue ? due.text : "due \(due.text)")
+        } else if let resolvedAge {
+            parts.append(resolvedAge)
         }
         if task.isUrgent { parts.append("urgent") }
         if task.needsDecision && !task.status.isResolved { parts.append("needs a decision") }

@@ -148,18 +148,10 @@ struct ParkedCapturesRow: View {
         .contentShape(Rectangle())
     }
 
-    /// How long ago the words were left, compact: "now" inside a minute, then "5m",
-    /// "2h", "3d" — the same terse vocabulary the task row's due label speaks, never a
-    /// sentence, because this is a caption on a row and not the row's point.
+    /// How long ago the words were left — `RelativeAge`'s vocabulary, shared with the
+    /// resolved task row so the two captions can't drift.
     static func age(of date: Date, now: Date = Date()) -> String {
-        let seconds = max(0, now.timeIntervalSince(date))
-        if seconds < 60 { return "now" }
-        let minutes = Int(seconds / 60)
-        if minutes < 60 { return "\(minutes)m ago" }
-        let hours = minutes / 60
-        if hours < 24 { return "\(hours)h ago" }
-        let days = hours / 24
-        return "\(days)d ago"
+        RelativeAge.compact(date, now: now)
     }
 
     /// The first few words — enough to recognise, never the whole dump.

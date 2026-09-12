@@ -160,7 +160,20 @@ enum MyTasksSlices {
         let entries = laneEntries(from: scoped, allTasks: tasks)
         let grouped = Dictionary(grouping: entries) { $0.anchor.status }
         return sectionOrder.compactMap { status in
-            guard let items = grouped[status], !items.isEmpty else { return nil }
+            guard var items = grouped[status], !items.isEmpty else { return nil }
+            // The LEDGER is a record, so it reads in the order things happened: most
+            // recently resolved first. Stack precedence is an attention order and means
+            // nothing for finished work — under it the inline five were the five
+            // highest-scoring resolved tasks, which is not "what did I just finish?", the
+            // one question the cap exists to keep answerable. Stable, so two tasks
+            // resolved in the same second keep their stack order.
+            if status.isResolved {
+                items = items.enumerated().sorted { a, b in
+                    let (ta, tb) = (a.element.anchor.completedAt, b.element.anchor.completedAt)
+                    if ta != tb { return (ta ?? .distantPast) > (tb ?? .distantPast) }
+                    return a.offset < b.offset
+                }.map(\.element)
+            }
             // The ledger caps INLINE only, and only when no status filter is narrowing
             // the view — picking Done from the filter is precisely "show me the
             // ledger", and capping there would fight the user's explicit ask.
