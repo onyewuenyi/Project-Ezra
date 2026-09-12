@@ -145,9 +145,12 @@ struct TaskAdvisorChatView: View {
                 .sensoryFeedback(.impact(weight: .light), trigger: sendPulse)
                 .sensoryFeedback(.impact(flexibility: .soft), trigger: actionPulse)
                 .chatReplyLanding(messages)
-                .alert("Mark decided", isPresented: $showDecisionPrompt) {
+                // The title answers the button that opened it, and the confirm names what the
+                // tap actually DOES — "Decided" would sit one letter from the pinned CTA's
+                // "Decide", and "Done" would read as completing the task, which this never does.
+                .alert("I've decided", isPresented: $showDecisionPrompt) {
                     TextField("What did you decide? (optional)", text: $decisionChoice)
-                    Button("Mark decided") {
+                    Button("Record") {
                         let trimmed = decisionChoice.trimmingCharacters(in: .whitespacesAndNewlines)
                         actions.markDecided(choice: trimmed.isEmpty ? nil : trimmed)
                     }

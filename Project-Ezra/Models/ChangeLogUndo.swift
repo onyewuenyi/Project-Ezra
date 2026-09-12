@@ -104,7 +104,7 @@ enum ChangeLogUndo {
             let previous = TaskItem.decodeOwnership(entry.oldValue)
             task.claim(ownerID: previous.ownerID, among: fetchAll(in: context), origin: previous.origin)
         case "decided":
-            // The human's "Mark decided" re-escalates to the open decision — and if the
+            // The human's "I've decided" re-escalates to the open decision — and if the
             // decide carried a CHOICE, the exact appended notes line comes back out
             // (undo-completeness: the action wrote it, so the arm removes it). Spare a
             // note the user has since rewritten: strip only an exact-line match.

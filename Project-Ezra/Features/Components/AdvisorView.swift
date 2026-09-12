@@ -625,13 +625,23 @@ struct AdvisorView: View {
             // When the reading is already offering options, deciding happens THERE and
             // this demotes to the escape hatch. Either way it is never a full-width
             // gradient capsule — that treatment belongs to the pinned CTA alone.
+            //
+            // **First person, and that is the whole point of the wording.** On a
+            // `.deciding` page this button sits under a pinned CTA reading "Decide", and
+            // the two used to share a root word while meaning opposite ends of the
+            // lifecycle — begin the choosing, versus report that the choosing is over.
+            // "Mark decided" is a third party narrating; "I've decided" is the person
+            // answering the sentence directly above it ("It holds the top until you call
+            // it"). The distinction is now grammatical PERSON rather than vocabulary: the
+            // pinned CTA is imperative because the system is offering a move, and a
+            // control that reports a state the human already reached speaks as the human.
             if offersOptions {
-                Button("Mark decided") { onDecide(nil) }
+                Button("I've decided") { onDecide(nil) }
                     .font(.controlLabel)
                     .foregroundStyle(Palette.accentFlat)
                     .buttonStyle(.pressableLink)
             } else {
-                secondaryButton("Mark decided", fullWidth: true) { onDecide(nil) }
+                secondaryButton("I've decided", fullWidth: true) { onDecide(nil) }
             }
         }
         .padding(Spacing.md)
@@ -648,7 +658,7 @@ struct AdvisorView: View {
 
     private var offersOptions: Bool {
         // Options are only "here" when the reading itself is — on the page the reading
-        // lives in the chat, so the block keeps its full-width Mark decided.
+        // lives in the chat, so the block keeps its full-width "I've decided".
         guard showsReading, case .revealed(let reading) = state else { return false }
         return !reading.options.isEmpty
     }

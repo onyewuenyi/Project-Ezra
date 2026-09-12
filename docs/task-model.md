@@ -135,7 +135,7 @@ The product model: **the user manages intent, the system manages the work, the A
 
 **Every reading-taken action clears the stall it was read against** — `advisorActed` routes each tap through the acted metric (recording the lifecycle position it acted FROM, the progression baseline) and `touchHuman()` whenever a stall diagnosis is present; a card its own buttons can't dismiss is a scold. `deferralCount` stays consecutive-not-lifetime for exactly this reason, and `carriedOverCount` is still deliberately never reset.
 
-**A flagged decision keeps its human affordances unconditionally.** The reason line and **Mark decided** render whatever the model chose to talk about and whether or not it is available — the flag is axis 3, and only a human clears it.
+**A flagged decision keeps its human affordances unconditionally.** The reason line and the clearing button (**"I've decided"** — first person, because the pinned CTA above it is imperative and reads "Decide") render whatever the model chose to talk about and whether or not it is available — the flag is axis 3, and only a human clears it.
 
 **Bounded, cancellable, fallback-complete.** One call through `ModelRun.perform(.taskAdvisor, ModelDeadline.cardSeconds)`; cancellation keys on `isActive` (the pager keeps neighbours mounted); off-device the deterministic template content renders (`.fallback` — an execution path, not a judgment); a real failed attempt offers *"That didn't finish · Try again"*. The judgment-quality eval is `-AdvisorDiagnostics` — a curated fixture table of task states → expected moves, run through the real model on device, printing agreement to stdout.
 

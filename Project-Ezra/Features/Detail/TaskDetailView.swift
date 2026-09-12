@@ -395,9 +395,12 @@ struct TaskDetailView: View {
             // waiting on a classification either.
             classifyWork?.cancel()
         }
-        .alert("Mark decided", isPresented: $showDecisionPrompt) {
+        // The title answers the button that opened it, and the confirm names what the
+        // tap actually DOES — "Decided" would sit one letter from the pinned CTA's
+        // "Decide", and "Done" would read as completing the task, which this never does.
+        .alert("I've decided", isPresented: $showDecisionPrompt) {
             TextField("What did you decide? (optional)", text: $decisionChoice)
-            Button("Mark decided") {
+            Button("Record") {
                 let trimmed = decisionChoice.trimmingCharacters(in: .whitespacesAndNewlines)
                 actions.markDecided(choice: trimmed.isEmpty ? nil : trimmed)
             }
@@ -1459,7 +1462,7 @@ struct TaskDetailView: View {
     /// means — the work is the choice — so `.start` reads "Decide". View-layer only:
     /// `RecommendedAction` is untouched, `.resume` keeps its honest history, and
     /// `.resolve` stays "Mark done" because it runs `completeAndResurface` and never
-    /// touches `needsDecision` — a "Mark decided" label there would report a decision
+    /// touches `needsDecision` — a decided-style label there would report a decision
     /// nothing recorded (`resolveDecision()` is the only clearer, and the obligation
     /// block owns that control).
     private func ctaTitle(_ action: RecommendedAction) -> String {
