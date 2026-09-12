@@ -21,6 +21,12 @@ struct TaskSearchView: View {
     @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
 
     @State private var searchText = ""
+    /// Raised on arrival. This sheet's ONLY purpose is typing, and unlike Ask — which
+    /// opens with the day answer to read — there is nothing here until a word is entered:
+    /// the empty state says "Search your tasks" over a field the person then has to tap.
+    /// Same rule as the composer and the first-run name field: the keyboard comes up
+    /// where there is nothing to read first.
+    @FocusState private var searchFocused: Bool
     @State private var selectedTask: TaskItem?
     @State private var notice: UndoNotice?
 
@@ -94,6 +100,13 @@ struct TaskSearchView: View {
                 text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Search tasks"
             )
+            .searchFocused($searchFocused)
+            .task {
+                // After the sheet's presentation settles, so the field is in place before
+                // the keyboard slides under it rather than both moving at once.
+                try? await Task.sleep(for: .milliseconds(350))
+                searchFocused = true
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

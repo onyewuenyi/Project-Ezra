@@ -133,10 +133,24 @@ struct HouseholdChatFacts: Sendable, Equatable {
                 if a.isYou != b.isYou { return a.isYou }
                 return a.name < b.name
             }
+        // **The two graph lookups are hoisted, because this used to be quadratic.**
+        // `activeBlockerTasks(among:)` built a Set of every open uuid AND scanned the
+        // whole array, once PER TASK — and `activeBlockers(among:)` right beside it built
+        // that same Set again. Over a household of n tasks that is O(n²) with two
+        // full-collection allocations per row, and the Ask sheet rebuilds these facts
+        // several times per render pass, so it ran again on every keystroke while
+        // somebody typed a question. Computed once here, a task's blockers cost only its
+        // own edges. The derivation is unchanged: the same `activeBlockers(from:openIDs:)`
+        // static the instance accessors delegate to, against the same open set.
+        let openIDs = Set(tasks.filter { !$0.status.isResolved }.compactMap(\.uuid))
+        let titlesByID: [UUID: String] = Dictionary(
+            tasks.compactMap { task in task.uuid.map { ($0, task.title) } },
+            uniquingKeysWith: { first, _ in first })
         let open = tasks.filter { !$0.status.isResolved }
             .map { task -> Line in
-                let blockers = task.activeBlockerTasks(among: tasks).map(\.title)
-                let waits = task.activeBlockers(among: tasks).filter { $0.taskID == nil }.compactMap(\.note)
+                let active = TaskItem.activeBlockers(from: task.relationships, openIDs: openIDs)
+                let blockers = active.compactMap { $0.taskID.flatMap { titlesByID[$0] } }
+                let waits = active.filter { $0.taskID == nil }.compactMap(\.note)
                 return Line(
                     id: task.uuid ?? UUID(),
                     title: task.title,

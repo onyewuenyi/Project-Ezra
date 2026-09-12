@@ -54,8 +54,17 @@ struct HouseholdChatView: View {
     private static let bottomAnchor = "bottom"
 
     var body: some View {
-        NavigationStack {
-            thread
+        // **Built ONCE per render, and handed down.** `facts` is a computed property over
+        // the whole fetch, and the render path read it four times — the glance strip, the
+        // starter chips, the follow-ups and the empty state — so a full household
+        // snapshot was constructed four times per body pass, and `draft` lives in this
+        // view, so that happened on every keystroke while somebody typed a question.
+        // Same move `TasksHomeView` already makes for its slice, and for the same reason.
+        // Event handlers (`onAppear`, `send`, `onRetry`) deliberately keep reading the
+        // property: they fire once and must see the household as it is at that moment.
+        let facts = self.facts
+        return NavigationStack {
+            thread(facts)
                 .safeAreaInset(edge: .bottom) {
                     ChatComposerBar(
                         draft: $draft, placeholder: "Ask about anything you've got on",
@@ -122,12 +131,12 @@ struct HouseholdChatView: View {
 
     // MARK: - The thread
 
-    private var thread: some View {
+    private func thread(_ facts: HouseholdChatFacts) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.md) {
                     if store.messages.isEmpty {
-                        emptyState
+                        emptyState(facts)
                     } else {
                         // The glance: the household's counts as one-tap questions, above
                         // the day answer, until the first question is asked — under the
@@ -153,8 +162,8 @@ struct HouseholdChatView: View {
                             ChatStarterChips(questions: HouseholdChatPrompt.starterQuestions(for: facts)) {
                                 send($0)
                             }
-                        } else if !followUps.isEmpty {
-                            ChatStarterChips(questions: followUps) { send($0) }
+                        } else if case let chips = followUps(facts), !chips.isEmpty {
+                            ChatStarterChips(questions: chips) { send($0) }
                                 .transition(.opacity)
                         }
                     }
@@ -195,7 +204,7 @@ struct HouseholdChatView: View {
 
     /// The scope's follow-ups for the latest ANSWERED question — nothing while a reply
     /// is in flight, nothing that was already asked in this thread.
-    private var followUps: [String] {
+    private func followUps(_ facts: HouseholdChatFacts) -> [String] {
         guard !store.isReplying, let last = store.messages.last, last.role == .advisor, last.state == .sent,
             let question = store.messages.last(where: { $0.role == .user })?.text
         else { return [] }
@@ -205,11 +214,13 @@ struct HouseholdChatView: View {
 
     /// Nothing open and nothing finished: there is nothing to ask about yet, and saying
     /// so with the way in beats three chips that all answer "nothing".
-    private var nothingToAsk: Bool { facts.open.isEmpty && facts.done.isEmpty }
+    private func nothingToAsk(_ facts: HouseholdChatFacts) -> Bool {
+        facts.open.isEmpty && facts.done.isEmpty
+    }
 
     @ViewBuilder
-    private var emptyState: some View {
-        if nothingToAsk {
+    private func emptyState(_ facts: HouseholdChatFacts) -> some View {
+        if nothingToAsk(facts) {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 Text("Nothing to ask about yet.")
                     .sectionHeaderStyle()
