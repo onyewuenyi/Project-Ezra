@@ -37,6 +37,14 @@ file. See *Keeping this file current* at the bottom.
   on the confirm card, never write directly.
 - **A revealed interpretation is final.** No AI-originated change to a card after reveal
   (`Interpretation.propose` refuses once revealed). Check any new writer into that path.
+- **Every caller of `AppBrain.triage` names its route, and the router chose it.** The
+  parameter has no default (2026-09-11) precisely so this is checkable: before that it
+  defaulted to `.cloud`, and `OnboardingView.transform()` — a new user's FIRST brain dump —
+  never mentioned it, so it transmitted structure the user had typed and skipped the
+  deterministic read. A call site that hardcodes `.cloud`, or computes a route by any means
+  other than `CaptureRoute.route(for:localRead:)` / `CaptureFlow.plan` /
+  `CaptureFlow.route(for:posture:)`, is a finding. Holding the invariant inside
+  `CaptureRoute` is not enough — the last one held perfectly while a view bypassed it.
 
 ## 2. AI paths — each rung, each failure, separately
 
