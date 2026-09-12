@@ -142,6 +142,11 @@ struct ParkedCapturesRow: View {
                 .font(.chipLabel)
                 .foregroundStyle(Palette.mutedText)
                 .monospacedDigit()
+                // Never squeezed: at accessibility sizes the row ran out of width and
+                // the HStack folded "3h ago" into one letter per line. The age holds
+                // its ideal width; the excerpt beside it is the part that yields.
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             Image(systemName: "chevron.right")
                 .font(.glyphCaption())
                 .foregroundStyle(Palette.mutedText)
