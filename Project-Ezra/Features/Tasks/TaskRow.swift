@@ -37,10 +37,14 @@ struct TaskRow: View {
     let task: TaskItem
     /// The full working set, so the context menu's transitions stay graph-accurate.
     var allTasks: [TaskItem] = []
-    /// How many tasks are in this row's dependency chain, when it is a chain's root.
-    /// An INDICATOR, exactly like `stepProgress` — the chain used to carry an expander
-    /// button here and no longer does (see `TaskChainStackView`).
-    var chainDepth: Int? = nil
+    /// Whether the status glyph is a control — the state menu, the same component the
+    /// container spine's step rows carry — rather than an indicator. Off on the plain
+    /// list row, where the glyph would be the row's second tap target and the leading
+    /// swipe already carries the lifecycle. ON inside a group's deck (`TaskDeckView`),
+    /// where horizontal is navigation and the swipes are absent, so the glyph is the
+    /// row's explicit completion target — one control, in the one column that already
+    /// means "state". Picks route through the same undo-aware seams as the menu.
+    var glyphInteractive: Bool = false
     /// The "waiting on X" phrase — kept ONLY to drive the blocked dim + marker (the
     /// text itself is no longer rendered on the row). Nil when nothing blocks it.
     var blockerSummary: String? = nil
@@ -120,8 +124,11 @@ struct TaskRow: View {
             // another changed its state. The state-setting it offered now lives on the
             // gestures: the leading swipe for the recommended next move, the long-press
             // menu for any arbitrary status.
-            StatusGlyphView(task: task, allTasks: allTasks, interactive: false)
-                .recessed(isBlocked)
+            StatusGlyphView(
+                task: task, allTasks: allTasks, interactive: glyphInteractive,
+                onPick: glyphInteractive ? { handlePick($0) } : nil
+            )
+            .recessed(isBlocked)
 
             Text(task.title)
                 .taskTitleStyle()
@@ -134,7 +141,6 @@ struct TaskRow: View {
 
             if isBlocked { BlockedIndicator() }
             if let stepProgress { StepProgressIndicator(progress: stepProgress) }
-            if let chainDepth { ChainDepthIndicator(count: chainDepth) }
 
             Spacer(minLength: Spacing.xs)
 
@@ -350,9 +356,6 @@ struct TaskRow: View {
         // the reader open the task to learn the same thing the row was already carrying.
         if isBlocked { parts.append(blockerSummary.map { "blocked, \($0)" } ?? "blocked") }
         if let stepProgress { parts.append(stepProgress.label) }
-        // The chain indicator is silent, and the expander that used to announce
-        // "chain of N linked tasks" is gone — so the row says it.
-        if let chainDepth { parts.append("\(chainDepth) linked tasks") }
         if let ownerDisplayName {
             parts.append("owned by \(ownerDisplayName)")
         } else if task.ownerID == nil {

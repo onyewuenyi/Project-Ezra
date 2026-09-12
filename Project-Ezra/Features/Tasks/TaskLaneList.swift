@@ -5,13 +5,13 @@
 //  The shared list machinery behind the "My Tasks" surface — extracted from the old
 //  per-slice list views so the Assigned (sectioned) and Created (flat) tabs, plus the
 //  search sheet, all render rows the same way and complete/cancel through one
-//  undo-aware path. Dependency-linked work renders as the chain stack — a ROW that looks
-//  deeper, not a container: it stopped expanding in place on 2026-09-01, so every entry
-//  here now answers a tap the same way. Everything else is a one-line `TaskRow`.
+//  undo-aware path. Dependency-linked work renders as a GROUP with a current task
+//  (`TaskDeckView`, 2026-09-12): a caption naming the outcome over one real row, paged
+//  horizontally. Everything else is a one-line `TaskRow`.
 //
-//  This file owns the row gesture map, because the swipes belong to the ENTRY (a chain
-//  swipes as one thing, acting on its root) while the tap and long-press belong to the
-//  row — see `TaskLaneEntryView` and `TaskRow`'s header.
+//  This file owns the row gesture map: the swipes belong to the plain row (lifecycle
+//  leading, cancel trailing) and are ABSENT on a deck's cards, where horizontal means
+//  navigation — see `TaskLaneEntryView`, `TaskRow`'s and `TaskDeckView`'s headers.
 //
 
 import CoreData
@@ -122,10 +122,7 @@ struct TaskSwipeActions: ViewModifier {
     let task: TaskItem
     let allTasks: [TaskItem]
     let currentUserID: UUID?
-    /// A collapsed chain root gives its LEADING edge to the pile — swipe right expands the
-    /// stack — so it suppresses this one and supplies its own. Every other row keeps the
-    /// lifecycle swipe. The meaning still doesn't vary per task: it varies by what the row
-    /// IS, a pile or a task, which is the same distinction the card already draws.
+    /// Kept for a caller that wants the trailing swipe alone; the deck applies neither.
     var includesLeading: Bool = true
     @Binding var notice: UndoNotice?
     @Environment(\.managedObjectContext) private var context
@@ -214,9 +211,9 @@ struct TaskLaneEntryView: View {
             .taskSwipeActions(
                 task: task, allTasks: allTasks, currentUserID: currentUserID, notice: $notice)
         case .chain(let chain):
-            // The stack applies the swipes PER MEMBER itself — collapsed that is just the
-            // root, expanded it is each card — so this does not wrap them here.
-            TaskChainStackView(
+            // A group with a current task: horizontal is navigation on its cards, so no
+            // lifecycle swipes are applied here — the glyph is the completion target.
+            TaskDeckView(
                 chain: chain,
                 allTasks: allTasks,
                 onComplete: { completeTask($0, in: context, tasks: allTasks, notice: $notice) },

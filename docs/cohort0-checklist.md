@@ -114,6 +114,12 @@ file. See *Keeping this file current* at the bottom.
 - **First run is not an error.** Empty store, no household, no tasks, no captures, no
   model — every surface renders something intentional. `—` means "not measurable", never
   zero.
+- **A group's front card is always actionable, and its umbrella is never a card.** A deck
+  (`TaskDeckView`, 2026-09-12) leads with the first member that waits on nothing; a blocked
+  step leading while an open one exists, an umbrella rendered as a card while it has open
+  steps, or a done member still in the deck is a finding. The deck's cards carry NO
+  lifecycle swipes (horizontal is navigation there) — the glyph is the completion target
+  and must route through the undo-aware complete/cancel seams like every other row.
 - **An empty list under a filter names the filter and offers the way out.** A filtered
   My Tasks that matches nothing is indistinguishable from a list with tasks missing — a
   trust failure, not a discoverability one. The empty state must say which filter is on

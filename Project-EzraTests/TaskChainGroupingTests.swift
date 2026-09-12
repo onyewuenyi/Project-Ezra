@@ -47,6 +47,65 @@ struct TaskChainGroupingTests {
         }
     }
 
+    @Test("A container names its group: the umbrella is the caption, its steps are the cards")
+    func umbrellaNamesTheGroup() {
+        let trip = TaskItem(title: "Trip to Lagos", status: .todo, confidence: 0.9)
+        let passport = TaskItem(title: "Renew passport", status: .todo, confidence: 0.9)
+        let flights = TaskItem(
+            title: "Book flights", status: .todo, confidence: 0.9,
+            blockedBy: [passport.uuid!])
+        let hotel = TaskItem(title: "Book hotel", status: .todo, confidence: 0.9)
+        for step in [passport, flights, hotel] { step.linkParent(trip.uuid!) }
+        let all = [hotel, trip, flights, passport]
+
+        let (chains, loose) = TaskChainGrouping.computeChains(in: all)
+        #expect(loose.isEmpty)
+        #expect(chains.count == 1)
+        let chain = chains[0]
+        #expect(chain.umbrella?.title == "Trip to Lagos")
+        // The umbrella is never a card, and the front card is actionable: a step that
+        // waits on another never leads while one that can move exists.
+        #expect(!chain.deckMembers.contains { $0.objectID == trip.objectID })
+        #expect(chain.deckMembers.count == 3)
+        #expect(chain.root.title != "Book flights")
+        #expect(chain.root.objectID == chain.deckMembers.first?.objectID)
+    }
+
+    @Test("A chain of bare blockers has no umbrella, and every member is a card")
+    func bareChainHasNoUmbrella() {
+        let a = TaskItem(title: "a", status: .todo, confidence: 0.9)
+        let b = TaskItem(title: "b", status: .todo, confidence: 0.9, blockedBy: [a.uuid!])
+        let (chains, _) = TaskChainGrouping.computeChains(in: [b, a])
+        #expect(chains[0].umbrella == nil)
+        #expect(chains[0].deckMembers.count == 2)
+    }
+
+    @Test("Nested containers: the top-most one names the group")
+    func nestedContainersTopMostNames() {
+        let outer = TaskItem(title: "outer", status: .todo, confidence: 0.9)
+        let inner = TaskItem(title: "inner", status: .todo, confidence: 0.9)
+        let leaf = TaskItem(title: "leaf", status: .todo, confidence: 0.9)
+        inner.linkParent(outer.uuid!)
+        leaf.linkParent(inner.uuid!)
+        let (chains, _) = TaskChainGrouping.computeChains(in: [leaf, inner, outer])
+        #expect(chains.count == 1)
+        #expect(chains[0].umbrella?.title == "outer")
+        #expect(chains[0].deckMembers.map(\.title) == ["leaf", "inner"])
+    }
+
+    @Test("Done steps leave the deck: the group is the remaining work")
+    func doneStepsLeaveTheDeck() {
+        let trip = TaskItem(title: "Trip", status: .todo, confidence: 0.9)
+        let done = TaskItem(title: "done", status: .todo, confidence: 0.9)
+        let open = TaskItem(title: "open", status: .todo, confidence: 0.9)
+        for step in [done, open] { step.linkParent(trip.uuid!) }
+        done.complete()
+        let (chains, loose) = TaskChainGrouping.computeChains(in: [trip, done, open])
+        #expect(chains.count == 1)
+        #expect(chains[0].deckMembers.map(\.title) == ["open"])
+        #expect(loose.map(\.title) == ["done"])
+    }
+
     @Test("A standalone task with no dependency links is loose, not a chain")
     func standaloneIsLoose() {
         let task = TaskItem(title: "Water the plants", status: .todo, confidence: 0.9)

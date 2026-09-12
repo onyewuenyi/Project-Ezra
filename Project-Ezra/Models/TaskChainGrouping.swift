@@ -43,6 +43,38 @@ struct TaskChain: Identifiable {
     }
 }
 
+// MARK: - The chain read as a GROUP with a current task (2026-09-12)
+
+extension TaskChain {
+    /// The member that NAMES the outcome: a container whose steps are in this chain and
+    /// which is no chain member's own step (the top-most, when containers nest). Nil for a
+    /// chain of bare blockers, which has no name of its own.
+    ///
+    /// The umbrella is the group's caption on the list, never one of its cards — it holds
+    /// its steps as prerequisites, so it is always the LAST member in execution order and
+    /// was the last card in the old pile. A group represents the remaining work toward
+    /// an outcome, and the outcome is not a piece of that work. When the last step
+    /// resolves the chain dissolves and the umbrella surfaces as an ordinary row, which is
+    /// the one honest moment to ask whether the outcome itself is done.
+    var umbrella: TaskItem? {
+        let memberIDs = Set(members.compactMap(\.uuid))
+        return members.first { candidate in
+            guard let id = candidate.uuid else { return false }
+            let hasStepsHere = members.contains { $0.parentTaskID == id }
+            let isSomeonesStepHere = candidate.parentTaskID.map(memberIDs.contains) ?? false
+            return hasStepsHere && !isSomeonesStepHere
+        }
+    }
+
+    /// The cards the group pages through: every member but the umbrella, in execution
+    /// order — the front card is `root`, the first member with nothing left to wait on, so
+    /// a waiting member never leads while an actionable one exists.
+    var deckMembers: [TaskItem] {
+        guard let umbrella else { return members }
+        return members.filter { $0 !== umbrella }
+    }
+}
+
 /// One renderable row in a lane: either a standalone task, or a whole chain.
 enum TaskLaneEntry: Identifiable {
     case single(TaskItem)
