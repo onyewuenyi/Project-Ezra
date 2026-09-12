@@ -110,6 +110,51 @@ lookups`), because a graceful degrade with no meter is how this stayed off for w
 always is.
 
 
+## 2026-09-12 — the sweep's prefilter, measured on real vectors for the first time
+
+With the embedding fixed, `-DuplicateSweepEval`'s prefilter section stopped saying NOT
+MEASURED, and the first real reading is the one the whole instrument was built to get:
+
+```
+floors: similarity ≥ 0.82 · word overlap ≥ 0.30
+real duplicates reaching the judge: 0/10
+                                          sim   lex
+  Renew passport / passport renewal       0.17  0.33
+  Book the dentist / make a dentist appt  0.00  0.25
+  Cancel the gym membership / cancel gym  0.14  0.67
+  …
+  call the plumber / call the LANDLORD    0.57  0.60   ← a near-miss, and the top score
+  fix the tap in the bathroom / KITCHEN   0.49  0.60   ← another
+```
+
+Two facts, in order of severity. **The floor is an order of magnitude off**: 0.82 was
+calibrated in `DuplicateSweepTests` on synthetic 2-D unit vectors (cos 0.99 → 0.86), and no
+real 512-d sentence vector for a paraphrase comes near it. **And the ordering is inverted**:
+on this corpus the store's similarity ranks the near-misses ABOVE the real duplicates —
+"call the plumber / call the landlord" outscores "renew passport / passport renewal" three
+to one. A floor can be tuned; an inverted signal cannot. It is not the transform: `similarity` is
+`1 − √(2 − 2·cos)`, i.e. one minus the Euclidean distance between unit vectors, verified
+against `NLEmbedding.distance` when it was written — which explains the SCALE (0.82 needs
+cos ≈ 0.984) but not the order. Back-solving the printed values, the raw cosines are
+≈ 0.91 for plumber/landlord and ≈ 0.66 for passport/renewal: **the iOS 27 sentence embedding
+itself ranks these backwards on three-to-six-word titles**, weighting sentence shape over the
+noun that decides sameness. That is the question that decides whether the embedding half of
+the prefilter survives at all, and it is answered: not as a duplicate detector for titles.
+
+The lexical floor alone does not separate them either (duplicates 0.12–0.67, near-misses
+0.20–0.60). **The judge does** — on this run perfectly, duplicates 0.90–1.00 against a flat
+0.50 — but one run earlier it returned 1.00 on the prerequisite near-miss ("passport
+photos"), so it is not yet a gate a destructive action can stand on alone.
+
+**Decision taken: nothing moves yet, and that is the correct output of the instrument.**
+The sweep stays inert (as it has been, now visibly), the floors stay where they are, and the
+report prints each pair's real `sim`/`lex` against them so the next change is made on
+evidence. What has to happen first, in order: diagnose the similarity scale on device; give
+the judge the *prerequisite ≠ duplicate* rule and re-run until the adversarial pair holds
+across repeats; only then move a floor — and re-run this report before ANY of those changes
+ships, because the merge is the one inference that destroys a task.
+
+
 ## 2026-09-12 — the destructive gate, measured before the runtime moves
 
 `DuplicateSweep` is the auto-accept invariant's one named exception: everything else the app

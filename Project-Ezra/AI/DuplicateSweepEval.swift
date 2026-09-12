@@ -170,6 +170,9 @@ enum DuplicateSweepEval {
         /// Whether the deterministic prefilter would have handed this pair to the judge at
         /// all. A pair the floors drop never reaches a model in production.
         var survivesPrefilter: Bool
+        /// What the two floors saw — the numbers a floor can be re-tuned on.
+        var similarity: Double?
+        var overlap: Double = 0
     }
 
     /// **Can this host run the prefilter at all?**
@@ -188,19 +191,42 @@ enum DuplicateSweepEval {
         EmbeddingStore.sentenceEmbedding?.vector(for: "renew passport") != nil
     }
 
-    /// Would the production prefilter show this pair to the judge?
+    /// Would the production prefilter show this pair to the judge — and what did each floor
+    /// actually see?
     ///
-    /// Uses the real floors and the real embedding store, so a duplicate the floors drop is
-    /// reported as dropped rather than silently scored as a judge success.
+    /// The scores are returned, not just the verdict, because the first MEASURED run of
+    /// this report (device, 2026-09-12, after the embedding fix) showed the floors dropping
+    /// every real duplicate in the corpus — including "Renew passport / passport renewal",
+    /// the pair the sweep's header names as its reason to exist. `embeddingFloor` (0.82 on
+    /// the store's distance-derived similarity) was calibrated in `DuplicateSweepTests`
+    /// against SYNTHETIC unit vectors (cos 0.99 → 0.86; cos 0.98 → 0.80), i.e. it demands
+    /// cos ≈ 0.985, which no real sentence-embedding paraphrase reaches. A floor can only
+    /// be moved on the numbers real vectors produce, and this is where they are printed.
+    struct PrefilterRead {
+        let survives: Bool
+        let similarity: Double?
+        let overlap: Double
+    }
+
     @MainActor
-    static func survivesPrefilter(_ pair: LabeledPair) -> Bool {
+    static func prefilterRead(_ pair: LabeledPair) -> PrefilterRead {
         let a = OpenTaskSnapshot(id: UUID(), title: pair.a, category: pair.category)
         let b = OpenTaskSnapshot(id: UUID(), title: pair.b, category: pair.category)
-        let survivors = DuplicateSweep.candidatePairs(
-            among: [a, b], suppressions: [],
-            vector: { EmbeddingStore.sentenceEmbedding?.vector(for: $0) })
-        return !survivors.isEmpty
+        let vector: (String) -> [Double]? = { EmbeddingStore.computeVector(for: $0) }
+        let survivors = DuplicateSweep.candidatePairs(among: [a, b], suppressions: [], vector: vector)
+        let similarity: Double? = {
+            guard let va = vector(pair.a), let vb = vector(pair.b) else { return nil }
+            return EmbeddingStore.similarity(va, vb)
+        }()
+        let wa = CorrectionProfile.significantWords(pair.a)
+        let wb = CorrectionProfile.significantWords(pair.b)
+        let union = Double(wa.union(wb).count)
+        let overlap = union > 0 ? Double(wa.intersection(wb).count) / union : 0
+        return PrefilterRead(survives: !survivors.isEmpty, similarity: similarity, overlap: overlap)
     }
+
+    @MainActor
+    static func survivesPrefilter(_ pair: LabeledPair) -> Bool { prefilterRead(pair).survives }
 
     // MARK: - The run
 
@@ -276,7 +302,8 @@ enum DuplicateSweepEval {
         print("\n── judging (\(corpus.count) pairs) ──")
         for (index, pair) in corpus.enumerated() {
             print("  \(index + 1)/\(corpus.count) \(pair.a) / \(pair.b)")
-            let survives = survivesPrefilter(pair)
+            let read = prefilterRead(pair)
+            let survives = read.survives
             let candidate = DuplicateSweep.CandidatePair(
                 a: OpenTaskSnapshot(id: UUID(), title: pair.a, category: pair.category),
                 b: OpenTaskSnapshot(id: UUID(), title: pair.b, category: pair.category),
@@ -298,14 +325,15 @@ enum DuplicateSweepEval {
                         reason: Instrument.oneLine(judgment.reason), served: true, ms: ms,
                         verdict: verdict(
                             merged: merged, hadArtifact: true, isDuplicate: pair.isDuplicate),
-                        survivesPrefilter: survives))
+                        survivesPrefilter: survives, similarity: read.similarity, overlap: read.overlap))
             case .unavailable, .timedOut, .cancelled, .failed:
                 rows.append(
                     Row(
                         pair: pair, judgedDuplicate: false, confidence: 0,
                         reason: "the judge did not answer", served: false,
                         ms: ms,
-                        verdict: .noArtifact, survivesPrefilter: survives))
+                        verdict: .noArtifact, survivesPrefilter: survives, similarity: read.similarity,
+                        overlap: read.overlap))
             }
         }
         let delta = Instrument.ArmDelta.between(
@@ -403,12 +431,14 @@ enum DuplicateSweepEval {
         print("\n── judgments ──")
         print(
             "  " + pad("verdict", 14) + pad("truth", 7) + pad("conf", 6) + pad("pre", 5)
-                + pad("ms", 7) + "pair")
+                + pad("sim", 6) + pad("lex", 6) + pad("ms", 7) + "pair")
         for row in rows.sorted(by: { $0.verdict.rawValue < $1.verdict.rawValue }) {
             print(
                 "  " + pad(row.verdict.rawValue, 14) + pad(row.pair.isDuplicate ? "dup" : "not", 7)
                     + pad(String(format: "%.2f", row.confidence), 6)
                     + pad(embeddingAvailable ? (row.survivesPrefilter ? "yes" : "NO") : "n/a", 5)
+                    + pad(row.similarity.map { String(format: "%.2f", $0) } ?? "—", 6)
+                    + pad(String(format: "%.2f", row.overlap), 6)
                     + pad(String(format: "%.0f", row.ms), 7)
                     + "\(row.pair.a) / \(row.pair.b)")
         }
@@ -436,6 +466,11 @@ enum DuplicateSweepEval {
         for (pair, survives) in duplicates where !survives {
             print("    dropped by the floors: \(pair.a) / \(pair.b)")
         }
+        print(
+            String(
+                format:
+                    "  floors: similarity ≥ %.2f · word overlap ≥ %.2f  (read the sim/lex columns above against these)",
+                DuplicateSweep.embeddingFloor, DuplicateSweep.lexicalFloor))
     }
 
     @discardableResult
