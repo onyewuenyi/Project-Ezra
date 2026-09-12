@@ -208,7 +208,11 @@ struct TaskDeckView: View {
 
     private var pager: some View {
         ScrollView(.horizontal) {
-            LazyHStack(spacing: Spacing.sm) {
+            // Tops aligned: a waiting card carries a second line and is taller, so a
+            // centred stack would let a peeking sliver poke above the front card. Top
+            // alignment keeps every card's title on one baseline and lets the taller
+            // one extend below, where the difference reads as depth rather than a slip.
+            LazyHStack(alignment: .top, spacing: Spacing.sm) {
                 ForEach(members, id: \.objectID) { member in
                     card(member)
                         .containerRelativeFrame(.horizontal) { length, _ in length - Self.peek }

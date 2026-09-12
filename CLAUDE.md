@@ -116,6 +116,7 @@ Prefer `/run-sim` for install + launch + screenshot. A clean build is sufficient
 | `-OpenTaskDetail [N]`, `-OpenAdvisorChat` (+`-ChatFixture`, `-AskAdvisor "q"`) | the pager and the task chat |
 | `-OpenActivity`, `-OpenActivityDetail [N]`, `-OpenSettings`, `-OnboardingResult` | Activity, provenance detail, Settings, onboarding's result scene |
 | `-FilterStatus <raw>`, `-FilterCategory <name>`, `-MyTasksTab everyone\|created` | header states |
+| `-DeckPage N` | every deck opened on its Nth card — a paged state, since the swipe is a gesture |
 | `-AskHousehold "q"`, `-HouseholdChatFixture`, `-HouseholdChatEval` | the Ask sheet and its eval |
 | `-RambleEval` (+`-WithCloud`, `-EvalToFile`), `-CaptureDiagnostics`, `-CaptureCompare`, `-QuickCaptureDiag` (+`-QuickRealOnly`), `-FMDiagnostics`, `-FMPrimitives`, `-OnDeviceSegment`, `-DuplicateSweepEval`, `-AdvisorBenchmark` (+`-AdvisorRepeats`), `-AdvisorCoverage` | the evals; `-EvalToFile` tees to `Documents/*-report.txt` (pull with `devicectl device copy from … --domain-type appDataContainer`) |
 

@@ -148,6 +148,10 @@ struct TaskRow: View {
                     .foregroundStyle(Palette.primaryText)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                // Only when there is a wait to name. Reserving the line on every card was
+                // tried — a blank second line reads as a card missing its subtitle, the
+                // title floating above the glyph's centre — so a deck's cards may differ
+                // in height by a line, and the deck aligns their TOPS (`TaskDeckView`).
                 if blockerLineVisible, let blockerSummary {
                     Text(blockerSummary)
                         .supportingStyle()
