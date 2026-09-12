@@ -48,10 +48,21 @@ file. See *Keeping this file current* at the bottom.
   mid-stream, and a deadline hit each degrade to the rung below, silently and without
   exposing mechanics to the user. **Note: this is Gemini, not Private Cloud Compute —
   PCC is deleted; a finding written against `PCCProvider` is stale.**
-- **App Check enforcement lands 2026-11-02** and cannot be un-enforced. Until it is wired
-  (`AppCheckSetup.install()` before `FirebaseApp.configure()`, App Attest on device, the
-  debug provider on simulator), every cloud call after that date is blocked. Treat an
-  unwired App Check as a **Cohort 0 blocker** if the cohort runs past that date.
+- **App Check enforcement lands 2026-11-02** and cannot be un-enforced. The CLIENT half is
+  wired (2026-09-11): `AppCheckSetup.install()` runs before `FirebaseApp.configure()`, App
+  Attest with a DeviceCheck fallback on device, the debug provider on the SIMULATOR (fenced
+  on `targetEnvironment`, never `DEBUG` — a device run is a Debug run), limited-use tokens
+  on the AI instance, and a countdown in the DEBUG diagnostics card. `AppCheckSetupTests`
+  pins the two silent traps. **What remains is not code**: enable the **App
+  Attest capability** on the App ID and add
+  `com.apple.developer.devicecheck.appattest-environment` (adding the entitlement first
+  fails code signing and breaks the device build — verified 2026-09-11; until then the
+  device attests via the **DeviceCheck fallback**, which needs no entitlement and survives
+  enforcement, so the un-upgraded state is weaker but not broken), register the simulator
+  debug token in the console, prove ONE attested call actually serves on device, and only
+  then turn console enforcement on. Enforcing before that proof blocks a working app with no
+  local way to tell whether the client half was ever right. An unproven attested call is
+  still a **Cohort 0 blocker** if the cohort runs past that date.
 - **Rung 0 always answers or is honestly silent.** An Advisor generation failure renders
   *nothing* — never an error string, never a labelled empty box (`DeterministicReading`,
   `ValidatedReading`).

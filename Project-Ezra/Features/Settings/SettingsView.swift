@@ -28,14 +28,28 @@ struct SettingsView: View {
     /// confirmed task. Write-only as a learning signal; read here only to count.
     @FetchRequest(sortDescriptors: []) private var correctionsResults: FetchedResults<Correction>
 
-
     @State private var photoItem: PhotosPickerItem?
     @State private var pendingReset: StoreResetRecord?
     @State private var exportURL: URL?
     @State private var backupArchiveURL: URL?
-    /// The clear awaiting confirmation. Nil is the resting state; what HAPPENED is read
-    /// from `StoreResetLog` into `pendingReset`, not tracked separately here.
+    /// The clear awaiting confirmation. Nil is the resting state.
     @State private var pendingScope: DataReset.Scope?
+    /// What a clear performed in THIS sheet did — and deliberately NOT read from
+    /// `pendingReset`, which is the DURABLE `StoreResetLog` record and stands until
+    /// somebody taps Dismiss.
+    ///
+    /// Gating the controls on that durable record made the first successful clear the
+    /// last one: the receipt survives relaunch, so on every later visit both buttons were
+    /// replaced by "Cleared. The receipt is at the top of this screen." and the only way
+    /// back was noticing Dismiss on a card further up. The stand-down is about the beat
+    /// you just performed, so it belongs to the session, not to the store.
+    @State private var clearOutcome: ClearOutcome?
+
+    /// The two things that can come back from a clear. `failed` exists because
+    /// `DataReset` can now say so (`StoreResetRecord.destroyedData`), and a wipe that
+    /// silently left everything standing is the one outcome the user must not have to
+    /// discover by relaunching.
+    private enum ClearOutcome { case cleared, failed }
 
     private var profile: UserProfile? { profilesResults.first }
     private var tasks: [TaskItem] { Array(tasksResults) }
@@ -196,6 +210,13 @@ struct SettingsView: View {
                 // are hoping for.
                 Text(CloudBudget.statusLine())
                     .metadataStyle()
+                // The one deadline in this build that cannot be undone once it passes.
+                // Prose in a header is not a reminder; a line that counts down is. When
+                // this reads "enforced", an unattested cloud call is simply refused —
+                // and `GeminiProvider.isAvailable` would still say the rung is up, so
+                // the failure would arrive looking like a network problem.
+                Text(AppCheckSetup.statusLine())
+                    .metadataStyle()
                 // The breaker. Read this FIRST when capture feels slow: "open" means the
                 // cloud rung is being skipped deliberately and the on-device arm is
                 // answering, which is a much better explanation than a hung network. The
@@ -276,7 +297,6 @@ struct SettingsView: View {
         }
         return parts.joined(separator: " · ")
     }
-
 
     private func percent(_ value: Double?) -> String {
         guard let value else { return "—" }
@@ -374,11 +394,20 @@ struct SettingsView: View {
 
                 // A clear that just happened is reported by `resetCard` at the top of the
                 // sheet — the same card every other wipe uses — so the controls simply
-                // stand down rather than growing a second, parallel receipt here.
-                if pendingReset?.reason.isVoluntary == true {
+                // stand down rather than growing a second, parallel receipt here. A clear
+                // that FAILED gets the opposite treatment: it is said here, in place, and
+                // the controls stay so the retry is one tap away.
+                if clearOutcome == .cleared {
                     Text("Cleared. The receipt is at the top of this screen.")
                         .metadataStyle()
                 } else {
+                    if clearOutcome == .failed {
+                        Text(
+                            "Nothing was cleared — your data couldn't be saved, so every task is still here."
+                        )
+                        .font(.supporting)
+                        .foregroundStyle(Palette.warning)
+                    }
                     clearControls
                 }
             }
@@ -455,11 +484,20 @@ struct SettingsView: View {
     /// `DataReset` writes the receipt to `StoreResetLog`; this just adopts it into view
     /// state, so the card at the top of the sheet renders from the same record a relaunch
     /// would read. One reporting path, two readers.
+    ///
+    /// A clear that did not destroy anything writes no receipt and must not raise one
+    /// here either — `destroyedData` is the fact, and the card would otherwise say the
+    /// data went while the list behind the sheet still holds every task.
     private func performClear(_ scope: DataReset.Scope) {
         let record = DataReset.clear(
             scope, in: context, metrics: brain.metrics,
-            provenance: .shared)
+            provenance: .shared, verdicts: .shared, readings: .shared)
         pendingScope = nil
+        guard record.destroyedData else {
+            clearOutcome = .failed
+            return
+        }
+        clearOutcome = .cleared
         pendingReset = record
         backupArchiveURL = record.backupName.flatMap { PersistenceStack.zippedBackup(named: $0) }
         // The offered export was built at open, from data that no longer exists — sharing

@@ -87,7 +87,13 @@ enum GeminiProvider: CloudModelProvider {
         -> LanguageModelSession
     {
         guard isAvailable else { throw ModelUnavailableError.unavailable }
-        let model = FirebaseAI.firebaseAI(backend: .googleAI())
+        // `useLimitedUseAppCheckTokens` asks for a fresh single-use token per call
+        // instead of a cached one replayed for its whole lifetime. That is the stronger
+        // posture and the one this project's research preview should be running — the
+        // rule is prefer the strongest available option and let a measurement argue it
+        // down. It costs an attestation round trip the SDK amortises; if the capture
+        // budget ever shows that cost, `-RambleEval`'s latency row is where it appears.
+        let model = FirebaseAI.firebaseAI(backend: .googleAI(), useLimitedUseAppCheckTokens: true)
             .geminiLanguageModel(name: modelName)
         return CapabilityProfiles.session(
             instructions: instructions, config: config, model: model, capabilities: capabilities)

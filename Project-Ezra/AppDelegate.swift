@@ -36,19 +36,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // rung dormant, which is exactly what not configuring gives it.
         guard !Project_EzraApp.isHostingUnitTests else { return true }
 
-        // **App Check becomes mandatory on 2026-11-02.** Until then AI Logic accepts
-        // unattested requests, and this build deliberately sends them — the fewest moving
-        // parts between here and a working call. After that date, requests without a valid
-        // App Check token are blocked outright and enforcement cannot be turned off, so
-        // this is a hard deadline rather than a recommendation.
-        //
-        // When it is added: install the provider factory BEFORE `configure()`, because
-        // `configure()` is what builds the App Check component — setting it afterwards
-        // leaves the default in place and the first token request fails with nothing
-        // obviously wrong in the code. `AppCheckDebugProviderFactory` behind `#if DEBUG`
-        // for simulators (its printed token is a credential: register it once per
-        // simulator in the console, never commit it), App Attest for anything shipping.
-
+        // **BEFORE `configure()`, and the order is the whole point.** `configure()` is
+        // what builds the App Check component and freezes its provider factory; setting
+        // the factory afterwards is accepted silently, leaves the default in place, and
+        // fails at the first token request with nothing wrong in the code you are
+        // reading. App Check enforcement turns on for this project on 2026-11-02 and
+        // cannot be turned back off — see `AppCheckSetup` for what installing it does and
+        // does not do. Enforcement itself is a console setting, deliberately still off:
+        // wire the client, prove one attested call serves, then enforce.
+        AppCheckSetup.install()
         FirebaseApp.configure()
         return true
     }

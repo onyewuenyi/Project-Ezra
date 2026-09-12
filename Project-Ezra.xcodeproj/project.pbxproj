@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		FBBF000000000000000000A1 /* FirebaseAILogic in Frameworks */ = {isa = PBXBuildFile; productRef = FBEE000000000000000000A1 /* FirebaseAILogic */; };
 		FBBF000000000000000000C1 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = FBEE000000000000000000C1 /* FirebaseCore */; };
+		FBBF000000000000000000D1 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = FBEE000000000000000000D1 /* FirebaseAppCheck */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			files = (
 				FBBF000000000000000000A1 /* FirebaseAILogic in Frameworks */,
 				FBBF000000000000000000C1 /* FirebaseCore in Frameworks */,
+				FBBF000000000000000000D1 /* FirebaseAppCheck in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -120,6 +122,7 @@
 			packageProductDependencies = (
 				FBEE000000000000000000A1 /* FirebaseAILogic */,
 				FBEE000000000000000000C1 /* FirebaseCore */,
+				FBEE000000000000000000D1 /* FirebaseAppCheck */,
 			);
 			productName = "Project-Ezra";
 			productReference = 4B1A21523008A247005DDBBF /* Project-Ezra.app */;
@@ -521,6 +524,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4B8E84D93034E73900B96CFF /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCore;
+		};
+		FBEE000000000000000000D1 /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B8E84D93034E73900B96CFF /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
