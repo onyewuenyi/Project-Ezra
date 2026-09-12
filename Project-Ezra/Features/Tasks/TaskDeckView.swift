@@ -47,6 +47,15 @@
 //  the cue — slivers UNDER a card said "pile"; a sliver at the edge says "there is another
 //  in that direction", which is exactly the gesture.
 //
+//  What the caption carries, and why (added the same day, after the first screenshots):
+//  the OUTCOME's due date — hiding the umbrella row hid the one date that explains why
+//  its steps matter; a "N waiting" count for members blocked in the deck or by the world,
+//  named rather than surfaced (tap it to page to the first stuck card — the person asks,
+//  the deck never pushes); and for a bare chain, its STORY in execution order as the
+//  title, because "Linked tasks" said nothing and "this, then that" is what a chain IS.
+//  A page landing gives the picker's selection tick. The glyph is a control under the
+//  same rule as the row's leading swipe — present exactly when `recommendedAction` is.
+//
 //  Two layout notes worth keeping. The card's chrome BLEEDS into the list's gutter (the
 //  horizontal scroll is widened by `Spacing.md` each side and the row content is inset by
 //  the same), so the glyph column stays on the list's column — one row leaving it reads
