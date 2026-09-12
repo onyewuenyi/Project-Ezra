@@ -114,6 +114,12 @@ file. See *Keeping this file current* at the bottom.
 - **First run is not an error.** Empty store, no household, no tasks, no captures, no
   model — every surface renders something intentional. `—` means "not measurable", never
   zero.
+- **An empty list under a filter names the filter and offers the way out.** A filtered
+  My Tasks that matches nothing is indistinguishable from a list with tasks missing — a
+  trust failure, not a discoverability one. The empty state must say which filter is on
+  (`MyTasksHeader.filteredEmptyMessage`) and carry **Clear filters** in place (2026-09-12);
+  the menu's own Clear filters is not enough, because nothing connects that control to the
+  emptiness. A filtered-empty state that only says "no matches" is a finding.
 - **Nothing narrates the model's internals** or exposes budgets, quotas, credits, token
   counts or vendor names to the user (DEBUG-only surfaces excepted).
 

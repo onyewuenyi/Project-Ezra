@@ -224,6 +224,13 @@ struct TasksHomeView: View {
             let value = args[flag + 1]
             categoryFilter = TaskCategory.all.contains(value) ? value : nil
         }
+        // `-MyTasksTab created` lands on the Created tab — the ownership pill is a tap
+        // too, and the flat authorship record was the one header state no seam reached.
+        if let flag = args.firstIndex(of: "-MyTasksTab"), args.indices.contains(flag + 1),
+            let candidate = MyTasksTab(rawValue: args[flag + 1])
+        {
+            tab = candidate
+        }
     }
 
     /// Deterministic verification seam. Launch with `-OpenSettings` to present the
