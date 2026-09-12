@@ -33,6 +33,11 @@ re-engagement loops (the PRD's V1 learning guardrail, promoted to a standing rul
 Optimize instead for: reduced interaction, faster completion, higher AI confidence,
 lower cognitive load. A feature that increases sessions but not trust is a regression.
 
+**Ramble is unlimited to the person and bounded for the machine** (2026-09-04). The bound
+lives in infrastructure — attestation, console quotas, a budget alert, a kill switch — never
+in the interface: no usage counter, no credits, no "remaining", and a cloud failure shows
+cards or the person's words, never a reason.
+
 ### The one carve-out is CLOSED (opened 2026-07-26, closed 2026-09-02)
 
 **The product now sends zero notifications, and this rule has no exception.**
@@ -130,7 +135,7 @@ a place you go to talk. F-12 makes Ask a verb summoned from where you are.
 Priority matrices · gamification / streaks / productivity scores · mandatory metadata
 · complex project hierarchies · AI chat as the interface · notification-driven
 re-engagement · a setting for every behavior · explicit "AI" branding beyond the
-sanctioned `AITag`. (Deliberately NOT adopted despite existing in prior apps:
+sanctioned `AITag` · a visible AI quota, credit or usage counter. (Deliberately NOT adopted despite existing in prior apps:
 streaming/crystallize theater, confetti, priority systems, swipe-card boards,
 "Apple Intelligence" chrome.)
 

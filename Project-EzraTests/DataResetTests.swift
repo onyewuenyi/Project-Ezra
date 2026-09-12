@@ -76,7 +76,6 @@ struct DataResetTests {
         #expect(UserProfile.current(in: context).displayName == nil)
     }
 
-
     @Test("Only the factory reset touches identity preferences")
     func onboardingFlagSurvivesAWorkClear() {
         let context = TestStore.makeContext()
@@ -113,6 +112,50 @@ struct DataResetTests {
         let work = DataReset.clear(.work, in: context, defaults: defaults, at: location("receipt"))
         #expect(work.reason == .userRequested(clearedIdentity: false))
         #expect(work.reason.explanation.contains("cleared all tasks"))
+    }
+
+    /// The file sidecars are the half of the store that isn't in the store. Both are keyed
+    /// to rows BOTH scopes delete, so a clear that spared them would leave the Advisor
+    /// holding judgments about tasks that are gone, and the learner holding half a corpus
+    /// of "no"s — a `.everything` that still remembers what you told it is not a reset.
+    @Test("Both scopes clear the sidecars keyed to the work they delete")
+    func clearingDropsTheFileSidecars() {
+        let context = TestStore.makeContext()
+        let verdicts = HumanVerdictStore(fileURL: nil)
+        let readings = AdvisorReadingCache(fileURL: nil)
+
+        for scope in [DataReset.Scope.work, .everything] {
+            seed(in: context)
+            let taskID = UUID()
+            verdicts.record(
+                HumanVerdict(subject: .reading(taskID: taskID, fingerprint: 1), verdict: .declined))
+            readings.store(.silence, taskID: taskID, fingerprint: 1)
+            #expect(verdicts.all.count == 1)
+            #expect(readings.all.count == 1)
+
+            DataReset.clear(
+                scope, in: context, defaults: makeDefaults("sidecars"),
+                at: location("sidecars"), verdicts: verdicts, readings: readings)
+
+            #expect(verdicts.all.isEmpty)
+            #expect(readings.all.isEmpty)
+        }
+    }
+
+    /// A clear that lands says so through `destroyedData`, which is what `SettingsView`
+    /// now reads before it reports a wipe. The failure arm is deliberately not simulated
+    /// — forcing a Core Data save failure needs a contrived model — so what is pinned is
+    /// the fact the UI branches on: a clear that worked is legible as one.
+    @Test("A clear that lands reports that it destroyed data")
+    func aLandedClearReportsDestruction() {
+        let context = TestStore.makeContext()
+        seed(in: context)
+
+        let record = DataReset.clear(
+            .work, in: context, defaults: makeDefaults("landed"), at: location("landed"))
+
+        #expect(record.destroyedData)
+        #expect(count("TaskItem", in: context) == 0)
     }
 
 }
