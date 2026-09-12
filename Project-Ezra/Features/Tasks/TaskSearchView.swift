@@ -66,7 +66,9 @@ struct TaskSearchView: View {
                                     stepProgress: task.stepProgress(among: tasks),
                                     ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                                     ownerPhotoData: task.ownerPhotoData(among: othersRoster),
-                                    interactive: !task.status.isResolved,
+                                    interactive: !task.status.isResolved
+                                        && task.recommendedAction(
+                                            among: tasks, currentUserID: currentUserID) != nil,
                                     // A hit that is a step of something says so — "hotel"
                                     // finds "Book the hotel / Part of Trip to Lagos".
                                     subtitle: outcomeSubtitle(for: task, among: tasks),

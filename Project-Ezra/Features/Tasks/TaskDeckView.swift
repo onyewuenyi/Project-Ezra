@@ -264,15 +264,16 @@ struct TaskDeckView: View {
     /// "not yours to advance" holds in the household's shared scope whether the row is
     /// loose or in a deck.
     private func card(_ task: TaskItem) -> some View {
-        TaskRow(
+        let advanceable = task.recommendedAction(among: allTasks, currentUserID: currentUserID) != nil
+        return TaskRow(
             task: task,
             allTasks: allTasks,
-            glyphInteractive: task.recommendedAction(among: allTasks, currentUserID: currentUserID)
-                != nil,
+            glyphInteractive: advanceable,
             blockerSummary: blockerSummary(task),
             stepProgress: task.stepProgress(among: allTasks),
             ownerDisplayName: ownerDisplayName(task),
             ownerPhotoData: ownerPhotoData(task),
+            interactive: advanceable,
             subtitle: blockerSummary(task),
             onComplete: { onComplete(task) },
             onCancel: onCancel.map { cb in { cb(task) } },

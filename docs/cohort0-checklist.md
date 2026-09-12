@@ -156,7 +156,9 @@ file. See *Keeping this file current* at the bottom.
   renders every owner's tasks and the unowned; a row that is not yours carries the owner's
   avatar (or the dashed unassigned ring), the leading swipe is ABSENT on someone else's task
   (`recommendedAction` is nil there), and the title reads "Our Tasks". A row in Everyone with
-  no way to tell whose it is, or a swipe that advances someone else's task, is a finding.
+  no way to tell whose it is, or a swipe, long-press menu or deck glyph that advances
+  someone else's task, is a finding — the three row-level lifecycle channels follow one
+  rule, `recommendedAction != nil` (2026-09-12).
 - **A group's front card is always actionable, and its umbrella is never a card.** A deck
   (`TaskDeckView`, 2026-09-12) leads with the first member that waits on nothing; a blocked
   step leading while an open one exists, an umbrella rendered as a card while it has open

@@ -225,7 +225,11 @@ struct TaskLaneEntryView: View {
                 stepProgress: stepProgress,
                 ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                 ownerPhotoData: task.ownerPhotoData(among: othersRoster),
-                interactive: !resolved,
+                // The long-press menu follows the swipe's rule: absent on someone else's
+                // task ("not yours to advance" — its proxy moves live in the detail's
+                // menu), so the three row-level lifecycle channels agree in Everyone.
+                interactive: !resolved
+                    && task.recommendedAction(among: allTasks, currentUserID: currentUserID) != nil,
                 // A step standing alone — its deck dissolved by a filter, or its umbrella
                 // resolved — says which outcome it belongs to; inside a deck the caption
                 // says it once for every card.
