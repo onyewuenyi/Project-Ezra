@@ -335,9 +335,10 @@ struct AssignedSectionsView: View {
                 .metadataStyle()
                 .textCase(.uppercase)
                 .tracking(0.6)
-            Text("\(section.entries.count)")
+            Text("\(section.taskCount)")
                 .metadataStyle()
                 .monospacedDigit()
+                .contentTransition(.numericText())
             Spacer(minLength: 0)
         }
         .padding(.bottom, Spacing.xxs)

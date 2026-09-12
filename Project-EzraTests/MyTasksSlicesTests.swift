@@ -74,6 +74,22 @@ struct MyTasksSlicesTests {
         #expect(ledger.hiddenCount == 2)
     }
 
+    @Test("A section's count is its tasks, not its entries — a deck counts its cards")
+    func sectionCountsTasks() {
+        let me = UUID()
+        let trip = TaskItem(title: "Trip", status: .todo, ownerID: me)
+        let a = TaskItem(title: "a", status: .todo, ownerID: me)
+        let b = TaskItem(title: "b", status: .todo, ownerID: me)
+        for step in [a, b] { step.linkParent(trip.uuid!) }
+        let loose = TaskItem(title: "loose", status: .todo, ownerID: me)
+        let sections = MyTasksSlices.assigned(tasks: [trip, a, b, loose], currentUserID: me)
+        #expect(sections.count == 1)
+        // Two entries (the deck and the loose task); three tasks a person can act on. The
+        // umbrella is the deck's caption, not a card, so it is not counted.
+        #expect(sections[0].entries.count == 2)
+        #expect(sections[0].taskCount == 3)
+    }
+
     @Test("Needs Decision floats to the top within its section")
     func needsDecisionFloatsInSection() {
         let me = UUID()

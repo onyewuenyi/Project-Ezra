@@ -84,6 +84,20 @@ struct TaskDeckView: View {
 
     private var title: String { chain.umbrella?.title ?? "Linked tasks" }
 
+    /// The OUTCOME's deadline — the umbrella's due date, in the row's compact vocabulary.
+    /// Hiding the umbrella row hid the one date that explains why its steps matter; the
+    /// caption is where it belongs now. Nil for a bare chain or an undated outcome.
+    private var outcomeDue: DueLabel? {
+        chain.umbrella.flatMap { DueLabel.make(for: $0, style: .compact) }
+    }
+
+    /// Members that are waiting on something — a blocker inside the deck or a wait in the
+    /// world. Named as a count rather than surfaced as a card: the deck leads with what can
+    /// move, and "1 waiting" says the rest without pushing a stuck task to the front.
+    private var waitingCount: Int {
+        members.count { $0.hasActiveBlockers(among: allTasks) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             caption
@@ -105,7 +119,26 @@ struct TaskDeckView: View {
                 .textCase(.uppercase)
                 .tracking(0.6)
                 .lineLimit(1)
+            if let due = outcomeDue {
+                Text("·")
+                    .metadataStyle()
+                Text(due.text)
+                    .font(.chipLabel)
+                    .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
             Spacer(minLength: Spacing.sm)
+            if waitingCount > 0 {
+                Text("\(waitingCount) waiting")
+                    .font(.chipLabel)
+                    .foregroundStyle(Palette.mutedText)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                Text("·")
+                    .metadataStyle()
+            }
             Text("\(shownIndex + 1)/\(members.count)")
                 .metadataStyle()
                 .monospacedDigit()
@@ -116,10 +149,19 @@ struct TaskDeckView: View {
         // including the done ones this deck no longer shows.
         .onTapGesture { if let umbrella = chain.umbrella { onOpen(umbrella) } }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            "\(title), \(members.count) tasks left, showing \(shownIndex + 1)")
+        .accessibilityLabel(captionAccessibilityLabel)
         .accessibilityAddTraits(chain.umbrella == nil ? [] : .isButton)
         .accessibilityHint(chain.umbrella == nil ? "" : "Opens the outcome")
+    }
+
+    private var captionAccessibilityLabel: String {
+        var parts = [title]
+        if let due = chain.umbrella.flatMap({ DueLabel.make(for: $0, style: .full) }) {
+            parts.append(due.isOverdue ? due.text : "due \(due.text)")
+        }
+        parts.append("\(members.count) tasks left, showing \(shownIndex + 1)")
+        if waitingCount > 0 { parts.append("\(waitingCount) waiting") }
+        return parts.joined(separator: ", ")
     }
 
     // MARK: - The deck
@@ -138,6 +180,11 @@ struct TaskDeckView: View {
         .scrollTargetBehavior(.viewAligned)
         .scrollPosition(id: $shownID)
         .scrollIndicators(.hidden)
+        // A page landing is a selection — the same light tick a picker gives, so the
+        // hard edges and the snap read as an ordered workflow under the thumb rather than
+        // a carousel that merely stopped. Never on the advance a completion causes: that
+        // moment already has the success haptic, and `shownID` resets to nil there.
+        .sensoryFeedback(.selection, trigger: shownID) { _, new in new != nil }
         // Bleed into the gutter so the card chrome sits outside the row's content and the
         // glyph column stays aligned with every other row (see the header).
         .padding(.horizontal, -Spacing.md)
@@ -146,11 +193,17 @@ struct TaskDeckView: View {
 
     /// One card: the member as a real `TaskRow` in the card chrome, the glyph its
     /// completion target, no lifecycle swipes — horizontal is navigation here.
+    ///
+    /// The glyph is a control under the SAME rule as the plain row's leading swipe:
+    /// present exactly when `recommendedAction` is — absent on someone else's task, so
+    /// "not yours to advance" holds in the household's shared scope whether the row is
+    /// loose or in a deck.
     private func card(_ task: TaskItem) -> some View {
         TaskRow(
             task: task,
             allTasks: allTasks,
-            glyphInteractive: true,
+            glyphInteractive: task.recommendedAction(among: allTasks, currentUserID: currentUserID)
+                != nil,
             blockerSummary: blockerSummary(task),
             stepProgress: task.stepProgress(among: allTasks),
             ownerDisplayName: ownerDisplayName(task),

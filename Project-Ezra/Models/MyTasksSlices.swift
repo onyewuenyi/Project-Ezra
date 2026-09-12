@@ -136,6 +136,18 @@ struct MyTasksSection: Identifiable {
     var hiddenCount: Int = 0
 
     var id: String { status.rawValue }
+
+    /// How many TASKS the section holds on screen — a deck counts its cards, not itself.
+    /// The header used to count entries, so "TODO 4" could be six tasks with a group of
+    /// three among them; the number a person reads against their plate is the tasks.
+    var taskCount: Int {
+        entries.reduce(0) { total, entry in
+            switch entry {
+            case .single: return total + 1
+            case .chain(let chain): return total + chain.deckMembers.count
+            }
+        }
+    }
 }
 
 enum MyTasksSlices {
