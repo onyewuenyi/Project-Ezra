@@ -15,6 +15,38 @@ import Testing
 @Suite("TaskChainGrouping")
 struct TaskChainGroupingTests {
 
+    @Test(
+        "PrerequisiteIndex answers exactly what activeBlockerTasks + openSteps answer, on a random graph"
+    )
+    func prerequisiteIndexParity() {
+        // The index is `prerequisites(of:within:)`'s implementation — built once per set
+        // rather than once per question — so it must be indistinguishable from the two
+        // accessors it replaced on every member, in the same order. Randomised so a
+        // case nobody authored (a resolved blocker, a step under a resolved parent, a
+        // task blocked by its own step) is exercised as well as the obvious ones.
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<20 {
+            var tasks: [TaskItem] = []
+            for i in 0..<24 {
+                let status: TaskStatus = Int.random(in: 0..<5, using: &generator) == 0 ? .done : .todo
+                tasks.append(TaskItem(title: "t\(i)", status: status, confidence: 0.9))
+            }
+            for task in tasks {
+                if Int.random(in: 0..<3, using: &generator) == 0 {
+                    task.addTaskBlocker(tasks.randomElement(using: &generator)!.uuid!, among: tasks)
+                }
+                if Int.random(in: 0..<3, using: &generator) == 0 {
+                    task.linkParent(tasks.randomElement(using: &generator)!.uuid!)
+                }
+            }
+            let index = TaskChainGrouping.PrerequisiteIndex(tasks)
+            for task in tasks {
+                let expected = task.activeBlockerTasks(among: tasks) + task.openSteps(among: tasks)
+                #expect(index.prerequisites(of: task).map(\.objectID) == expected.map(\.objectID))
+            }
+        }
+    }
+
     @Test("A standalone task with no dependency links is loose, not a chain")
     func standaloneIsLoose() {
         let task = TaskItem(title: "Water the plants", status: .todo, confidence: 0.9)

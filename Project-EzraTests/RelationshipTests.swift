@@ -22,6 +22,27 @@ struct RelationshipTests {
 
     // MARK: - Blocker-bridge parity
 
+    @Test("The decode cache never outlives the bytes: a blob written past the setter is re-read")
+    func decodeCacheFollowsTheBytes() {
+        // `relationships` decodes once per blob and serves the decode while the stored
+        // bytes still equal the ones it came from. A CloudKit merge or a `refresh` writes
+        // `relationshipsData` without touching the setter, so the cache must be keyed on
+        // the BYTES, not on "has the setter run" — this simulates exactly that write.
+        let target = TaskItem(title: "passport", status: .todo)
+        let other = TaskItem(title: "visa", status: .todo)
+        let task = TaskItem(title: "flights", status: .todo)
+        let all = [target, other, task]
+        task.addTaskBlocker(target.uuid!, among: all)
+        #expect(task.taskBlockerIDs == [target.uuid!])
+
+        let foreign = RelationshipStore.encode([.blocks(taskID: other.uuid!, origin: .human)])
+        task.setValue(foreign, forKey: "relationshipsData")
+        #expect(task.taskBlockerIDs == [other.uuid!])
+
+        task.setValue(nil, forKey: "relationshipsData")
+        #expect(task.relationships.isEmpty)
+    }
+
     @Test("A tracked blocker is durable: it survives the target completing and re-blocks on reopen")
     func durableListReopen() {
         let target = TaskItem(title: "passport", status: .todo)

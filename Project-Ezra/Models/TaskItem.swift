@@ -315,6 +315,13 @@ final class TaskItem: NSManagedObject {
     /// never written — mutations add/remove a `.blocks` edge and the assessment
     /// derives it on read, so "blocked with nothing blocking it" is unrepresentable.
     @NSManaged private var relationshipsData: Data?
+    /// The last decode of `relationshipsData`, kept beside the bytes it came from. A
+    /// plain Swift ivar, not a Core Data attribute — never persisted, never merged, and
+    /// it holds no truth of its own: the getter serves it only while the stored bytes
+    /// still equal the bytes it was decoded from, so a value written by another context
+    /// (a CloudKit merge, a refresh) can never be answered with a stale decode. See
+    /// `relationships` for why it exists.
+    private var decodedRelationships: (data: Data, edges: [Relationship])?
 
     // Deferral + engagement facts. FACTS, not reasoning — they live here with the
     // other facts, never inside the attention metadata blob. Written by the Today
@@ -662,14 +669,32 @@ extension TaskItem {
     /// assign outside `Models/`** — every write must funnel through a
     /// `TaskMutations` helper (the mutation choke point, the same law as the
     /// `status` setter).
+    ///
+    /// **Decoded once per blob, not once per read (2026-09-12).** Every derived view of
+    /// the graph — `children`, `openSteps`, `stepProgress`, `activeBlockers`, `dependents`
+    /// — answers by asking every OTHER task for its edges, and the list asks those
+    /// questions per task to group chains and per visible row to draw indicators. With
+    /// the decode on every read that was O(n²) JSON decodes per render pass of My Tasks:
+    /// measured at 140ms for one slice of a 240-task store (Debug, simulator), paid on the
+    /// main thread every time any task changed. The cache keys on the BYTES, compared
+    /// before it is served — a `Data` equality is a length check and a memcmp on a blob of
+    /// a few hundred bytes, and nil for the overwhelmingly common task with no edges —
+    /// so it is exactly as truthful as the stored value and costs nothing to invalidate.
     var relationships: [Relationship] {
         get {
             guard let relationshipsData else { return [] }
-            return RelationshipStore.decode(relationshipsData)
+            if let cached = decodedRelationships, cached.data == relationshipsData {
+                return cached.edges
+            }
+            let edges = RelationshipStore.decode(relationshipsData)
+            decodedRelationships = (relationshipsData, edges)
+            return edges
         }
         set {
             Relationship.validate(newValue, owner: uuid)
-            relationshipsData = RelationshipStore.encode(newValue)
+            let data = RelationshipStore.encode(newValue)
+            relationshipsData = data
+            decodedRelationships = data.map { ($0, newValue) }
         }
     }
 

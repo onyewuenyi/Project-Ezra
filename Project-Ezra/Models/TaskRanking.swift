@@ -170,7 +170,10 @@ enum TaskRanking {
                 neighborDueDates: neighborDueDates)
             keys[id] = RankKey(
                 needsDecision: task.needsDecision && !task.status.isResolved,
-                isBlocked: task.hasActiveBlockers(among: tasks),
+                // The open set is already in hand — `hasActiveBlockers(among:)` would
+                // rebuild it for every task that has an edge.
+                isBlocked: !TaskItem.activeBlockers(from: task.relationships, openIDs: openIDs)
+                    .isEmpty,
                 effectiveAttention: task.attention.score + relevance,
                 isBlocking: blockingIDs.contains(id) && !task.status.isResolved,
                 isOverdue: task.isOverdue(now: now),

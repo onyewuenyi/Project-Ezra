@@ -82,10 +82,14 @@ enum TaskChainGrouping {
 
         // Undirected adjacency: an edge between a task and everything inside this set
         // that has to come before it — its active blockers AND its own open steps.
+        // ONE index over the set, then one lookup per task: asking `prerequisites(of:
+        // within:)` per task rebuilt that index per task, which made grouping O(n²) over
+        // the whole working set on every render of My Tasks.
+        let index = PrerequisiteIndex(tasks)
         var adjacency: [UUID: Set<UUID>] = [:]
         for task in tasks {
             guard let id = task.uuid else { continue }
-            for earlier in prerequisites(of: task, within: tasks) {
+            for earlier in index.prerequisites(of: task) {
                 guard let earlierID = earlier.uuid else { continue }
                 adjacency[id, default: []].insert(earlierID)
                 adjacency[earlierID, default: []].insert(id)
@@ -134,7 +138,58 @@ enum TaskChainGrouping {
     /// tasks for display, is what lets a breakdown render as a single stack with its steps
     /// in front, without the umbrella having to pretend it is blocked.
     static func prerequisites(of task: TaskItem, within set: [TaskItem]) -> [TaskItem] {
-        task.activeBlockerTasks(among: set) + task.openSteps(among: set)
+        PrerequisiteIndex(set).prerequisites(of: task)
+    }
+
+    /// The set, indexed once, so `prerequisites(of:)` is a lookup rather than a scan.
+    ///
+    /// This is `prerequisites(of:within:)`'s implementation — the join of the two graphs
+    /// still happens in exactly one place, it is just built once per set instead of once
+    /// per question. Answers are identical to `activeBlockerTasks(among:)` +
+    /// `openSteps(among:)` over the same set, in the same order (blockers in set order,
+    /// then steps in breakdown order), which `TaskChainGroupingTests` holds it to.
+    struct PrerequisiteIndex {
+        private let openIDs: Set<UUID>
+        /// Every open task keyed by uuid, with its position in the set — blockers are
+        /// returned in SET order, as the filter they replace did.
+        private let open: [UUID: (task: TaskItem, position: Int)]
+        /// Each parent's still-open steps, in breakdown order (`children(among:)`'s
+        /// ordering — `sortIndex`, then `createdAt`, then uuid).
+        private let openStepsByParent: [UUID: [TaskItem]]
+
+        init(_ set: [TaskItem]) {
+            var open: [UUID: (task: TaskItem, position: Int)] = [:]
+            var steps: [UUID: [TaskItem]] = [:]
+            for (position, task) in set.enumerated() where !task.status.isResolved {
+                guard let id = task.uuid else { continue }
+                open[id] = (task, position)
+                if let parentID = task.parentTaskID {
+                    steps[parentID, default: []].append(task)
+                }
+            }
+            self.open = open
+            self.openIDs = Set(open.keys)
+            self.openStepsByParent = steps.mapValues { siblings in
+                siblings.sorted {
+                    ($0.sortIndex, $0.createdAt, $0.uuid?.uuidString ?? "")
+                        < ($1.sortIndex, $1.createdAt, $1.uuid?.uuidString ?? "")
+                }
+            }
+        }
+
+        func prerequisites(of task: TaskItem) -> [TaskItem] {
+            let edges = task.relationships
+            var blockers: [TaskItem] = []
+            if edges.contains(where: { $0.kind == .blocks }) {
+                let blockerIDs = Set(
+                    TaskItem.activeBlockers(from: edges, openIDs: openIDs).compactMap(\.taskID))
+                blockers = blockerIDs.compactMap { open[$0] }
+                    .sorted { $0.position < $1.position }
+                    .map(\.task)
+            }
+            let steps = task.uuid.flatMap { openStepsByParent[$0] } ?? []
+            return blockers + steps
+        }
     }
 
     /// Kahn's algorithm: each layer is every not-yet-placed member whose prerequisites

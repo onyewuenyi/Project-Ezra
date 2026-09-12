@@ -1037,14 +1037,17 @@ struct ComposerView: View {
             // and a capsule whose label wraps to two lines ("Speak / instead", "Add a /
             // photo") reads as a rendering fault on the product's front door. Every label
             // is single-line and fixed-width, so a candidate that would wrap is one that
-            // does not fit — and the row degrades in the order the labels earn their
-            // room: full labels, then the posture chip to its glyph (its meaning is in
-            // its accessibility label and in Settings either way), then the two verbs
-            // to their short forms. "Speak instead" survives wherever it fits.
+            // does not fit — and the row degrades in the order the labels EARN their
+            // room. The posture label goes last: "Read anywhere" / "On device" is the
+            // privacy posture in the person's own words (F-03), and a bare padlock is not
+            // that sentence. The mic and the photo are universal glyphs, both already
+            // carry accessibility labels, so they yield first. "Speak instead" survives
+            // wherever it fits.
             ViewThatFits(in: .horizontal) {
                 inputModeRow(mic: canSubmit ? "Speak instead" : "Speak", photo: "Add a photo", postureLabelled: true)
-                inputModeRow(mic: canSubmit ? "Speak instead" : "Speak", photo: "Add a photo", postureLabelled: false)
-                inputModeRow(mic: "Speak", photo: "Photo", postureLabelled: false)
+                inputModeRow(mic: "Speak", photo: "Photo", postureLabelled: true)
+                inputModeRow(mic: nil, photo: nil, postureLabelled: true)
+                inputModeRow(mic: nil, photo: nil, postureLabelled: false)
             }
             // Ramble appears only once there is something to ramble about. A disabled
             // primary button on an empty canvas is a dead affordance occupying the
@@ -1068,7 +1071,8 @@ struct ComposerView: View {
     }
 
     /// One candidate width of the input-mode row. See the `ViewThatFits` in `captureBar`.
-    private func inputModeRow(mic: String, photo: String, postureLabelled: Bool) -> some View {
+    /// A nil label is the glyph-only form of that capsule.
+    private func inputModeRow(mic: String?, photo: String?, postureLabelled: Bool) -> some View {
         HStack(spacing: Spacing.sm) {
             micButton(mic)
             imageButton(photo)
@@ -2005,9 +2009,11 @@ struct ComposerView: View {
     /// the mic feed, so the rolling parse needs no new path.
     private var imageButton: some View { imageButton("Add a photo") }
 
-    private func imageButton(_ title: String) -> some View {
+    /// Nil title = glyph only (the row's tightest widths).
+    private func imageButton(_ title: String?) -> some View {
         PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
-            Label(readingImage ? "Reading…" : title, systemImage: "photo")
+            Label(readingImage ? "Reading…" : (title ?? "Add a photo"), systemImage: "photo")
+                .labelStyle(CapsuleLabelStyle(iconOnly: title == nil && !readingImage))
                 .font(.controlLabel)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -2116,7 +2122,8 @@ struct ComposerView: View {
         }
     }
 
-    private func micButton(_ title: String) -> some View {
+    /// Nil title = glyph only (the row's tightest widths).
+    private func micButton(_ title: String?) -> some View {
         // Always the compact form: the way INTO voice is the orb the sheet opens on —
         // reaching this canvas means the user chose typing (or the mic can't lead),
         // so a full-width Speak here would argue with the landing they picked. It
@@ -2128,7 +2135,8 @@ struct ComposerView: View {
             beginListening(from: base.isEmpty ? "" : base + " ")
         } label: {
             // "Instead" only once there is something to do instead OF.
-            Label(title, systemImage: "mic.fill")
+            Label(title ?? "Speak", systemImage: "mic.fill")
+                .labelStyle(CapsuleLabelStyle(iconOnly: title == nil))
                 .font(.controlLabel)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -2365,4 +2373,22 @@ final class LiveParseState {
     ComposerView()
         .environment(AppBrain())
         .environment(\.managedObjectContext, PersistenceStack.scratch)
+}
+
+
+/// A `Label` that keeps its icon and drops its title on the input-mode row's tightest
+/// widths. A style rather than two `Label`s so the capsule's font, padding and height are
+/// written once; `ViewThatFits` picks which form renders.
+private struct CapsuleLabelStyle: LabelStyle {
+    let iconOnly: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        if iconOnly {
+            configuration.icon
+        } else {
+            HStack(spacing: Spacing.inline) {
+                configuration.icon
+                configuration.title
+            }
+        }
+    }
 }
