@@ -171,6 +171,27 @@ struct BreakdownSplitTests {
         #expect(!clean.message.contains("still open"))  // nothing left ⇒ nothing to say
     }
 
+    @Test("Resolving the LAST step names the outcome it readied; an earlier step does not")
+    func lastStepReadiesTheOutcome() throws {
+        let context = TestStore.makeContext()
+        let parent = TaskItem(title: "Trip to Lagos", status: .todo, in: context)
+        let created = parent.splitInto(steps(["Book flights", "Book the hotel"]), in: context)
+        let all = TaskItem.fetchAll(in: context)
+
+        created[0].complete()
+        #expect(readiedOutcome(after: created[0], among: all) == nil)
+
+        created[1].complete()
+        #expect(readiedOutcome(after: created[1], among: all) == "Trip to Lagos")
+        let notice = UndoNotice.resolution(
+            "Completed", created[1].title, readiedOutcome: readiedOutcome(after: created[1], among: all))
+        #expect(notice.message.contains("“Trip to Lagos” has no steps left"))
+
+        // A resolved umbrella has nothing to ready.
+        parent.complete()
+        #expect(readiedOutcome(after: created[1], among: all) == nil)
+    }
+
     // MARK: - Undo
 
     @Test("Undo removes the children and their edges, leaving the parent untouched")

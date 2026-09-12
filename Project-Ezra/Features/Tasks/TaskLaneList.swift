@@ -67,7 +67,8 @@ func completeTask(
     let unblocked = task.completeAndResurface(in: context)
     context.saveChanges()
     notice.wrappedValue = .resolution(
-        "Completed", task.title, unblocked: unblocked, steps: steps
+        "Completed", task.title, unblocked: unblocked, steps: steps,
+        readiedOutcome: readiedOutcome(after: task, among: tasks)
     ) {
         task.reopenAndReblock(in: context)
         context.saveChanges()
@@ -88,6 +89,19 @@ func cancelTask(
         task.reopenAndReblock(in: context)
         context.saveChanges()
     }
+}
+
+/// The outcome this step's resolution just readied — its parent's title when the parent is
+/// still open and now has no open steps left — or nil. Read AFTER the step resolved, so the
+/// step itself no longer counts as open.
+@MainActor
+func readiedOutcome(after step: TaskItem, among tasks: [TaskItem]) -> String? {
+    guard let parentID = step.parentTaskID,
+        let parent = tasks.first(where: { $0.uuid == parentID }),
+        !parent.status.isResolved,
+        parent.openSteps(among: tasks).isEmpty
+    else { return nil }
+    return parent.title
 }
 
 /// The leading swipe's action — **the same move the detail's pinned CTA would make**,

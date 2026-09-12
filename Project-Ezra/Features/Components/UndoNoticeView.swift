@@ -32,7 +32,7 @@ struct UndoNotice: Identifiable, Equatable {
     /// plainly meant.
     static func resolution(
         _ verb: String, _ title: String, unblocked: [TaskItem] = [],
-        steps: StepProgress? = nil, undo: (() -> Void)? = nil
+        steps: StepProgress? = nil, readiedOutcome: String? = nil, undo: (() -> Void)? = nil
     ) -> UndoNotice {
         var message = "\(verb) “\(title)”"
         if unblocked.count == 1 {
@@ -41,6 +41,10 @@ struct UndoNotice: Identifiable, Equatable {
             message += " — unblocked \(unblocked.count) tasks"
         }
         if let phrase = steps?.openStepsPhrase { message += " — \(phrase)" }
+        // The last step of an outcome: the umbrella has just surfaced from behind its
+        // deck, and this is the one place that says why — the pill is the receipt for a
+        // moment the list can only show as a row that wasn't there before.
+        if let readiedOutcome { message += " — “\(readiedOutcome)” has no steps left" }
         return UndoNotice(message: message, undoAction: undo)
     }
 }
