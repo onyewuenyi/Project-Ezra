@@ -61,6 +61,11 @@ struct TaskRow: View {
     /// queue entry. (It used to also mean "the leading glyph is a tappable state menu";
     /// the glyph is an indicator now, so this governs the menu alone.)
     var interactive: Bool = true
+    /// A second arrival: when this row SURFACED rather than was created. A container's
+    /// row is hidden behind its deck while steps remain and appears the moment the last
+    /// one resolves — the list passes that moment here so the row washes in exactly like
+    /// a just-confirmed one. Same window, same wash: a row that wasn't there a moment ago.
+    var surfacedAt: Date? = nil
     var onComplete: (() -> Void)? = nil
     var onCancel: (() -> Void)? = nil
     var onOpen: (() -> Void)? = nil
@@ -189,7 +194,9 @@ struct TaskRow: View {
             }
         )
         .onAppear {
-            guard Self.isFreshArrival(confirmedAt: task.confirmedAt) else { return }
+            guard Self.isFreshArrival(confirmedAt: task.confirmedAt)
+                || Self.isFreshArrival(confirmedAt: surfacedAt)
+            else { return }
             arrivalWash = true
             // Held long enough to be seen after the composer sheet finishes leaving, then
             // gone — a wash, never a badge. A fade is motion-safe, so Reduce Motion keeps it.

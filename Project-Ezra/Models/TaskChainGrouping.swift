@@ -66,6 +66,16 @@ extension TaskChain {
         }
     }
 
+    /// What the deck's caption calls the group. A named outcome is its umbrella's title. A
+    /// chain of bare blockers has no name, so its caption is its STORY — the members in
+    /// execution order, "Renew passport → Book flights → Request time off" — because the
+    /// only thing that made these one group is that each unlocks the next, and saying so
+    /// is more useful than the generic "Linked tasks" it replaced. One line; the caption
+    /// truncates the tail.
+    var groupTitle: String {
+        umbrella?.title ?? deckMembers.map(\.title).joined(separator: " → ")
+    }
+
     /// The cards the group pages through: every member but the umbrella, in execution
     /// order — the front card is `root`, the first member with nothing left to wait on, so
     /// a waiting member never leads while an actionable one exists.

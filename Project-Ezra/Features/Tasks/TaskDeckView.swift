@@ -82,7 +82,7 @@ struct TaskDeckView: View {
         members.firstIndex { $0.objectID == shownID } ?? 0
     }
 
-    private var title: String { chain.umbrella?.title ?? "Linked tasks" }
+    private var title: String { chain.groupTitle }
 
     /// The OUTCOME's deadline — the umbrella's due date, in the row's compact vocabulary.
     /// Hiding the umbrella row hid the one date that explains why its steps matter; the
@@ -119,6 +119,7 @@ struct TaskDeckView: View {
                 .textCase(.uppercase)
                 .tracking(0.6)
                 .lineLimit(1)
+                .truncationMode(.tail)
             if let due = outcomeDue {
                 Text("·")
                     .metadataStyle()
@@ -131,11 +132,16 @@ struct TaskDeckView: View {
             }
             Spacer(minLength: Spacing.sm)
             if waitingCount > 0 {
+                // Tappable: the deck never pushes a stuck card forward, but a person may
+                // ask to see it — a tap pages to the first waiting member. A child gesture
+                // wins over the caption's own tap, so this does not open the umbrella.
                 Text("\(waitingCount) waiting")
                     .font(.chipLabel)
                     .foregroundStyle(Palette.mutedText)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showFirstWaiting() }
                 Text("·")
                     .metadataStyle()
             }
@@ -152,6 +158,16 @@ struct TaskDeckView: View {
         .accessibilityLabel(captionAccessibilityLabel)
         .accessibilityAddTraits(chain.umbrella == nil ? [] : .isButton)
         .accessibilityHint(chain.umbrella == nil ? "" : "Opens the outcome")
+        .accessibilityActions {
+            if waitingCount > 0 { Button("Show what's waiting") { showFirstWaiting() } }
+        }
+    }
+
+    private func showFirstWaiting() {
+        guard let first = members.first(where: { $0.hasActiveBlockers(among: allTasks) }) else {
+            return
+        }
+        Motion.withMotion(Motion.settle) { shownID = first.objectID }
     }
 
     private var captionAccessibilityLabel: String {

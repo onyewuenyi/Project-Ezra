@@ -194,14 +194,19 @@ struct TaskLaneEntryView: View {
         switch entry {
         case .single(let task):
             let resolved = task.status.isResolved
+            let stepProgress = task.stepProgress(among: allTasks)
             TaskRow(
                 task: task,
                 allTasks: allTasks,
                 blockerSummary: task.blockerSummary(among: allTasks),
-                stepProgress: task.stepProgress(among: allTasks),
+                stepProgress: stepProgress,
                 ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                 ownerPhotoData: task.ownerPhotoData(among: othersRoster),
                 interactive: !resolved,
+                // An umbrella whose last step just resolved has just SURFACED from behind
+                // its deck; the wash marks it the way it marks a new row.
+                surfacedAt: stepProgress?.isComplete == true
+                    ? task.children(among: allTasks).compactMap(\.completedAt).max() : nil,
                 onComplete: resolved
                     ? nil : { completeTask(task, in: context, tasks: allTasks, notice: $notice) },
                 onCancel: resolved

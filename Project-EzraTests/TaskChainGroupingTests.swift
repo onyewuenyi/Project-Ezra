@@ -63,6 +63,7 @@ struct TaskChainGroupingTests {
         #expect(chains.count == 1)
         let chain = chains[0]
         #expect(chain.umbrella?.title == "Trip to Lagos")
+        #expect(chain.groupTitle == "Trip to Lagos")
         // The umbrella is never a card, and the front card is actionable: a step that
         // waits on another never leads while one that can move exists.
         #expect(!chain.deckMembers.contains { $0.objectID == trip.objectID })
@@ -78,6 +79,8 @@ struct TaskChainGroupingTests {
         let (chains, _) = TaskChainGrouping.computeChains(in: [b, a])
         #expect(chains[0].umbrella == nil)
         #expect(chains[0].deckMembers.count == 2)
+        // No name of its own, so the caption tells the chain's story in execution order.
+        #expect(chains[0].groupTitle == "a → b")
     }
 
     @Test("Nested containers: the top-most one names the group")
