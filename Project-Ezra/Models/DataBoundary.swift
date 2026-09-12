@@ -10,7 +10,7 @@
 //  name, or a paragraph of hedging. Three lines, one idea each:
 //
 //    1. your raw words may be understood in the cloud when Ezra needs to understand better
-//    2. only structured task information leaves for briefings and advice
+//    2. only structured task information leaves for advice
 //    3. your corrections and your history never leave this device
 //
 //  It is a value type rather than copy inlined in a view for the reason every policy in
@@ -29,7 +29,10 @@ import Foundation
 struct DataBoundary: Equatable {
     /// Where captures are understood.
     let capture: String
-    /// What the Brief and the Advisor send.
+    /// What the Advisor sends. (It said "the Brief and the Advisor" until 2026-09-11,
+    /// nine days after the Brief was cut — the `.onDevice` arm below had been updated and
+    /// the other two had not, which is how a promise about a feature that no longer exists
+    /// stayed on the one screen where the app states what leaves the device.)
     let judgment: String
     /// What never leaves, under any configuration.
     let never: String
@@ -57,7 +60,7 @@ struct DataBoundary: Equatable {
         guard cloudReachable else {
             return DataBoundary(
                 capture: "Everything you capture is understood on this device.",
-                judgment: "Nothing is sent anywhere to prepare your brief or your advice.",
+                judgment: "Nothing is sent anywhere to prepare your advice.",
                 never: "Your corrections and your history never leave this device.")
         }
         return DataBoundary(
@@ -76,7 +79,7 @@ struct DataBoundary: Equatable {
             // genuinely needs the verbatim words (there is no snapshot-shaped version of a
             // brain dump); judgment does not, and never gets them.
             judgment:
-                "To prepare your brief and your advice, only structured task information "
+                "To prepare your advice, only structured task information "
                 + "goes out — titles, dates and flags, never your raw notes.",
             never: "Your corrections and your history never leave this device.")
     }

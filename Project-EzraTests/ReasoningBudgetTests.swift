@@ -278,6 +278,23 @@ struct DataBoundaryTests {
         }
     }
 
+    /// The privacy surface must not promise a feature that no longer exists. This copy
+    /// said "to prepare your brief and your advice" for nine days after the Brief was cut
+    /// — and the `.onDevice` arm right beside it had already been updated, so one arm was
+    /// current and two were stale on the one screen where the app states what leaves the
+    /// device. Named features are checkable; that is the point of this being a value type.
+    @Test("The copy names no feature the product no longer has")
+    func copyNamesNoCutFeature() {
+        for posture in CapturePosture.allCases {
+            for reachable in [true, false] {
+                let joined = DataBoundary.current(cloudReachable: reachable, posture: posture)
+                    .sentences.joined(separator: " ").lowercased()
+                #expect(!joined.contains("brief"), "the Brief was cut on 2026-09-02")
+                #expect(!joined.contains("briefing"))
+            }
+        }
+    }
+
     @Test("The online sentence states BOTH halves — what stays and what goes")
     func onlineCopyNamesTheTransmission() {
         // The failure this guards is drift toward comfort, not toward falsehood. The
