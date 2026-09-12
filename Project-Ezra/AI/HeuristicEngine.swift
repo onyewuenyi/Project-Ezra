@@ -103,7 +103,13 @@ struct HeuristicEngine: AIEngine {
         let lower = line.lowercased()
         let category = category(for: lower)
         let judgment = isJudgmentCall(lower)
-        let blocked = isBlocked(lower)
+        // **One source of truth for "is this blocked": the phrase.** These used to be
+        // two answers — `isBlocked` for the reasoning line and the confidence band, the
+        // phrase for the wait itself — so a line that read as blocked but yielded no
+        // usable phrase was explained to the user as "it depends on something else
+        // finishing first" while recording nothing to depend on.
+        let wait = blockerPhrase(from: lower)
+        let blocked = wait != nil
         // Confidence: strong keyword hit → higher; generic line → medium; ambiguous → low.
         let confidence: Double = {
             if judgment { return 0.4 }
@@ -134,7 +140,7 @@ struct HeuristicEngine: AIEngine {
             category: category,
             dateExpression: dateExpression(from: lower),
             personReference: owner,
-            blockerPhrase: blocked ? blockerPhrase(from: lower) : nil,
+            blockerPhrase: wait,
             confidence: confidence,
             isJudgmentCall: judgment,
             reasoning: reasoning,
@@ -263,6 +269,18 @@ struct HeuristicEngine: AIEngine {
     /// Extract what the task is waiting on: the phrase following the dependency
     /// signal, with trailing resolution words ("is done", "finishes") stripped so
     /// it can be matched against a completed task's title later.
+    /// Extract what the task is waiting on — or nil, including when the sentence READS
+    /// blocked but names nothing to wait for.
+    ///
+    /// **A pronoun is not a blocker.** "Book flights for the trip after that" used to
+    /// yield a wait on `that`, and the cost of that wait is entirely one-sided: the task
+    /// renders Blocked, recesses, sinks under `TaskRanking`'s blocked band, opens the
+    /// Advisor's `.blocked` gate, and can NEVER resolve — nothing will ever match a
+    /// demonstrative, so only a human clearing it by hand ends it. Against that, the
+    /// information given up by declining is a dependency the phrase never carried in the
+    /// first place. The referent it points at is a neighbouring capture, and finding it
+    /// is the duplicate/child retrieval's job (an `EdgeProposal` between real tasks),
+    /// not a lexical extractor's.
     static func blockerPhrase(from lower: String) -> String? {
         for signal in blockSignals {
             guard let range = signalRange(signal, in: lower) else { continue }
@@ -277,10 +295,27 @@ struct HeuristicEngine: AIEngine {
                 break
             }
             let trimmed = phrase.trimmingCharacters(in: .whitespaces)
-            return trimmed.count > 1 ? trimmed : nil
+            guard trimmed.count > 1, namesSomething(trimmed) else { return nil }
+            return trimmed
         }
         return nil
     }
+
+    /// Does this phrase name a thing that could ever be waited on? A determiner and a
+    /// pronoun carry no referent, so "after that" / "once it" / "depends on them" name
+    /// nothing — and a phrase that is ONLY those words can never match a task title.
+    /// Returns on the first content word, so a real phrase that merely starts with one
+    /// ("the passport renewal") passes.
+    private static func namesSomething(_ phrase: String) -> Bool {
+        phrase.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .contains { !contentlessWords.contains(String($0).lowercased()) }
+    }
+
+    private static let contentlessWords: Set<String> = [
+        "that", "this", "these", "those", "it", "its", "them", "they", "he", "she", "him",
+        "her", "the", "a", "an", "all", "everything", "stuff", "things", "one", "ones",
+        "is", "are", "was", "were", "be", "been", "and", "then", "up", "done", "over",
+    ]
 
     // MARK: - Metadata extraction (priority / owner / effort)
 

@@ -112,6 +112,44 @@ struct HeuristicEngineTests {
         #expect(HeuristicEngine.blockerPhrase(from: "submit expenses waiting on receipts") == "receipts")
     }
 
+    /// A demonstrative names nothing that can ever be matched, so a wait on it can only
+    /// ever be cleared by hand — while the task recesses, sinks under the blocked band
+    /// and opens the Advisor's blocked gate the whole time. The cost is entirely
+    /// one-sided, so the extractor declines.
+    @Test("A pronoun is not a blocker — a wait that names nothing is no wait")
+    func contentlessWaitsAreDeclined() {
+        for line in [
+            "book flights for the trip after that",
+            "send the invoice once it is done",
+            "order the parts depends on them",
+            "reply to the email after the",
+        ] {
+            #expect(
+                HeuristicEngine.intent(from: line).blockerPhrase == nil,
+                "\(line) recorded a wait that names nothing")
+        }
+        // A real phrase that merely BEGINS with a determiner still passes — the check is
+        // "does any word carry content", not "is the first word a noun".
+        #expect(HeuristicEngine.blockerPhrase(from: "book flights after the passport") == "the passport")
+        #expect(
+            HeuristicEngine.blockerPhrase(from: "call the vet once the results are in")
+                == "the results are in")
+    }
+
+    /// The reasoning line and the recorded wait used to be decided separately, so a line
+    /// that read as blocked but yielded no usable phrase told the user "it depends on
+    /// something else finishing first" while recording nothing to depend on.
+    @Test("The explanation never claims a dependency the draft does not carry")
+    func reasoningAgreesWithTheWait() {
+        let phantom = HeuristicEngine.intent(from: "book flights for the trip after that")
+        #expect(phantom.blockerPhrase == nil)
+        #expect(!phantom.reasoning.contains("depends on something else"))
+
+        let real = HeuristicEngine.intent(from: "book flights after passport is done")
+        #expect(real.blockerPhrase == "passport")
+        #expect(real.reasoning.contains("depends on something else"))
+    }
+
     @Test("Dependency keywords never match inside other words")
     func blockedNeedsWordBoundary() {
         let intent = HeuristicEngine.intent(from: "clean the rafters")
