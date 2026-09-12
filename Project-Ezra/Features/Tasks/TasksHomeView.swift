@@ -36,6 +36,15 @@ struct TasksHomeView: View {
     @State private var selectedTask: TaskItem?
     @State private var notice: UndoNotice?
     @Namespace private var tabPill
+    /// The header's measured widths — the row, the ownership pills, and what the filter
+    /// capsule would take WITH its summary — so `filterShowsSummary` is arithmetic. See
+    /// `filterControl` for why this is measured rather than left to `ViewThatFits`.
+    @State private var pillsWidth: CGFloat = 0
+    @State private var labelledFilterWidth: CGFloat = 0
+    /// The header row's own height, so the `GeometryReader` that hosts it (see
+    /// `headerRow`) can be given a frame: a reader is greedy, and without this it would
+    /// take the whole screen. Starts at the row's floor and follows Dynamic Type.
+    @State private var headerRowHeight: CGFloat = LayoutMetrics.tasksHeaderRow
 
     private var tasks: [TaskItem] { Array(tasksResults) }
     private var members: [FamilyMember] { Array(membersResults) }
@@ -53,8 +62,11 @@ struct TasksHomeView: View {
     private var showsTabs: Bool { MyTasksHeader.showsTabs(othersRoster: othersRoster.count) }
 
     /// Both header decisions come from the contract, never from view nesting — and so
-    /// does what the screen calls itself.
-    private var title: String { MyTasksHeader.title(othersRoster: othersRoster.count) }
+    /// does what the screen calls itself: "Our Tasks" over Everyone, "My Tasks" over
+    /// the two scopes that are yours.
+    private var title: String {
+        MyTasksHeader.title(othersRoster: othersRoster.count, tab: effectiveTab)
+    }
 
     /// The visible tab's rows, sliced once.
     ///
@@ -64,14 +76,15 @@ struct TasksHomeView: View {
     /// redraw of the record surface paid for two complete ranking passes over every task
     /// the user owns. `body` resolves this once and passes it to both.
     private enum VisibleSlice {
-        case assigned([MyTasksSection])
+        /// Assigned and Everyone — the same sectioned render over a different scope.
+        case sectioned([MyTasksSection], scope: MyTasksTab)
         case created([TaskLaneEntry])
 
         /// What the detail pages through: exactly the rows on screen, in order, with
         /// chain stacks unrolled root-first.
         var peers: [TaskItem] {
             switch self {
-            case .assigned(let sections): return TaskDetailPeers.flatten(sections)
+            case .sectioned(let sections, _): return TaskDetailPeers.flatten(sections)
             case .created(let entries): return TaskDetailPeers.flatten(entries)
             }
         }
@@ -85,10 +98,15 @@ struct TasksHomeView: View {
     private var visibleSlice: VisibleSlice {
         switch effectiveTab {
         case .assigned:
-            return .assigned(
+            return .sectioned(
                 MyTasksSlices.assigned(
                     tasks: tasks, currentUserID: currentUserID, status: statusFilter,
-                    category: categoryFilter))
+                    category: categoryFilter), scope: .assigned)
+        case .everyone:
+            return .sectioned(
+                MyTasksSlices.everyone(
+                    tasks: tasks, status: statusFilter, category: categoryFilter),
+                scope: .everyone)
         case .created:
             return .created(
                 MyTasksSlices.createdEntries(
@@ -111,10 +129,11 @@ struct TasksHomeView: View {
 
                 Group {
                     switch slice {
-                    case .assigned(let sections):
+                    case .sectioned(let sections, let scope):
                         AssignedSectionsView(
                             sections: sections, allTasks: tasks, othersRoster: othersRoster,
                             currentUserID: currentUserID,
+                            scope: scope,
                             searchIsActive: filtersActive,
                             filteredEmptyMessage: filteredEmptyMessage,
                             onShowAll: { status in
@@ -257,15 +276,39 @@ struct TasksHomeView: View {
     /// content column, rather than floating in an otherwise empty corner. With tabs it
     /// yields the lead to them and trails, because ownership is the coarser question.
     private var headerRow: some View {
+        // Hosted in a `GeometryReader` for ONE number: the width the row is OFFERED. A
+        // row of one-line pills grows past its proposal rather than shrinking, and every
+        // view sized by it — the row, its padding, a `Color` sibling in a ZStack (placed
+        // with the stack's final size) — reports the overflow, so the summary would
+        // never learn it has to yield. A reader is sized by its proposal alone. Its
+        // height follows the row's measured height, because a reader is otherwise greedy.
+        GeometryReader { proxy in
+            headerRowContent(offeredWidth: proxy.size.width)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    headerRowHeight = $0
+                }
+        }
+        .frame(height: headerRowHeight)
+    }
+
+    private func headerRowContent(offeredWidth: CGFloat) -> some View {
         HStack(spacing: Spacing.sm) {
             if showsTabs {
-                ForEach(MyTasksTab.allCases) { candidate in
-                    tabButton(candidate)
+                HStack(spacing: Spacing.sm) {
+                    ForEach(MyTasksTab.allCases) { candidate in
+                        tabButton(candidate)
+                    }
                 }
-                Spacer(minLength: Spacing.sm)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                    pillsWidth = $0
+                }
+                // No floor of its own: the stack's two gaps already keep 24pt between
+                // the pills and the filter, and a third `sm` was the point by which
+                // "Family" failed to fit beside three scopes on a 402pt phone.
+                Spacer(minLength: 0)
             }
             if MyTasksHeader.showsFilter(othersRoster: othersRoster.count) {
-                filterControl
+                filterControl(offeredWidth: offeredWidth)
             }
             if !showsTabs { Spacer(minLength: 0) }
         }
@@ -290,6 +333,12 @@ struct TasksHomeView: View {
                 .font(.sectionHeader)
                 .fontWeight(isSelected ? .semibold : .regular)
                 .foregroundStyle(isSelected ? Palette.primaryText : Palette.secondaryText)
+                // A pill never wraps. Three scopes plus a labelled filter contend for
+                // one row, and without this the HStack broke "Everyone" over two lines
+                // while the filter kept its word; the pill holds its width and the
+                // filter's summary is what yields (see `filterControl`).
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.pressable)
         .padding(.horizontal, isSelected ? Spacing.sm : 0)
@@ -328,7 +377,46 @@ struct TasksHomeView: View {
     /// shows its value ("Done"); both show a count ("2 filters") — deliberately not
     /// "Done · Work", which turns the control into a miniature query builder and
     /// fights for width with the tabs.
-    private var filterControl: some View {
+    private func filterControl(offeredWidth: CGFloat) -> some View {
+        // Held to its ideal width, and the summary shown only when the row can hold it.
+        //
+        // Two things a plainer layout got wrong here, both measured. An HStack splits
+        // its leftover EQUALLY between its flexible children — this and the Spacer — so
+        // with a hundred points to spare the summary was still offered half and
+        // truncated to "2…" (`layoutPriority` on a `Menu` did not change that). And a
+        // glyph-only fallback via `ViewThatFits` was tried three ways (inside the label,
+        // around two whole controls, with `.fixedSize` and with `.button` style) and
+        // never chose the labelled control even with room: a `Menu` does not report a
+        // finite ideal width under an unspecified proposal, so the first candidate never
+        // "fits". So the decision is arithmetic over three measured widths, with the
+        // labelled capsule probed hidden so the answer holds while the glyph is showing.
+        //
+        // The ACTIVE state survives the drop — the filled, accented glyph — and the words
+        // survive in `accessibilityValue` and in the filtered-empty state, so a narrow
+        // row loses the summary, never the fact that a filter is on.
+        filterMenu(labelled: filterShowsSummary(offeredWidth: offeredWidth))
+            .fixedSize(horizontal: true, vertical: false)
+            .background {
+                filterCapsule(labelled: true)
+                    .hidden()
+                    .fixedSize(horizontal: true, vertical: false)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                        labelledFilterWidth = $0
+                    }
+            }
+            .accessibilityLabel(filtersActive ? "Filters, active" : "Filters")
+            .accessibilityValue(filterSummary ?? "All")
+    }
+
+    /// Whether the labelled capsule fits beside the pills: pills + the two stack gaps +
+    /// the capsule, against the row. True until measured, so the first frame renders the
+    /// fuller control and the probe has something to measure.
+    private func filterShowsSummary(offeredWidth: CGFloat) -> Bool {
+        guard showsTabs, offeredWidth > 0, labelledFilterWidth > 0 else { return true }
+        return pillsWidth + 2 * Spacing.sm + labelledFilterWidth <= offeredWidth
+    }
+
+    private func filterMenu(labelled: Bool) -> some View {
         Menu {
             // The menu is a state EDITOR, so it can undo itself in one tap rather than
             // making the user walk both axes back to All.
@@ -378,34 +466,38 @@ struct TasksHomeView: View {
                 }
             }
         } label: {
-            HStack(spacing: Spacing.xxs) {
-                Image(
-                    systemName: filtersActive
-                        ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"
-                )
-                .font(.glyphSmall(.semibold))
-                if let summary = filterSummary {
-                    Text(summary)
-                        .font(.chipLabel)
-                        .lineLimit(1)
-                }
-            }
-            .foregroundStyle(filtersActive ? Palette.accentFlat : Palette.secondaryText)
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xxs)
-            // The same row-height floor the tab pill takes, so the two capsules match
-            // rather than each being as tall as its own content: equal PADDING wasn't
-            // enough, because this control's content is a `glyphSmall` icon where the
-            // pill's is `sectionHeader` text.
-            .frame(minHeight: LayoutMetrics.tasksHeaderRow)
-            .background(Palette.secondarySurface, in: Capsule())
-            // Interaction size still ≥ the visual size: the capsule now clears 44pt on
-            // neither axis by itself, so this keeps the touchable region honest by growing
-            // into the surrounding whitespace and giving the layout size back.
-            .minimumHitTarget()
+            filterCapsule(labelled: labelled)
+                // Interaction size still ≥ the visual size: the capsule clears 44pt on
+                // neither axis by itself, so this keeps the touchable region honest by
+                // growing into the surrounding whitespace and giving the layout size back.
+                .minimumHitTarget()
         }
-        .accessibilityLabel(filtersActive ? "Filters, active" : "Filters")
-        .accessibilityValue(filterSummary ?? "All")
+    }
+
+    /// The filter capsule as drawn: the glyph, and the summary while a filter is on and
+    /// there is room for it. Also the hidden probe `filterControl` measures.
+    private func filterCapsule(labelled: Bool) -> some View {
+        HStack(spacing: Spacing.xxs) {
+            Image(
+                systemName: filtersActive
+                    ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"
+            )
+            .font(.glyphSmall(.semibold))
+            if labelled, let summary = filterSummary {
+                Text(summary)
+                    .font(.chipLabel)
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(filtersActive ? Palette.accentFlat : Palette.secondaryText)
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xxs)
+        // The same row-height floor the tab pill takes, so the two capsules match
+        // rather than each being as tall as its own content: equal PADDING wasn't
+        // enough, because this control's content is a `glyphSmall` icon where the
+        // pill's is `sectionHeader` text.
+        .frame(minHeight: LayoutMetrics.tasksHeaderRow)
+        .background(Palette.secondarySurface, in: Capsule())
     }
 
     /// What the control calls itself — the rule lives in the contract, where it's tested.

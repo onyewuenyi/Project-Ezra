@@ -11,16 +11,31 @@
 
 import Foundation
 
-/// The two tabs under the "My Tasks" title.
+/// The ownership scopes under the title — each answers "whose tasks am I looking at?".
+///
+/// **Everyone is the household's shared space (2026-09-12).** Assigned is yours and
+/// Created is what you authored, and between them a task another member captured for
+/// themselves was invisible on the home surface — the one screen a family shares. It
+/// sits between the two because it is the widest scope: Assigned narrows to you,
+/// Created narrows to your authorship. Same sections, same order, same cap; the row's
+/// trailing avatar is what says whose each one is.
+///
+/// The first scope is CALLED "Mine" and named `assigned`: the case is Linear's word and
+/// every seam, test and doc reads it, but on the row "Assigned" spent 69pt where "Mine"
+/// spends 38 — and with three scopes on a 402pt phone that was the difference between
+/// the filter naming its state ("Family") and dropping to a bare glyph. In a household
+/// "Mine" is also the plainer answer to the question the pills ask.
 enum MyTasksTab: String, CaseIterable, Identifiable {
     case assigned
+    case everyone
     case created
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .assigned: return "Assigned"
+        case .assigned: return "Mine"
+        case .everyone: return "Everyone"
         case .created: return "Created"
         }
     }
@@ -59,21 +74,24 @@ enum MyTasksHeader {
     /// only one they have. If this ever gains a condition, rule 2 is being broken again.
     static func showsFilter(othersRoster: Int) -> Bool { true }
 
-    /// What the screen calls itself: "Tasks" alone, "My Tasks" once somebody else
-    /// exists.
+    /// What the screen calls itself: "Tasks" alone; once somebody else exists, "My
+    /// Tasks" over your scopes and "Our Tasks" over Everyone's.
     ///
     /// It reads `showsTabs` rather than the roster count directly, and that is the
-    /// point: the possessive and the Assigned/Created pair answer the SAME question
-    /// ("whose tasks?"), so they must appear and disappear together or the title
-    /// promises a distinction the header isn't making. With a roster of one there is
-    /// nobody to be distinguished from and "My" is noise — the v2 lean collapse dropped
-    /// it, and it comes back with the person who gives it meaning.
+    /// point: the possessive and the ownership pills answer the SAME question ("whose
+    /// tasks?"), so they must appear and disappear together or the title promises a
+    /// distinction the header isn't making. With a roster of one there is nobody to be
+    /// distinguished from and "My" is noise — the v2 lean collapse dropped it, and it
+    /// comes back with the person who gives it meaning. And the possessive follows the
+    /// SELECTED scope: "My Tasks" over the household's whole list would be the same lie
+    /// in the other direction.
     ///
     /// This lives here, next to the other two, for the reason rule 2 exists: header
     /// composition decided inside the view is how the filter got silently deleted for
     /// three weeks. A rule that isn't in this file isn't tested.
-    static func title(othersRoster: Int) -> String {
-        showsTabs(othersRoster: othersRoster) ? "My Tasks" : "Tasks"
+    static func title(othersRoster: Int, tab: MyTasksTab = .assigned) -> String {
+        guard showsTabs(othersRoster: othersRoster) else { return "Tasks" }
+        return tab == .everyone ? "Our Tasks" : "My Tasks"
     }
 
     /// What the filter control calls itself. nil when nothing is filtered.
@@ -157,6 +175,24 @@ enum MyTasksSlices {
             $0.isMine(currentUserID: currentUserID)
                 && applyFilters($0, status: statusFilter, category: category)
         }
+        return sections(scoped: scoped, allTasks: tasks, statusFilter: statusFilter)
+    }
+
+    /// The Everyone tab: the household's whole list — every owner, and the unowned —
+    /// sectioned exactly as Assigned is. The scope is the only thing that differs, which
+    /// is why the sectioning is one function: two copies would let the ledger cap or the
+    /// resolution order drift between "mine" and "ours".
+    static func everyone(
+        tasks: [TaskItem], status statusFilter: TaskStatus? = nil, category: String? = nil
+    ) -> [MyTasksSection] {
+        let scoped = tasks.filter { applyFilters($0, status: statusFilter, category: category) }
+        return sections(scoped: scoped, allTasks: tasks, statusFilter: statusFilter)
+    }
+
+    /// The status sectioning both scoped tabs share — see `assigned`.
+    private static func sections(
+        scoped: [TaskItem], allTasks tasks: [TaskItem], statusFilter: TaskStatus?
+    ) -> [MyTasksSection] {
         let entries = laneEntries(from: scoped, allTasks: tasks)
         let grouped = Dictionary(grouping: entries) { $0.anchor.status }
         return sectionOrder.compactMap { status in

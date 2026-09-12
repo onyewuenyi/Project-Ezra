@@ -195,6 +195,36 @@ struct MyTasksSlicesTests {
         }
         #expect(MyTasksHeader.title(othersRoster: 0) == "Tasks")
         #expect(MyTasksHeader.title(othersRoster: 1) == "My Tasks")
+        // The possessive follows the SELECTED scope too: "My Tasks" over the household's
+        // whole list is the same lie in the other direction. Solo, there is no scope.
+        #expect(MyTasksHeader.title(othersRoster: 1, tab: .everyone) == "Our Tasks")
+        #expect(MyTasksHeader.title(othersRoster: 1, tab: .created) == "My Tasks")
+        #expect(MyTasksHeader.title(othersRoster: 0, tab: .everyone) == "Tasks")
+    }
+
+    @Test("Everyone is the household's whole list — every owner and the unowned, sectioned like Assigned")
+    func everyoneIsTheSharedScope() {
+        let me = UUID()
+        let partner = UUID()
+        let mine = TaskItem(title: "mine", status: .doing, ownerID: me)
+        let theirs = TaskItem(title: "theirs", status: .todo, ownerID: partner)
+        let nobodys = TaskItem(title: "nobodys", status: .todo, ownerID: nil)
+        let tasks = [nobodys, theirs, mine]
+
+        let assigned = MyTasksSlices.assigned(tasks: tasks, currentUserID: me)
+        #expect(assigned.flatMap(\.entries).map(\.anchor.title) == ["mine"])
+
+        let everyone = MyTasksSlices.everyone(tasks: tasks)
+        #expect(everyone.map(\.status) == [.doing, .todo])
+        #expect(Set(everyone.flatMap(\.entries).map(\.anchor.title)) == ["mine", "theirs", "nobodys"])
+        // The same predicate narrows both scopes.
+        let done = MyTasksSlices.everyone(tasks: tasks, status: .done)
+        #expect(done.isEmpty)
+    }
+
+    @Test("Everyone sits between Assigned and Created — widest scope in the middle")
+    func everyoneTabOrder() {
+        #expect(MyTasksTab.allCases == [.assigned, .everyone, .created])
     }
 
     @Test("The filter control names its own state, and stays bounded when both axes are set")

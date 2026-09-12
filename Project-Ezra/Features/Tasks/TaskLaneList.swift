@@ -241,6 +241,9 @@ struct AssignedSectionsView: View {
     let othersRoster: [FamilyMember]
     /// Threaded to the rows so the leading swipe can name the right verb.
     var currentUserID: UUID? = nil
+    /// Which scope the sections are — Assigned (yours) or Everyone (the household's).
+    /// The render is identical; only the empty state's words differ.
+    var scope: MyTasksTab = .assigned
     let searchIsActive: Bool
     /// What the filter is, in words, when one is narrowing the list — the empty state
     /// names it (`MyTasksHeader.filteredEmptyMessage`). Nil when nothing is filtered.
@@ -264,10 +267,14 @@ struct AssignedSectionsView: View {
             // task, and offering capture there would answer a question nobody asked.
             EmptyStateView(
                 symbol: "square.stack.3d.up",
-                title: searchIsActive ? "No matches" : "Nothing assigned to you",
+                title: searchIsActive
+                    ? "No matches"
+                    : (scope == .everyone ? "Nothing here yet" : "Nothing assigned to you"),
                 message: searchIsActive
                     ? (filteredEmptyMessage ?? "Nothing here matches. Try a different filter.")
-                    : "Work assigned to you shows up here, grouped by state — ordered by what deserves attention, never by folder.",
+                    : (scope == .everyone
+                        ? "Everything anyone in the household captures shows up here, grouped by state — ordered by what deserves attention, never by folder."
+                        : "Work assigned to you shows up here, grouped by state — ordered by what deserves attention, never by folder."),
                 actionTitle: searchIsActive ? "Clear filters" : "Capture something",
                 action: searchIsActive ? { onClearFilters() } : { openCapture() }
             )

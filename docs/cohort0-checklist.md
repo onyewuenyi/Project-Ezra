@@ -129,6 +129,11 @@ file. See *Keeping this file current* at the bottom.
   can reach. Preview, test, fixture and DEBUG-only paths are out of scope — say which when
   excluding one.
 - Thrown errors that escape to no handler; `Task {}` bodies that swallow a failure the
+- **Everyone shows the household, and every row says whose.** The Everyone scope (2026-09-12)
+  renders every owner's tasks and the unowned; a row that is not yours carries the owner's
+  avatar (or the dashed unassigned ring), the leading swipe is ABSENT on someone else's task
+  (`recommendedAction` is nil there), and the title reads "Our Tasks". A row in Everyone with
+  no way to tell whose it is, or a swipe that advances someone else's task, is a finding.
   user needed to see.
 - Main-actor / concurrency traps on a background write path.
 - Debug `print` output reachable from a real user action.
