@@ -39,6 +39,9 @@ struct OnboardingView: View {
     /// a second firing would duplicate the whole onboarding set, not just fail to
     /// save it.
     @State private var isCommitting = false
+    /// The parse receipt for the onboarding capture, held between `transform` and
+    /// `commit` so the first capture in the store carries provenance like every other.
+    @State private var onboardingReceipt: CaptureRunTelemetry?
 
     private let sample = """
         renew my passport
@@ -86,9 +89,11 @@ struct OnboardingView: View {
         text = sample
         Task {
             let decision = CaptureFlow.route(for: sample)
-            drafts = await brain.triage(
-                sample, route: decision.route, escalation: decision.escalation
-            ).drafts
+            let run = await brain.triage(
+                sample, route: decision.route, escalation: decision.escalation)
+            drafts = run.drafts
+            onboardingReceipt = run.telemetry
+            onboardingReceipt?.escalationReason = decision.escalation?.rawValue
             guard !drafts.isEmpty else { return }
             withAnimation(Motion.onboardReveal) { phase = .result }
         }
@@ -469,9 +474,16 @@ struct OnboardingView: View {
         // model's segmentation instead of the deterministic read that already has the
         // boundaries a newline-separated list hands over.
         let decision = CaptureFlow.route(for: text)
-        let result = await brain.triage(
-            text, route: decision.route, escalation: decision.escalation
-        ).drafts
+        let run = await brain.triage(
+            text, route: decision.route, escalation: decision.escalation)
+        let result = run.drafts
+        // The receipt for the first capture the store will ever hold. It was discarded
+        // here — `commit`'s `telemetry:` defaults to nil — so the very capture a person
+        // is most likely to go looking at afterwards was the one Activity could say
+        // nothing about. `escalationReason` is stamped the way the composer stamps it,
+        // because the router's evidence is the point of the receipt.
+        onboardingReceipt = run.telemetry
+        onboardingReceipt?.escalationReason = decision.escalation?.rawValue
         // Nothing actionable found: return to the editor with the text intact rather
         // than revealing an empty "0 areas" result (input is never discarded) — and SAY
         // so, because an unexplained bounce back to the same screen is indistinguishable
@@ -492,7 +504,7 @@ struct OnboardingView: View {
     private func commit() {
         guard !isCommitting else { return }
         isCommitting = true
-        brain.commit(drafts, rawCapture: text, into: context)
+        brain.commit(drafts, rawCapture: text, telemetry: onboardingReceipt, into: context)
         // The onboarding reveal ("here.s your mess, sorted") doubles as the
         // Confirm-Creation glance — the user saw the set and tapped through, and
         // `commit` is what brings the tasks into existence.
