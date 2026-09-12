@@ -60,6 +60,29 @@ struct AdvisorCoverageTests {
         #expect(report.worthy == 0)
     }
 
+    /// **The column that could only ever read 0.** `.decomposed` was declared with the
+    /// enum and returned by nothing, so this report's own `line` — which prints it —
+    /// could never show it, while the doc comment above the enum promised "3 are already
+    /// decomposed" as the example of what it distinguishes. The sweep is the surface that
+    /// finding was made from, so it is the surface that pins the fix.
+    @Test("A decomposed container is counted apart from a plain one")
+    func decomposedIsItsOwnSilence() {
+        let context = context()
+        let container = task("Redo the spare room", effort: 15, in: context)
+        let step = task("Strip the wallpaper", effort: 15, in: context)
+        if let parentID = container.uuid { step.linkParent(parentID) }
+        let plain = task("Call the dentist", effort: 15, in: context)
+
+        let report = AdvisorCoverage.measure([container, step, plain])
+
+        #expect(report.count(.decomposed) == 1)
+        // The step and the bare errand are ordinary work — collapsing the two silences
+        // would destroy exactly the signal the enum exists for.
+        #expect(report.count(.plain) == 2)
+        #expect(report.worthy == 0)
+        #expect(report.line.contains("decomposed 1"))
+    }
+
     @Test("Worthy tasks are attributed to the rung that fired")
     func worthyCarriesItsReason() {
         let context = context()
