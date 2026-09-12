@@ -242,10 +242,17 @@ struct AssignedSectionsView: View {
     /// Threaded to the rows so the leading swipe can name the right verb.
     var currentUserID: UUID? = nil
     let searchIsActive: Bool
+    /// What the filter is, in words, when one is narrowing the list — the empty state
+    /// names it (`MyTasksHeader.filteredEmptyMessage`). Nil when nothing is filtered.
+    var filteredEmptyMessage: String? = nil
     /// "Show all N" on a capped ledger section — flips the STATUS FILTER to that
     /// section, the documented isolation path, rather than growing a second
     /// expansion mechanism the filter would then fight.
     var onShowAll: (TaskStatus) -> Void = { _ in }
+    /// The way out of a filtered-empty list, one tap, where the person is looking —
+    /// the menu's own Clear filters is behind a control they may not connect to the
+    /// emptiness.
+    var onClearFilters: () -> Void = {}
     @Binding var selectedTask: TaskItem?
     @Binding var notice: UndoNotice?
     @Environment(\.openCapture) private var openCapture
@@ -259,10 +266,10 @@ struct AssignedSectionsView: View {
                 symbol: "square.stack.3d.up",
                 title: searchIsActive ? "No matches" : "Nothing assigned to you",
                 message: searchIsActive
-                    ? "Nothing here matches. Try a different filter."
+                    ? (filteredEmptyMessage ?? "Nothing here matches. Try a different filter.")
                     : "Work assigned to you shows up here, grouped by state — ordered by what deserves attention, never by folder.",
-                actionTitle: searchIsActive ? nil : "Capture something",
-                action: searchIsActive ? nil : { openCapture() }
+                actionTitle: searchIsActive ? "Clear filters" : "Capture something",
+                action: searchIsActive ? { onClearFilters() } : { openCapture() }
             )
         } else {
             ScrollView {
@@ -332,6 +339,10 @@ struct CreatedFlatView: View {
     /// Threaded to the rows so the leading swipe can name the right verb.
     var currentUserID: UUID? = nil
     let searchIsActive: Bool
+    /// See `AssignedSectionsView` — the same two seams, so the two tabs' empty states
+    /// name the filter and clear it the same way.
+    var filteredEmptyMessage: String? = nil
+    var onClearFilters: () -> Void = {}
     @Binding var selectedTask: TaskItem?
     @Binding var notice: UndoNotice?
     @Environment(\.openCapture) private var openCapture
@@ -344,10 +355,10 @@ struct CreatedFlatView: View {
                 symbol: "square.and.pencil",
                 title: searchIsActive ? "No matches" : "Nothing created yet",
                 message: searchIsActive
-                    ? "Nothing you created matches. Try a different filter."
+                    ? (filteredEmptyMessage ?? "Nothing you created matches. Try a different filter.")
                     : "Everything you capture shows up here, newest first — a record of what you've added.",
-                actionTitle: searchIsActive ? nil : "Capture something",
-                action: searchIsActive ? nil : { openCapture() }
+                actionTitle: searchIsActive ? "Clear filters" : "Capture something",
+                action: searchIsActive ? { onClearFilters() } : { openCapture() }
             )
         } else {
             ScrollView {

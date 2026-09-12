@@ -92,6 +92,19 @@ enum MyTasksHeader {
         case (_?, _?): return "2 filters"
         }
     }
+
+    /// What the list says when the filter matched nothing — it NAMES the filter, because
+    /// the failure mode `filterSummary` guards against is worse here: an empty list under
+    /// an active filter is exactly what "all my tasks are gone" would look like. Nil when
+    /// no filter is active (that emptiness is real, and gets the capture invitation).
+    static func filteredEmptyMessage(status: TaskStatus?, category: String?) -> String? {
+        switch (status, category) {
+        case (nil, nil): return nil
+        case (let status?, nil): return "No tasks match “\(status.label)”."
+        case (nil, let category?): return "No tasks match “\(category)”."
+        case (_?, _?): return "No tasks match both filters."
+        }
+    }
 }
 
 /// One section on the Assigned tab: a header and the chain-grouped entries under it,

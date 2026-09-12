@@ -121,8 +121,14 @@ struct ParkedCapturesRow: View {
             Image(systemName: "text.quote")
                 .font(.glyphCaption())
                 .foregroundStyle(Palette.mutedText)
+            // The label is the fixed part and the excerpt is the flexible one: without
+            // saying so, the HStack let the excerpt keep its single line and broke "2
+            // unfinished captures" over two, so the row read as a wrapped caption with
+            // a quote beside it. The label holds; the excerpt is what truncates.
             Text(text)
                 .supportingStyle()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             Text("“\(detail)”")
                 .supportingStyle()
                 .foregroundStyle(Palette.mutedText)

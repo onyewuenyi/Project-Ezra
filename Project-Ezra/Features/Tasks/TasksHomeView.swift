@@ -116,15 +116,19 @@ struct TasksHomeView: View {
                             sections: sections, allTasks: tasks, othersRoster: othersRoster,
                             currentUserID: currentUserID,
                             searchIsActive: filtersActive,
+                            filteredEmptyMessage: filteredEmptyMessage,
                             onShowAll: { status in
                                 Motion.withMotion(Motion.settle) { statusFilter = status }
                             },
+                            onClearFilters: clearFilters,
                             selectedTask: $selectedTask, notice: $notice)
                     case .created(let entries):
                         CreatedFlatView(
                             entries: entries, allTasks: tasks, othersRoster: othersRoster,
                             currentUserID: currentUserID,
                             searchIsActive: filtersActive,
+                            filteredEmptyMessage: filteredEmptyMessage,
+                            onClearFilters: clearFilters,
                             selectedTask: $selectedTask, notice: $notice)
                     }
                 }
@@ -323,10 +327,7 @@ struct TasksHomeView: View {
             // making the user walk both axes back to All.
             if filtersActive {
                 Button {
-                    Motion.withMotion(Motion.snap) {
-                        statusFilter = nil
-                        categoryFilter = nil
-                    }
+                    clearFilters()
                 } label: {
                     Label("Clear filters", systemImage: "xmark.circle")
                 }
@@ -403,6 +404,19 @@ struct TasksHomeView: View {
     /// What the control calls itself — the rule lives in the contract, where it's tested.
     private var filterSummary: String? {
         MyTasksHeader.filterSummary(status: statusFilter, category: categoryFilter)
+    }
+
+    /// What an empty filtered list says — same contract, same file as the summary.
+    private var filteredEmptyMessage: String? {
+        MyTasksHeader.filteredEmptyMessage(status: statusFilter, category: categoryFilter)
+    }
+
+    /// The one clearer, shared by the menu and the empty state's button.
+    private func clearFilters() {
+        Motion.withMotion(Motion.snap) {
+            statusFilter = nil
+            categoryFilter = nil
+        }
     }
 
     private func filterLabel(_ text: String, checked: Bool) -> some View {

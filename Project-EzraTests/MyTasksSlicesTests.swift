@@ -188,6 +188,18 @@ struct MyTasksSlicesTests {
         #expect(MyTasksHeader.filterSummary(status: .done, category: "Work") == "2 filters")
     }
 
+    @Test("An empty filtered list names the filter — and says nothing when no filter is on")
+    func filteredEmptyMessageNamesTheFilter() {
+        // A filtered list that matched nothing is indistinguishable from a list with
+        // tasks missing; the message is where the distinction is made.
+        #expect(MyTasksHeader.filteredEmptyMessage(status: nil, category: nil) == nil)
+        #expect(MyTasksHeader.filteredEmptyMessage(status: .done, category: nil) == "No tasks match “Done”.")
+        #expect(MyTasksHeader.filteredEmptyMessage(status: nil, category: "Home") == "No tasks match “Home”.")
+        #expect(
+            MyTasksHeader.filteredEmptyMessage(status: .done, category: "Home")
+                == "No tasks match both filters.")
+    }
+
     // MARK: - Detail-pager peers (what a swipe in the full-screen detail lands on)
 
     @Test("flatten walks sections top-to-bottom, entries in place")
