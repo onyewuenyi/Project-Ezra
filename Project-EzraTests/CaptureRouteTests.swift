@@ -39,6 +39,60 @@ struct CaptureRouteTests {
         #expect(CaptureRoute.route(for: "buy milk, return package, pay water bill") == .local)
     }
 
+    /// **The invariant above is only worth what the CALL SITES honour**, and one of them
+    /// did not. `AppBrain.triage` defaulted `route:` to `.cloud`, so a caller that simply
+    /// never mentioned the parameter claimed the transmitting rung and skipped the router
+    /// entirely — `OnboardingView.transform()` among them, which is a brand-new user's
+    /// very first brain dump. The default is gone; this pins the helper those callers now
+    /// use, because a policy that holds in `CaptureRoute` and is bypassed in a view is not
+    /// a policy.
+    @Test("The composer-free callers run the same policy — typed structure never transmits")
+    func routeHelperHonoursThePolicy() {
+        let typed = "renew my passport\nbook the flights\npay the water bill"
+        let decision = CaptureFlow.route(for: typed, posture: .open)
+        #expect(decision.route == .local)
+        #expect(decision.route.transmitsRawCapture == false)
+        #expect(decision.escalation == nil)
+
+        // The onboarding sample IS the shape above — ten plain lines. It must reach the
+        // deterministic read, which is what makes the first impression "I found N areas
+        // from 10 items" instead of the model's guess at where the boundaries are.
+        let sample = """
+            renew my passport
+            book flights for the trip after passport is done
+            oil change is overdue
+            should I keep paying for the gym I never use
+            call mom back
+            daycare enrollment forms due Friday
+            finish the Q3 deck
+            return the amazon package
+            figure out if the side project is still worth it
+            pay the water bill
+            """
+        #expect(CaptureFlow.route(for: sample, posture: .open).route == .local)
+        #expect(AppBrain.provisionalDrafts(sample).count == 10)
+
+        // **The helper agrees with the router, whatever the router says.** Asserted as
+        // agreement rather than against a hardcoded verdict: escalation is the exception,
+        // most reads are kept, and pinning a specific input to `.cloud` here would make
+        // this test fail the next time a floor moves — for a reason that has nothing to
+        // do with what it is checking.
+        let dump = """
+            so I need to sort out the car thing before the weekend and the school forms \
+            are due and I should really call the bank about that charge before it rolls \
+            over and book the dentist and the gutters need clearing and someone has to \
+            chase the insurance people about the claim they never answered
+            """
+        for text in [typed, sample, dump] {
+            let read = AppBrain.provisionalDrafts(text)
+            #expect(CaptureFlow.route(for: text, posture: .open) == CaptureRoute.route(for: text, localRead: read))
+            // And the posture outranks it, here as everywhere.
+            #expect(CaptureFlow.route(for: text, posture: .onDevice).route == .local)
+            #expect(CaptureFlow.route(for: text, posture: .onDevice).route.transmitsRawCapture == false)
+            #expect(CaptureFlow.route(for: text, posture: .onDevice).escalation == nil)
+        }
+    }
+
     @Test("A lone clean sentence stays on the device (the 2026-08-29 reversal)")
     func cleanSinglesStayLocal() async {
         // Under the 08-22 policy these transmitted, because knowing "renew my passport"

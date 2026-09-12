@@ -64,6 +64,30 @@ enum CaptureFlow {
         }
     }
 
+    /// The routing decision for a caller that has no composer around it — onboarding,
+    /// and the diagnostic seams that run a canned ramble.
+    ///
+    /// It exists because those callers used to name no route at all, and `triage`'s
+    /// default was `.cloud`: they claimed the transmitting rung and never asked the
+    /// router. That is both a privacy hole (explicit structure the user typed reaching
+    /// the network, which the policy would never do) and a quality one (a newline-
+    /// separated dump handed to a model's segmentation instead of to the deterministic
+    /// read that already has the boundaries).
+    ///
+    /// Same policy as `plan`, minus the presentation arm those callers have no use for:
+    /// the persisted POSTURE outranks the router, and otherwise the deterministic read
+    /// is computed first so `route(for:localRead:)` can judge it — which is the whole
+    /// shape of device-first routing. `fromVoice` is false because none of these callers
+    /// has a microphone.
+    static func route(
+        for text: String, learned: [LearnedRule] = [],
+        posture: CapturePosture = .current(), now: Date = Date()
+    ) -> (route: CaptureRoute, escalation: CaptureEscalationReason?) {
+        guard posture != .onDevice else { return (.local, nil) }
+        let read = AppBrain.provisionalDrafts(text, learned: learned, now: now)
+        return CaptureRoute.route(for: text, localRead: read)
+    }
+
     // MARK: - The "nothing actionable" way forward
 
     /// The longest a kept-as-said title may run before it is cut at a word boundary. A

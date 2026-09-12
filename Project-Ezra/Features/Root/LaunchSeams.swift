@@ -624,7 +624,10 @@ struct LaunchSeams {
                     + "· dated \(provisional.compactMap(\.dueDate).count)")
         }
         let started = Date()
-        let drafts = await brain.triage(ramble).drafts
+        let decision = CaptureFlow.route(for: ramble)
+        let drafts = await brain.triage(
+            ramble, route: decision.route, escalation: decision.escalation
+        ).drafts
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
         print("drafts: \(drafts.count)")
         print("wall clock: \(elapsed)ms")

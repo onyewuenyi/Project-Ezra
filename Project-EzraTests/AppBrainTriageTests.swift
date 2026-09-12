@@ -36,7 +36,7 @@ struct AppBrainTriageTests {
         let brain = AppBrain()
         let open = [OpenTaskSnapshot(id: UUID(), title: "Renew my passport before the trip")]
 
-        let run = await brain.triage("renew my passport", openTasks: open)
+        let run = await brain.triage("renew my passport", openTasks: open, route: .local)
 
         #expect(!run.drafts.isEmpty)
         #expect(run.candidates.contains { $0.title == "Renew my passport before the trip" })
@@ -80,7 +80,7 @@ struct AppBrainTriageTests {
         // the anti-hallucination guard must keep seeing this entry.
         let stale = RetrievalCandidate(id: UUID(), title: "Old neighbour", facts: "", score: 0.5)
 
-        let run = await brain.triage("call mom back", preparedCandidates: [stale])
+        let run = await brain.triage("call mom back", preparedCandidates: [stale], route: .local)
 
         #expect(run.candidates.contains { $0.id == stale.id })
     }

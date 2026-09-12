@@ -225,7 +225,16 @@ final class AppBrain {
         suppressions: [RelationshipSuppression] = [],
         ownership: OwnershipContext = .none,
         preparedCandidates: [RetrievalCandidate] = [],
-        route: CaptureRoute = .cloud,
+        // **No default, deliberately.** This parameter decides whether the user's raw
+        // words leave the device, and it defaulted to `.cloud` — so any caller that
+        // simply didn't mention it claimed the transmitting rung and skipped
+        // `CaptureRoute.route(for:localRead:)` entirely. `OnboardingView.transform()`
+        // was one of those callers, which put a brand-new user's very first brain dump
+        // on the network no matter how plainly they had structured it, and handed a
+        // ten-line dump to the model's segmentation instead of the instant deterministic
+        // read that gets those ten lines exactly right. A function that transmits must
+        // not hold a default opinion about transmitting; every call site now states it.
+        route: CaptureRoute,
         escalation: CaptureEscalationReason? = nil,
         onPartial: (@MainActor ([TaskDraft]) -> Void)? = nil
     ) async -> TriageRun {

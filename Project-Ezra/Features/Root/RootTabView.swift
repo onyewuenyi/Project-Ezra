@@ -454,7 +454,10 @@ struct RootTabView: View {
             """
         let roster = familyMembers.filter { !$0.isRemoved }
             .map { RosterPerson(name: $0.name, relationship: $0.relationship.label) }
-        let drafts = await brain.triage(sample, roster: roster).drafts
+        let decision = CaptureFlow.route(for: sample)
+        let drafts = await brain.triage(
+            sample, roster: roster, route: decision.route, escalation: decision.escalation
+        ).drafts
         // `commit` is the confirm, so the seeded screens show a real working set.
         // Judgment calls arrive wearing their Needs Decision flag; low-confidence items
         // do NOT — the confirm is the review that flag was asking for.

@@ -85,7 +85,10 @@ struct OnboardingView: View {
         else { return }
         text = sample
         Task {
-            drafts = await brain.triage(sample).drafts
+            let decision = CaptureFlow.route(for: sample)
+            drafts = await brain.triage(
+                sample, route: decision.route, escalation: decision.escalation
+            ).drafts
             guard !drafts.isEmpty else { return }
             withAnimation(Motion.onboardReveal) { phase = .result }
         }
@@ -460,7 +463,15 @@ struct OnboardingView: View {
         focused = false
         foundNothing = false
         withAnimation(.easeInOut(duration: 0.3)) { phase = .settling }
-        let result = await brain.triage(text).drafts
+        // **The router decides, not a default.** This is a new user's very first brain
+        // dump, and it used to take `triage`'s `.cloud` default — so it transmitted
+        // whatever they had typed, however plainly they had structured it, and got the
+        // model's segmentation instead of the deterministic read that already has the
+        // boundaries a newline-separated list hands over.
+        let decision = CaptureFlow.route(for: text)
+        let result = await brain.triage(
+            text, route: decision.route, escalation: decision.escalation
+        ).drafts
         // Nothing actionable found: return to the editor with the text intact rather
         // than revealing an empty "0 areas" result (input is never discarded) — and SAY
         // so, because an unexplained bounce back to the same screen is indistinguishable
