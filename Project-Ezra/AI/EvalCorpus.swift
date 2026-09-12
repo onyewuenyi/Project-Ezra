@@ -461,6 +461,26 @@ enum EvalCorpus {
                 in: context)
             context.insert(mayaDone)
             mayaDone.complete(now: now.addingTimeInterval(-2 * day))
+
+            // Someone else's OUTCOME with open steps: the Everyone scope renders it as a
+            // deck whose caption has to say whose project it is (the owner's avatar
+            // beside the title), and whose cards carry her avatar — the family's shared
+            // list, not only her ledger. Left out of Mine, where it must not appear.
+            let fundraiser = TaskItem(
+                title: "Run the school fundraiser", category: "Family", status: .todo,
+                creatorID: maya, confidence: 0.85, reasoning: "A few moving parts.",
+                ownerID: maya, effortMinutes: 90, createdAt: now.addingTimeInterval(-3 * day),
+                in: context)
+            context.insert(fundraiser)
+            let fundraiserSteps = fundraiser.splitInto(
+                [
+                    BreakdownStep(title: "Book the school hall", effortMinutes: 20),
+                    BreakdownStep(title: "Print the flyers", effortMinutes: 30),
+                ], in: context)
+            for step in fundraiserSteps {
+                step.ownerID = maya
+                step.creatorID = maya
+            }
         }
 
         // MARK: The pass that has to run last

@@ -84,6 +84,9 @@ struct TaskDeckView: View {
 
     /// How much of the next card shows at the trailing edge, INCLUDING the card gap.
     private static let peek: CGFloat = Spacing.lg
+    /// The umbrella owner's avatar in the caption — smaller than the row's 18pt so it sits
+    /// with metadata text rather than beside a title.
+    private static let captionAvatar: CGFloat = 14
 
     private var members: [TaskItem] { chain.deckMembers }
 
@@ -144,6 +147,14 @@ struct TaskDeckView: View {
                 .tracking(0.6)
                 .lineLimit(1)
                 .truncationMode(.tail)
+            if let umbrella = chain.umbrella, let owner = ownerDisplayName(umbrella) {
+                // Whose outcome, when it is not yours — the row's avatar, caption-sized,
+                // so a deck in the household's shared scope answers "whose project?"
+                // the way its cards answer "whose step?".
+                AvatarView(
+                    source: .owner(name: owner, photoData: ownerPhotoData(umbrella), isMe: false),
+                    size: Self.captionAvatar)
+            }
             if let due = outcomeDue {
                 Text("·")
                     .metadataStyle()
@@ -203,6 +214,9 @@ struct TaskDeckView: View {
 
     private var captionAccessibilityLabel: String {
         var parts = [title]
+        if let umbrella = chain.umbrella, let owner = ownerDisplayName(umbrella) {
+            parts.append("\(owner)'s")
+        }
         if let due = chain.umbrella.flatMap({ DueLabel.make(for: $0, style: .full) }) {
             parts.append(due.isOverdue ? due.text : "due \(due.text)")
         }
