@@ -67,6 +67,28 @@ struct DeterministicReadingTests {
         #expect(reading(task, among: [task, blocker]) == nil)
     }
 
+    /// Being blocked is what opens the gate, the blocker arms are rightly silent on the
+    /// waiting spine, and the ladder used to fall through to "Finishing this frees up X"
+    /// — under an Unblock CTA, on a task that cannot be finished, beside the "Frees up"
+    /// rows the page already draws. Off the waiting shape the same fact still speaks.
+    @Test("A blocked task with dependents is silent on the waiting page — and speaks once unblocked")
+    func dependentsYieldToTheWaitingSpine() {
+        let context = context()
+        let blocker = TaskItem(title: "Renew passport", status: .todo, in: context)
+        let task = TaskItem(title: "Book flights for the trip", status: .todo, in: context)
+        let dependent = TaskItem(title: "Request time off work", status: .todo, in: context)
+        task.addTaskBlocker(blocker.uuid!, among: [task, blocker, dependent])
+        dependent.addTaskBlocker(task.uuid!, among: [task, blocker, dependent])
+        let all = [task, blocker, dependent]
+
+        #expect(reading(task, among: all) == nil)
+
+        blocker.complete(now: Date())
+        let freed = reading(task, among: all)
+        #expect(freed?.observation.contains("Finishing this frees up") == true)
+        #expect(freed?.citedTaskIDs == [dependent.uuid!])
+    }
+
     @Test("A FLAGGED blocked task still names its blocker — the deciding spine does not")
     func blockedUnderAFlagSpeaks() {
         let context = context()

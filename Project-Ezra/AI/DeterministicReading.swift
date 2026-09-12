@@ -120,7 +120,14 @@ enum DeterministicReading {
         }
         // Work waiting on THIS one. Not a problem with the task — a reason to finish it,
         // and the one fact rung 0 holds that points outward rather than inward.
-        if let dependent = facts.dependentTitles.first {
+        //
+        // Not on a WAITING page (2026-09-12). Being blocked is what opened the gate, the
+        // blocker arms above are rightly silent there because the spine names the wait,
+        // and the ladder then fell through to this sentence — "Finishing this frees up
+        // X" — under an Unblock CTA, on a task that cannot be finished yet, beside a
+        // "Frees up" section the page already renders. False in register and a
+        // restatement at once. The same facts stay additive elsewhere.
+        if spine != .waiting, let dependent = facts.dependentTitles.first {
             let others = facts.dependentTitles.count - 1
             let tail = others > 0 ? " and \(others) other thing\(others == 1 ? "" : "s")" : ""
             // The one arm that cites: "finishing this frees up X" becomes a place the
