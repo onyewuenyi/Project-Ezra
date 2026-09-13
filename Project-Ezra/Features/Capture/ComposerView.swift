@@ -1632,23 +1632,36 @@ struct ComposerView: View {
             .padding(.top, Spacing.sm)
             .transition(.opacity)
         } else {
+            // When the capture NAMED its outcome ("Lagos trip: …"), the button carries the
+            // name and one tap groups — the person's own words, read back, never a guess
+            // (ungroup and tap again to rename through the alert). Otherwise the alert.
+            let named = CaptureFlow.suggestedOutcomeTitle(from: text)
             Button {
-                // Starts with the outcome the capture named for itself, when it did
-                // ("Lagos trip: …"); empty otherwise — a guess is not a starting point.
-                groupDraftTitle = CaptureFlow.suggestedOutcomeTitle(from: text) ?? ""
-                groupPrompt = true
+                if let named {
+                    Motion.withMotion(Motion.settle) { groupTitle = named }
+                } else {
+                    groupDraftTitle = ""
+                    groupPrompt = true
+                }
             } label: {
-                Label("Group as one outcome", systemImage: "square.stack.3d.up")
-                    .font(.controlLabel)
-                    .foregroundStyle(Palette.primaryText)
-                    .padding(.horizontal, Spacing.md)
-                    .frame(height: 40)
-                    .background(Capsule().strokeBorder(Palette.border, lineWidth: 1))
-                    .frame(minHeight: LayoutMetrics.hitTarget)
+                Label(
+                    named.map { "Group as “\($0)”" } ?? "Group as one outcome",
+                    systemImage: "square.stack.3d.up"
+                )
+                .font(.controlLabel)
+                .foregroundStyle(Palette.primaryText)
+                .lineLimit(1)
+                .padding(.horizontal, Spacing.md)
+                .frame(height: 40)
+                .background(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+                .frame(minHeight: LayoutMetrics.hitTarget)
             }
             .buttonStyle(.pressable)
             .padding(.top, Spacing.sm)
-            .accessibilityHint("Names an outcome these tasks become the steps of")
+            .accessibilityHint(
+                named == nil
+                    ? "Names an outcome these tasks become the steps of"
+                    : "Makes these tasks the steps of that outcome")
         }
     }
 
