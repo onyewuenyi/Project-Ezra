@@ -798,6 +798,7 @@ final class AppBrain {
         imageRef: String? = nil,
         parked: Capture? = nil,
         telemetry: CaptureRunTelemetry? = nil,
+        groupTitle: String? = nil,
         into context: NSManagedObjectContext
     ) -> [TaskItem] {
         let commitStarted = Date()
@@ -882,6 +883,17 @@ final class AppBrain {
         let mergeTargets = foldMerges(merging, capture: capture, all: all, in: context)
         capture.parsedTaskIDs = created.compactMap(\.uuid) + mergeTargets.compactMap(\.uuid)
         stampAttention(creating, created: created, mergeTargets: mergeTargets, all: all, in: context)
+
+        // GROUP — the person's own act at the confirm card ("Group as one outcome"). The
+        // umbrella is born HERE, at the publish boundary, never before; the created tasks
+        // become its steps in the order the cards were shown. Nothing about it was proposed
+        // by the system (that is a separate, later change), so it is a `.human` entry with
+        // its own undo arm. Appended AFTER the resolvers, whose zips pair `creating` with
+        // `created` one to one.
+        if let umbrella = group(created, as: groupTitle, creatorID: creatorID, capture: capture, in: context) {
+            created.append(umbrella)
+            capture.parsedTaskIDs = created.compactMap(\.uuid) + mergeTargets.compactMap(\.uuid)
+        }
 
         // The confirm boundary's own save. Its result decides whether the Create
         // moment's receipt is honest — see `CommitSummary.saveFailed`: a dropped
@@ -1103,6 +1115,57 @@ final class AppBrain {
     /// duplicate-merge was accepted still taught the model something when the user fixed
     /// its category or owner before merging, and those pairs used to be dropped on the
     /// floor because the correction loop only zipped over the created tasks.
+    /// The umbrella for a group made at the confirm card, or nil when there is nothing to
+    /// group: no title, or fewer than two steps (one task is not a group). Owned and
+    /// authored by the capturer, filed under the steps' commonest category, and logged
+    /// as a reversible `"grouped"` entry whose undo unlinks the steps and removes an
+    /// untouched umbrella (`ChangeLogUndo`).
+    private func group(
+        _ steps: [TaskItem], as title: String?, creatorID: UUID?, capture: Capture,
+        in context: NSManagedObjectContext
+    ) -> TaskItem? {
+        let title = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !title.isEmpty, steps.count >= 2 else { return nil }
+        // The commonest step category, ties to the FIRST step's — deterministic, where a
+        // dictionary max broke ties by hash order and filed the same capture differently
+        // from run to run.
+        var counts: [String: Int] = [:]
+        for step in steps { counts[step.category, default: 0] += 1 }
+        let category =
+            steps.map(\.category).max { a, b in
+                (counts[a] ?? 0, -(steps.firstIndex { $0.category == a } ?? 0))
+                    < (counts[b] ?? 0, -(steps.firstIndex { $0.category == b } ?? 0))
+            } ?? steps[0].category
+        let umbrella = TaskItem(
+            title: title, category: category, status: .todo, creatorID: creatorID,
+            confidence: 1, reasoning: "Grouped at capture, by you.", in: context)
+        umbrella.ownerID = creatorID
+        umbrella.confirmedAt = Date()
+        umbrella.captureID = capture.uuid
+        umbrella.rawCapture = steps[0].rawCapture
+        context.insert(umbrella)
+        guard let umbrellaID = umbrella.uuid else { return nil }
+        for (index, step) in steps.enumerated() {
+            step.sortIndex = Int32(index)
+            step.linkParent(umbrellaID)
+        }
+        context.insert(
+            ChangeLogEntry(
+                summary: "Grouped \(steps.count) tasks as “\(title)”",
+                detail: steps.map(\.title).joined(separator: " · "),
+                action: "grouped",
+                newValue: steps.compactMap { $0.uuid?.uuidString }.joined(separator: ","),
+                initiatedBy: .human,
+                isReversible: true,
+                taskTitle: title,
+                taskUUID: umbrellaID,
+                actorID: creatorID,
+                in: context))
+        let all = TaskItem.fetchAll(in: context)
+        AttentionEngine.recompute([umbrella] + steps, among: all)
+        return umbrella
+    }
+
     private func recordCorrections(
         for draft: TaskDraft, taskUUID: UUID?, captureID: UUID?, in context: NSManagedObjectContext
     ) {

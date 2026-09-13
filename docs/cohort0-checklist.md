@@ -32,7 +32,11 @@ file. See *Keeping this file current* at the bottom.
 - **Photo / OCR import.** Decode failure, a timeout, and "no text found" are three
   different outcomes and must read as three different things; a discarded or auto-cleared
   photo capture leaves no orphaned file in `CaptureImageStore`.
-- **Confirm is the only publish boundary.** Nothing reaches the task list before Create —
+- **Confirm is the only publish boundary — the grouped outcome included.** "Group as one
+  outcome" on the reveal births its umbrella at Create and nowhere before (2026-09-12),
+  as a reversible `"grouped"` entry whose undo unlinks the steps and removes an untouched
+  umbrella. An umbrella written before Create, or a group with no Undo, is a finding.
+  Nothing reaches the task list before Create —
   including the Siri / Action Button / Shortcuts entry (`CaptureIntent`), which must land
   on the confirm card, never write directly.
 - **A revealed interpretation is final.** No AI-originated change to a card after reveal

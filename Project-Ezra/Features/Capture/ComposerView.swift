@@ -186,6 +186,12 @@ struct ComposerView: View {
     /// The intent path (F-01): the words arrived from Siri or the Action Button, so the
     /// composer submits them on arrival and the person lands on the confirm card.
     private let autoSubmit: Bool
+    /// The outcome the revealed cards become steps of, when the person groups them
+    /// ("Group as one outcome") — nil means no group. A USER act on the reveal, never a
+    /// proposal: the umbrella is born at Create, at the one publish boundary.
+    @State private var groupTitle: String?
+    @State private var groupPrompt = false
+    @State private var groupDraftTitle = ""
     /// The privacy posture (F-03) — a control beside the one door, persisted.
     @AppStorage(CapturePosture.storageKey) private var postureRaw = CapturePosture.open.rawValue
     private var posture: CapturePosture { CapturePosture(rawValue: postureRaw) ?? .open }
@@ -247,6 +253,14 @@ struct ComposerView: View {
     @State private var transcriptLineHeight: CGFloat = 0
 
     init(resuming: Capture? = nil, autoSubmit: Bool = false) {
+        #if DEBUG
+        // `-GroupAs "Title"` lands the reveal already grouped, so the grouped state and
+        // the Create CTA it changes are screenshot-reachable without the alert's tap.
+        let args = ProcessInfo.processInfo.arguments
+        if let flag = args.firstIndex(of: "-GroupAs"), args.indices.contains(flag + 1) {
+            _groupTitle = State(initialValue: args[flag + 1])
+        }
+        #endif
         self.resuming = resuming
         self.autoSubmit = autoSubmit
         _phase = State(initialValue: Self.initialPhase(resuming: resuming))
@@ -968,6 +982,7 @@ struct ComposerView: View {
     /// interpretation reopens: the user is about to say more, so the next parse is allowed
     /// to speak again. Their existing cards and any edits ride along.
     private func backToCapture() {
+        groupTitle = nil  // a re-read is a new interpretation; the group was of the old cards
         parse.parseTask?.cancel()
         parse.parseTask = nil
         interpretation.reopen()
@@ -1535,10 +1550,21 @@ struct ComposerView: View {
                         onRemove: { noteRemoval(of: $0) },
                         revealedAt: revealedAt
                     )
+                    if interpretation.drafts.count >= 2 { groupRow }
                 }
             }
             .padding(.top, Spacing.xs)
             .padding(.bottom, Spacing.md)
+        }
+        .alert("Group as one outcome", isPresented: $groupPrompt) {
+            TextField("Outcome, e.g. Trip to Lagos", text: $groupDraftTitle)
+            Button("Group") {
+                let title = groupDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !title.isEmpty { Motion.withMotion(Motion.settle) { groupTitle = title } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("These \(interpretation.drafts.count) tasks become its steps, in this order.")
         }
         // The keyboard is a guest on this page: it leaves the moment the user does
         // anything else with the surface.
@@ -1574,6 +1600,53 @@ struct ComposerView: View {
         case .voice: return "What I heard — edit it if I misheard."
         case .image: return "What the photo said — edit it if I misread."
         default: return "What you wrote — edit it to change the tasks."
+        }
+    }
+
+    /// The person's own act of grouping — "these are one thing" — at the one place a task
+    /// comes into existence. A bordered secondary like "Keep it as one task": Create stays
+    /// the page's one primary. Nothing here is proposed by the system; the umbrella is
+    /// born at Create as the outcome the cards become steps of, in the order shown, and
+    /// the list renders it as a deck. (The AI proposing a group is a separate change.)
+    @ViewBuilder private var groupRow: some View {
+        if let groupTitle {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.glyphCaption())
+                    .foregroundStyle(Palette.secondaryText)
+                Text("Grouped as “\(groupTitle)”")
+                    .supportingStyle()
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.sm)
+                Button {
+                    Motion.withMotion(Motion.settle) { self.groupTitle = nil }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.glyphCaption())
+                        .foregroundStyle(Palette.mutedText)
+                }
+                .buttonStyle(.plain)
+                .minimumHitTarget()
+                .accessibilityLabel("Ungroup")
+            }
+            .padding(.top, Spacing.sm)
+            .transition(.opacity)
+        } else {
+            Button {
+                groupDraftTitle = ""
+                groupPrompt = true
+            } label: {
+                Label("Group as one outcome", systemImage: "square.stack.3d.up")
+                    .font(.controlLabel)
+                    .foregroundStyle(Palette.primaryText)
+                    .padding(.horizontal, Spacing.md)
+                    .frame(height: 40)
+                    .background(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+                    .frame(minHeight: LayoutMetrics.hitTarget)
+            }
+            .buttonStyle(.pressable)
+            .padding(.top, Spacing.sm)
+            .accessibilityHint("Names an outcome these tasks become the steps of")
         }
     }
 
@@ -1826,14 +1899,21 @@ struct ComposerView: View {
 
     private var createTitle: String {
         let merged = interpretation.drafts.filter { $0.acceptedDuplicate != nil }.count
-        return Self.createTitle(created: interpretation.drafts.count - merged, merged: merged)
+        return Self.createTitle(
+            created: interpretation.drafts.count - merged, merged: merged, group: groupTitle)
     }
 
     /// The CTA says what pressing it DOES. "Create 3 tasks" over a set where one card
     /// merges into an existing task was a small lie the commit pill then had to correct
     /// a second later; the button is the last thing read before the commit, and it
     /// should be the first place the truth is stated.
-    static func createTitle(created: Int, merged: Int) -> String {
+    static func createTitle(created: Int, merged: Int, group: String? = nil) -> String {
+        // Grouped, the button names the OUTCOME being created and the steps it gets —
+        // the umbrella is the one task the cards did not show.
+        if let group, created >= 2 {
+            let base = "Create “\(group)” · \(created) steps"
+            return merged == 0 ? base : base + " · merge \(merged)"
+        }
         let createPart = created == 1 ? "Create 1 task" : "Create \(created) tasks"
         switch (created, merged) {
         case (_, 0): return createPart
@@ -1978,7 +2058,7 @@ struct ComposerView: View {
         brain.commit(
             interpretation.drafts, rawCapture: text, source: captureSource,
             imageRef: capturedImageRef,
-            parked: parked, telemetry: lastRun, into: context)
+            parked: parked, telemetry: lastRun, groupTitle: groupTitle, into: context)
         finishCommit(count: count)
     }
 

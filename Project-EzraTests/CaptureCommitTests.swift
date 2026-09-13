@@ -47,6 +47,48 @@ struct CaptureCommitTests {
         #expect(task.reasoning.contains("Proposed due date: Bills usually land at month end."))
     }
 
+    @Test("A group made at the confirm card is born at commit, in card order, and undoes whole")
+    func groupAtCommitAndUndo() throws {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        let created = brain.commit(
+            [draft("Renew passport"), draft("Book flights"), draft("Request time off")],
+            rawCapture: "lagos trip: renew passport, book flights, request time off",
+            groupTitle: "  Trip to Lagos ", into: context)
+
+        // Three steps plus the umbrella, born at the publish boundary and nowhere before.
+        #expect(created.count == 4)
+        let umbrella = try #require(created.last)
+        #expect(umbrella.title == "Trip to Lagos")
+        #expect(umbrella.confirmedAt != nil)
+        #expect(umbrella.category == "Admin")  // every step is Admin here; ties go to the first step
+        let all = TaskItem.fetchAll(in: context)
+        let steps = umbrella.children(among: all)
+        #expect(steps.map(\.title) == ["Renew passport", "Book flights", "Request time off"])
+        #expect(umbrella.nextOpenStep(among: all)?.title == "Renew passport")
+
+        // Logged as the person's own reversible act; undo unlinks the steps and removes
+        // the untouched umbrella, leaving the three tasks as they were captured.
+        let entry = try #require(
+            try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
+                .first { $0.action == "grouped" })
+        #expect(entry.initiatedBy == .human && entry.isReversible)
+        ChangeLogUndo.revert(entry, in: context)
+        let after = TaskItem.fetchAll(in: context)
+        #expect(after.count == 3)
+        #expect(after.allSatisfy { $0.parentTaskID == nil })
+    }
+
+    @Test("One card is never a group, and a blank title groups nothing")
+    func groupNeedsTwoAndATitle() {
+        let context = TestStore.makeContext()
+        let brain = AppBrain()
+        #expect(brain.commit([draft("a")], rawCapture: "a", groupTitle: "Trip", into: context).count == 1)
+        #expect(
+            brain.commit([draft("b"), draft("c")], rawCapture: "b c", groupTitle: "  ", into: context)
+                .count == 2)
+    }
+
     @Test("Accepted duplicate folds into the target — no new task, undo resurrects it")
     func mergeFoldAndUndo() throws {
         let context = TestStore.makeContext()
