@@ -246,6 +246,10 @@ struct TaskRow: View {
             if onCancel != nil { Button("Cancel Task") { onCancel?() } }
         }
         .sensoryFeedback(.error, trigger: saveFailed)
+        // Completing from the row had no haptic at all — a tap that resolves a task is
+        // the one row moment that deserves the success tick the composer's Create gives.
+        // Keyed to the fade-out, so it lands once, as the row leaves.
+        .sensoryFeedback(.success, trigger: isCompleting) { _, now in now }
     }
 
     // MARK: - Long-press quick actions

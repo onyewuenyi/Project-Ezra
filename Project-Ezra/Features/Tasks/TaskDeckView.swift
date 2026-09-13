@@ -180,26 +180,30 @@ struct TaskDeckView: View {
                 Text("·")
                     .metadataStyle()
             }
-            Text("\(shownIndex + 1)/\(members.count)")
-                .metadataStyle()
-                .monospacedDigit()
-                .contentTransition(.numericText())
-            if chain.umbrella != nil {
-                // The caption opens the outcome; the chevron the parked row wears — at the
-                // end of the line, where that row wears it — says so.
-                Image(systemName: "chevron.right")
-                    .font(.glyphCaption())
-                    .foregroundStyle(Palette.mutedText)
+            // "1/1" is noise: a single remaining card has no position, only its
+            // outcome's context, which the caption already gives.
+            if members.count > 1 {
+                Text("\(shownIndex + 1)/\(members.count)")
+                    .metadataStyle()
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
             }
+            // The caption opens the way UP; the chevron the parked row wears — at the end
+            // of the line, where that row wears it — says so.
+            Image(systemName: "chevron.right")
+                .font(.glyphCaption())
+                .foregroundStyle(Palette.mutedText)
         }
         .contentShape(Rectangle())
-        // The caption is the way UP: the umbrella's own detail carries every step,
-        // including the done ones this deck no longer shows.
-        .onTapGesture { if let umbrella = chain.umbrella { onOpen(umbrella) } }
+        // The way UP: the umbrella's own detail carries every step, including the done
+        // ones this deck no longer shows. A bare chain has no umbrella, so its caption
+        // opens the ROOT — whose page lists what finishing it frees up, and whose pager
+        // walks the whole chain.
+        .onTapGesture { onOpen(chain.umbrella ?? chain.root) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(captionAccessibilityLabel)
-        .accessibilityAddTraits(chain.umbrella == nil ? [] : .isButton)
-        .accessibilityHint(chain.umbrella == nil ? "" : "Opens the outcome")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(chain.umbrella == nil ? "Opens the first task" : "Opens the outcome")
         .accessibilityActions {
             if waitingCount > 0 { Button("Show what's waiting") { showFirstWaiting() } }
         }
