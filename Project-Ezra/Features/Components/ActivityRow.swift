@@ -19,6 +19,7 @@ enum ActivityVocab {
         case "assigned": return "person.fill"
         case "filed": return "tray.and.arrow.down.fill"
         case "linked": return "link"
+        case "grouped", "split": return "square.stack.3d.up"
         case "archived": return "archivebox.fill"
         case "planned": return "calendar"
         case "decided": return "checkmark.seal.fill"
@@ -36,7 +37,8 @@ enum ActivityVocab {
         case "completed": return Palette.success
         // A rejection is a quiet "no", not an event — it reads with the receding verbs.
         case "killed", "archived", "suppressed": return Palette.mutedText
-        case "assigned", "linked", "decided", "unblocked", "captured": return Palette.accentFlat
+        case "assigned", "linked", "decided", "unblocked", "captured", "grouped", "split":
+            return Palette.accentFlat
         default: return Palette.secondaryText
         }
     }
@@ -47,6 +49,11 @@ enum ActivityVocab {
         case "assigned": return "Assigned"
         case "filed": return "Filed"
         case "linked": return "Linked"
+        // The two structural acts that make a group: the confirm card's "Group as one
+        // outcome" and the Advisor's split. Both undo whole from here, and both read
+        // as "Updated" before they had a word.
+        case "grouped": return "Grouped"
+        case "split": return "Split"
         case "archived": return "Archived"
         case "planned": return "Planned"
         case "decided": return "Decided"
