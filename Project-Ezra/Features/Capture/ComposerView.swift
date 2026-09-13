@@ -1633,7 +1633,9 @@ struct ComposerView: View {
             .transition(.opacity)
         } else {
             Button {
-                groupDraftTitle = ""
+                // Starts with the outcome the capture named for itself, when it did
+                // ("Lagos trip: …"); empty otherwise — a guess is not a starting point.
+                groupDraftTitle = CaptureFlow.suggestedOutcomeTitle(from: text) ?? ""
                 groupPrompt = true
             } label: {
                 Label("Group as one outcome", systemImage: "square.stack.3d.up")

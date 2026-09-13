@@ -133,6 +133,20 @@ enum CaptureFlow {
     /// user's own edit path (`Interpretation.editableDrafts`), and the title is the words
     /// as they were said. The resolver still backfills the rest (category, effort, owner,
     /// kind of work) so the card arrives populated like any other — the fields stay
+    /// The outcome a capture NAMES for its own list — "Lagos trip: renew passport, book
+    /// flights" — offered as the group alert's starting text, never applied on its own.
+    /// Deterministic and narrow: the lead before the first colon, one to six words, and
+    /// only when something follows it. Nil for everything else, so the field starts
+    /// empty rather than with a guess.
+    static func suggestedOutcomeTitle(from text: String) -> String? {
+        guard let colon = text.firstIndex(of: ":") else { return nil }
+        let lead = text[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
+        let rest = text[text.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = lead.split(whereSeparator: \.isWhitespace)
+        guard !rest.isEmpty, (1...6).contains(words.count) else { return nil }
+        return lead
+    }
+
     /// assumed and editable; only the existence of the task is the person's call.
     ///
     /// Nil when there is nothing to keep (whitespace only).

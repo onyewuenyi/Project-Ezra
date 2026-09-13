@@ -17,6 +17,20 @@ import Testing
 @Suite("CaptureFlow — the submit decision, pure")
 struct CaptureFlowTests {
 
+    @Test("A capture that names its own outcome offers it as the group's title; nothing else does")
+    func suggestedOutcomeTitle() {
+        #expect(
+            CaptureFlow.suggestedOutcomeTitle(from: "Lagos trip: renew passport, book flights")
+                == "Lagos trip")
+        #expect(CaptureFlow.suggestedOutcomeTitle(from: "  Kitchen remodel : get quotes ") == "Kitchen remodel")
+        // No colon, nothing after it, or a lead too long to be a name → the field starts empty.
+        #expect(CaptureFlow.suggestedOutcomeTitle(from: "renew passport, book flights") == nil)
+        #expect(CaptureFlow.suggestedOutcomeTitle(from: "Lagos trip:") == nil)
+        #expect(
+            CaptureFlow.suggestedOutcomeTitle(
+                from: "I really need to sort out everything for the trip this year: a, b") == nil)
+    }
+
     private let oneThought = "call the dentist tomorrow about the crown"
     private let typedList = "renew the passport\nbook the flights\npay the water bill"
 
