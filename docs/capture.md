@@ -62,6 +62,29 @@ The invariants are in `CLAUDE.md` (the capture bullets); this is the why.
 - **The 2026-09-04 surface pass — nine small honesties, each closing a place the arc quietly worked against the person.** (1) **Discard is reachable from the reveal**, not only the canvas: the reveal is where "no, never mind" is most often decided, and its only exit was Close, which PARKED the capture and resurfaced it at the top of Tasks as unfinished work already decided against. (2) **Removing a card can be undone** — an in-place `UndoNotice` ("Removed “X”" · Undo) restores the card to the place it held and `RemovedDraftSet.forget` reverses the bookkeeping, so a re-read keeps it; before this, one mis-tap on the X was the only irreversible act on the surface and the merge then kept the card out of every re-read. (3) **The Create CTA says what pressing it does** (`ComposerView.createTitle(created:merged:)`): "Create 2 tasks · merge 1", never "Create 3 tasks" over a set with a merge in it — the commit pill used to correct the button a second later. (4) **The subtitle carries the ask** (`revealSubtitle(count:asks:)`: "3 things · 1 needs a date") — the one thing on the page that wants something back was findable by sighted users only by scanning every card for a "When?" chip, while VoiceOver users were told at the reveal. (5) **The transcript is captioned** in the register of its channel ("What I heard — edit it if I misheard." / "What you wrote — …" / "What the photo said — …"): under "Here's what I understood", an unlabelled editable box read as a notes field and its editability, the whole reason it is on the page, went unnoticed. (6) **"Nothing actionable" has a way forward the person owns** — `CaptureFlow.keepAsOneTask` makes ONE draft from the words as said (resolver-backfilled, confidence 1, `aiOriginal.title == title` so commit diffs no phantom correction), landing through `editableDrafts`, the user's own path: the system proposed nothing, the person vouched for it. (7) **The posture chip sits on the listening surface too** — the door most people use — above the controls row as an overlay so the orb keeps its size; it lived only on the typed canvas's bar, so someone opening INTO listening could not see or set whether a private thought would stay on the device without leaving the surface first. (8) **A parked capture says how old it is and can be let go without opening it** (`ParkedCapturesRow.age`, "2h ago"; long-press → Discard behind the same confirmation the composer wears): a row dismissable only by resuming it and finding Discard nags by construction. (9) **Just-created rows wash in** (`TaskRow.isFreshArrival`, `confirmedAt` within 8s; `Motion.arrivalWashHold`/`arrivalWashFade`): Create dismisses immediately and states no count, so the list has to show WHICH rows arrived or the receipt is a list that looks the same with more in it — a soft `accentSoft` tint held past the sheet's dismissal, then dissolved; never a badge, gated on the window so a relaunch or a later scroll never re-washes. Plus ⌘↩ on Ramble and Create for hardware keyboards. Pinned in `CaptureSurfaceTests`.
 
 
+## 2026-09-12 — the reveal can make a group: "Group as one outcome"
+
+The list learned to render a container as a deck — a group with a current task — and the
+same day it became obvious that a person had no way to MAKE one on purpose: only the
+Advisor's split and a capture-time child link ever created an umbrella. The reveal now
+carries a bordered secondary beside *Keep it as one task*: **Group as one outcome**. An
+alert names the outcome, the CTA reads *Create “Trip to Lagos” · 3 steps*, and the
+umbrella is born at Create — at the one publish boundary, nowhere before
+(`AppBrain.commit(groupTitle:)`): owned and authored by the capturer, filed under the
+steps' commonest category (ties to the first step's, deterministically — a dictionary
+max filed the same capture differently run to run), its steps linked in card order with
+`sortIndex`, logged as a reversible `.human` `"grouped"` entry whose undo arm unlinks the
+steps and removes an untouched umbrella. One card is never a group; a blank title groups
+nothing. When the capture NAMED its outcome — *"Lagos trip: renew my passport, book the
+flights"* — the button itself reads *Group as “Lagos trip”* and one tap groups
+(`CaptureFlow.suggestedOutcomeTitle`: the lead before the first colon, one to six words,
+something after it); otherwise the alert starts empty, because a guess is not a starting
+point. Nothing here is proposed by the system: the reveal boundary is untouched, the
+person vouched for the structure. The AI proposing a group — the model naming membership
+— stays the separate change, landing behind the same tap and the same receipt.
+`-OpenCapture "text" -GroupAs "Title"` reaches the grouped reveal; Activity words the act
+("Grouped", with the split's glyph) and undoes it whole.
+
 ## 2026-09-12 — embeddings have never worked on the dogfooding phone
 
 Found by the duplicate-sweep eval's prefilter line on the DEVICE — "no sentence embedding
