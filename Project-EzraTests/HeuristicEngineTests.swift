@@ -62,6 +62,29 @@ struct HeuristicEngineTests {
         #expect(items == ["renew passport"])
     }
 
+    @Test("A capture that is one filler word is nothing, not a card")
+    func bareFillerIsNoItem() {
+        #expect(HeuristicEngine.splitIntoItems("Have").isEmpty)
+        #expect(HeuristicEngine.splitIntoItems("Um.").isEmpty)
+        #expect(HeuristicEngine.splitIntoItems("Hello").isEmpty)
+        #expect(HeuristicEngine.splitIntoItems("Laundry") == ["Laundry"])
+        #expect(HeuristicEngine.splitIntoItems("Have the car washed") == ["Have the car washed"])
+    }
+
+    @Test("The category with the most signals wins; table order only breaks ties")
+    func mostHitsWins() {
+        #expect(HeuristicEngine.intent(from: "email the client about the invoice").category == "Work")
+        #expect(HeuristicEngine.intent(from: "pay the invoice").category == "Finance")
+        #expect(HeuristicEngine.intent(from: "daycare enrollment forms").category == "Family")
+    }
+
+    @Test("Kitchen and room words file under Home, not Admin")
+    func kitchenIsHome() {
+        #expect(HeuristicEngine.intent(from: "cook dinner for tomorrow").category == "Home")
+        #expect(HeuristicEngine.intent(from: "make lunch at noon").category == "Home")
+        #expect(HeuristicEngine.intent(from: "sort the garage").category == "Home")
+    }
+
     // MARK: - Categorization (word-boundary regression)
 
     @Test("‘daycare’ files under Family, not Car (word-boundary match)")

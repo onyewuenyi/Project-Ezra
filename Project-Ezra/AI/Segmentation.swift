@@ -41,7 +41,7 @@ enum Segmentation {
                 line
                 .trimmingCharacters(in: .whitespaces)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "-•*·—▪◦> \t"))
-            guard trimmed.count > 1 else { continue }
+            guard trimmed.count > 1, !isBareFiller(trimmed) else { continue }
             for sentence in sentences(in: trimmed) {
                 for clause in splitClauses(sentence) {
                     for run in splitAfterTimeExpressions(clause) {
@@ -365,6 +365,22 @@ enum Segmentation {
         }
         return sentence
     }
+
+    /// A capture that is ONE filler or auxiliary word is not a task — "Have", "Um",
+    /// "Hello" each became a card on the real-utterance corpus (2026-09-17), where the
+    /// label says nothing was said. The one-word rule in `cleanTitle` ("a one-word line
+    /// keeps its word") is for a real word — "Laundry" is a task; "Have" is a breath.
+    static func isBareFiller(_ line: String) -> Bool {
+        let words = line.lowercased().split(separator: " ")
+        guard words.count == 1, let word = words.first else { return false }
+        let bare = word.trimmingCharacters(in: .punctuationCharacters)
+        return fillerOpeners.contains(bare) || bareAuxiliaries.contains(bare)
+    }
+
+    private static let bareAuxiliaries: Set<String> = [
+        "have", "has", "had", "hi", "hello", "hey", "no", "yes", "the", "a", "an", "like", "hmm",
+        "oh", "just", "then", "but", "or", "it", "this", "that",
+    ]
 
     private static let fillerOpeners: Set<String> = [
         "ok", "okay", "alright", "so", "anyway", "um", "uh", "well", "right",

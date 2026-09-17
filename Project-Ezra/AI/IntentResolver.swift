@@ -29,14 +29,44 @@ enum IntentResolver {
         openTasks: [OpenTaskSnapshot] = [], candidates: [RetrievalCandidate] = [],
         suppressions: [RelationshipSuppression] = [], now: Date = Date()
     ) -> [TaskDraft] {
-        intents.filter { $0.action == .create }
+        let drafts = intents.filter { $0.action == .create }
             .flatMap { expand($0, now: now) }
             .map {
                 resolve(
                     $0, rules: rules, openTasks: openTasks, candidates: candidates,
                     suppressions: suppressions, now: now)
             }
+        return resolvingAnaphoricWaits(drafts)
     }
+
+    /// "Book flights after IT comes through": a wait that opens on a pronoun points at
+    /// the outcome just spoken, not at a task called "it comes through". Left as
+    /// words, the commit's `resolveBlocker` matched nothing and wrote an EXTERNAL wait
+    /// in those words — the passport it plainly meant was one draft earlier in the same
+    /// breath (2026-09-17, `-CaptureCompare`; the model arm resolved the same reference
+    /// to "passport"). The phrase becomes the previous draft's title, which the commit
+    /// then matches to the sibling and writes as a real edge. Short phrases only: "that
+    /// report from Sarah" names its own thing and is left alone.
+    static func resolvingAnaphoricWaits(_ drafts: [TaskDraft]) -> [TaskDraft] {
+        guard drafts.count > 1 else { return drafts }
+        var out = drafts
+        for i in 1..<out.count {
+            guard let phrase = out[i].blockedBy, isAnaphoricWait(phrase) else { continue }
+            out[i].blockedBy = out[i - 1].title
+        }
+        return out
+    }
+
+    static func isAnaphoricWait(_ phrase: String) -> Bool {
+        let words = phrase.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" })
+            .map(String.init)
+        guard let first = words.first, words.count <= 3 else { return false }
+        return anaphoricOpeners.contains(first)
+    }
+
+    private static let anaphoricOpeners: Set<String> = [
+        "it", "it's", "that", "that's", "this", "those", "these", "they", "them",
+    ]
 
     // MARK: - Instance expansion (one intent → one draft per named occasion)
 

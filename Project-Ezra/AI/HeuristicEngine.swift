@@ -200,7 +200,14 @@ struct HeuristicEngine: AIEngine {
         ("Family", ["mom", "dad", "kids", "daycare", "school", "birthday", "call grandma", "family"]),
         (
             "Home",
-            ["clean", "laundry", "grocery", "groceries", "fix", "plumber", "furniture", "trash", "yard"]
+            [
+                "clean", "laundry", "grocery", "groceries", "fix", "plumber", "furniture", "trash", "yard",
+                // The kitchen and the rooms: on 2026-09-17 every "cook dinner" / "make
+                // lunch" in the real-utterance corpus filed under Admin, the one category
+                // that says nothing.
+                "cook", "dinner", "lunch", "breakfast", "meal", "dishes", "vacuum", "tidy", "garage",
+                "fridge", "kitchen",
+            ]
         ),
         (
             "Work",
@@ -222,13 +229,17 @@ struct HeuristicEngine: AIEngine {
         Set(lower.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty })
     }
 
+    /// The category with the MOST keyword hits; table order breaks ties. First-match
+    /// filed "email the client about the invoice" under Finance because "invoice" sits
+    /// in an earlier row than "email" and "client" — two signals lost to one.
     private static func category(for lower: String) -> String {
         let words = words(in: lower)
-        for (cat, keys) in categoryKeywords
-        where keys.contains(where: { matches($0, in: lower, words: words) }) {
-            return cat
+        var best: (category: String, hits: Int)?
+        for (cat, keys) in categoryKeywords {
+            let hits = keys.filter { matches($0, in: lower, words: words) }.count
+            if hits > 0, hits > (best?.hits ?? 0) { best = (cat, hits) }
         }
-        return "Admin"
+        return best?.category ?? "Admin"
     }
 
     private static func categoryIsStrong(_ lower: String) -> Bool {

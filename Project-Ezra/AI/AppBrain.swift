@@ -189,6 +189,10 @@ final class AppBrain {
             for index in resolved.indices { resolved[index].provisionalSource = clause }
             drafts.append(contentsOf: resolved)
         }
+        // Clauses resolve one at a time above, so a wait that points back at the
+        // previous clause ("…after it comes through") can only be resolved here, over
+        // the assembled list.
+        drafts = IntentResolver.resolvingAnaphoricWaits(drafts)
         proposeOwners(to: &drafts, ownership: ownership)
         return drafts
     }

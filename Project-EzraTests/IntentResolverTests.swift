@@ -39,6 +39,20 @@ struct IntentResolverTests {
 
     // MARK: - Date resolution
 
+    @Test("A wait that opens on a pronoun points at the draft spoken just before it")
+    func anaphoricWaitResolvesToPreviousDraft() {
+        let drafts = AppBrain.provisionalDrafts(
+            "renew my passport before the trip and book flights after it comes through")
+        #expect(drafts.count == 2)
+        #expect(drafts[1].blockedBy == drafts[0].title)
+        #expect(
+            TaskItem.blockerMatches(drafts[1].blockedBy ?? "", resolvedTitle: drafts[0].title))
+        // A phrase that names its own thing is left alone.
+        #expect(!IntentResolver.isAnaphoricWait("that report from sarah"))
+        #expect(IntentResolver.isAnaphoricWait("it's done"))
+        #expect(!IntentResolver.isAnaphoricWait("receipts"))
+    }
+
     @Test("today / tomorrow resolve relative to the injected now")
     func todayTomorrow() {
         #expect(resolved("today") == day(15))
