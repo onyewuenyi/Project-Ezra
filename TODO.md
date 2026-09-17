@@ -5,7 +5,7 @@ proves it done, so a ticked box means the thing happened, not that it was starte
 
 ## Kinly launch — after the 2026-09-12 landing (`docs/kinly-launch-plan.md`)
 
-- [ ] **Register the iCloud container on the App ID — BEFORE anything else on this list,
+- [x] **Register the iCloud container on the App ID — BEFORE anything else on this list,
       because no device build from `main` signs until it is done.** The sync flip added
       `iCloud.amanze-studios.Project-Ezra` to the entitlements; the team profile does not
       carry it, and from the CLI `xcodebuild -allowProvisioningUpdates` answers *No
@@ -15,6 +15,8 @@ proves it done, so a ticked box means the thing happened, not that it was starte
       isolated DerivedData — a workaround for evals, not a fix. *Done when:*
       `xcodebuild -destination 'id=<phone>' build` from a clean `main` prints
       **BUILD SUCCEEDED**, and `xcrun devicectl device install app` installs it.
+      **Done 2026-09-17:** a clean `main` built for the phone from the CLI, the signed bundle's
+      entitlements carry the container, and `devicectl device install app` installed it.
 
 - [ ] **Two-phone sitting for the CloudKit round trip.** Two signed-in iCloud phones: on
       one, Tasks ▸ … ▸ Manage household ▸ a member's … ▸ *Invite to share this household*,

@@ -181,6 +181,9 @@ enum QuickCaptureDiagnostics {
         }
 
         print("=== QUICK CAPTURE DIAG · CAMPAIGN 3: the Private Capture envelope ===")
+        print(
+            Instrument.runStamp(
+                model: brain.status.description, configuration: PrivateCaptureEngine.instructions))
         guard brain.status.isOnDevice else {
             print("(skipped — no on-device model on this host; these numbers are device-only)")
             print("=== END QUICK CAPTURE DIAG ===")
@@ -244,7 +247,8 @@ enum QuickCaptureDiagnostics {
                     repCount: q1Repeats,
                     sessionLabel: q1Rows.isEmpty ? "post-reboot first invocation " : "fresh",
                     acquisitionMs: nil, preparedAheadMs: nil, preFirstTokenMs: nil,
-                    totalMs: nil, failure: nil, promptTok: nil, outTok: nil)
+                    totalMs: nil, failure: nil, promptTok: nil, outTok: nil,
+                    utterance: evalCase.utterance)
                 do {
                     let (preMs, totalMs, capture) = try await ModelDeadline.race(
                         timeout: LaunchSeams.evalCaseTimeoutSeconds
@@ -295,7 +299,7 @@ enum QuickCaptureDiagnostics {
                     row.failure = "TIMEOUT \(Int(LaunchSeams.evalCaseTimeoutSeconds))s"
                     consecutiveFailures += 1
                 } catch {
-                    row.failure = AppBrain.errorLabel(error)
+                    row.failure = AppBrain.errorLine(error)
                     consecutiveFailures += 1
                 }
                 q1Rows.append(row)
@@ -328,7 +332,8 @@ enum QuickCaptureDiagnostics {
             var row = FMDiagnostics.Row(
                 caseNumber: index + 1, caseCount: detectorCases.count, rep: 1, repCount: 1,
                 sessionLabel: "fresh", acquisitionMs: nil, preparedAheadMs: nil,
-                preFirstTokenMs: nil, totalMs: nil, failure: nil, promptTok: nil, outTok: nil)
+                preFirstTokenMs: nil, totalMs: nil, failure: nil, promptTok: nil, outTok: nil,
+                utterance: evalCase.utterance)
             do {
                 let (preMs, totalMs, verdict) = try await ModelDeadline.race(
                     timeout: LaunchSeams.evalCaseTimeoutSeconds
@@ -343,7 +348,7 @@ enum QuickCaptureDiagnostics {
                 row.failure = "TIMEOUT \(Int(LaunchSeams.evalCaseTimeoutSeconds))s"
                 consecutiveFailures += 1
             } catch {
-                row.failure = AppBrain.errorLabel(error)
+                row.failure = AppBrain.errorLine(error)
                 consecutiveFailures += 1
             }
             detRows.append(row)

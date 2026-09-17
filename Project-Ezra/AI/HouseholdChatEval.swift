@@ -288,6 +288,7 @@ enum HouseholdChatEval {
             Instrument.teeStdoutToDocuments("householdchat-report.txt")
         }
         print("=== HOUSEHOLD CHAT EVAL ===")
+        print(Instrument.runStamp(model: brain.status.description, configuration: "HouseholdInquiryScope"))
         print("host engine: \(brain.status.description)")
 
         let facts = fixture()

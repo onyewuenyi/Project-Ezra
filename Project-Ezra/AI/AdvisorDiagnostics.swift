@@ -135,8 +135,24 @@ enum AdvisorDiagnostics {
     }
 
     static func runIfRequested() async {
-        guard ProcessInfo.processInfo.arguments.contains("-AdvisorDiagnostics") else { return }
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-AdvisorDiagnostics") else { return }
+        if args.contains("-EvalToFile") {
+            Instrument.teeStdoutToDocuments("advisordiagnostics-report.txt")
+        }
         print("=== ADVISOR DIAGNOSTICS ===")
+        print(
+            Instrument.runStamp(
+                model: AppBrain.availabilityLabel(),
+                configuration: String(describing: CapabilityProfiles.taskAdvisor)))
+        // The cloud arm spends only when asked; the guard, not a skip line, is what
+        // prevents it (the RambleEval invariant), and the delta below is the receipt.
+        let cloudDecision = LaunchSeams.cloudArmDecision(
+            arguments: args, providerAvailable: CloudModel.isAvailable)
+        let originalProvider = CloudModel.provider
+        if cloudDecision != .run { CloudModel.provider = LaunchSeams.EvalQuotaGuard.self }
+        defer { CloudModel.provider = originalProvider }
+        let cloudBefore = IntelligenceLedger.shared.cloudCallsToday()
         print("model available: \(AppBrain.onDeviceModelAvailable())")
         // Which capabilities this silicon actually has. `availability == .available` says
         // there IS a model; it does not say the model can do what a profile asks of it,
@@ -160,11 +176,15 @@ enum AdvisorDiagnostics {
         // against the value. If it doesn't, the ~$0 ladder IS the product — and that is
         // a fine answer, arrived at with data rather than instinct.
         await runArm(.onDevice)
-        if CloudModel.isAvailable {
+        if cloudDecision == .run {
             await runArm(.cloud)
         } else {
-            print("\n(cloud arm skipped — no provider installed; CloudModel.provider is inert)")
+            print(
+                "\n(cloud arm SKIPPED — \(CloudModel.isAvailable ? "provider configured, -WithCloud not passed" : "no provider installed"); this run spent 0 cloud calls)"
+            )
         }
+        let providerCalls = IntelligenceLedger.shared.cloudCallsToday() - cloudBefore
+        print("RUN INTEGRITY: providerCalls \(providerCalls) (receipt)")
         print("=== END ADVISOR DIAGNOSTICS ===")
     }
 

@@ -119,6 +119,19 @@ struct FMDiagnosticsTests {
         #expect(FMDiagnostics.contractVerdict(validWarmMs: []) == .inconclusive)
     }
 
+    @Test("A FAILED row names its utterance; a success row never does")
+    func failedRowNamesUtterance() {
+        var row = FMDiagnostics.Row(
+            caseNumber: 13, caseCount: 44, rep: 1, repCount: 2, sessionLabel: "fresh",
+            acquisitionMs: nil, preparedAheadMs: nil, preFirstTokenMs: nil, totalMs: nil,
+            failure: "guardrailViolation", promptTok: nil, outTok: nil, utterance: "file the taxes")
+        #expect(FMDiagnostics.formatRow(row).contains("FAILED(guardrailViolation) · ← file the taxes"))
+        row.failure = nil
+        row.totalMs = 900
+        row.preFirstTokenMs = 400
+        #expect(!FMDiagnostics.formatRow(row).contains("file the taxes"))
+    }
+
     // MARK: - The row format (pull scripts grep this; drift = silent breakage)
 
     @Test("The row format is pinned, and nil renders as — never 0")

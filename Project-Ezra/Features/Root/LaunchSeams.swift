@@ -65,6 +65,11 @@ struct LaunchSeams {
             Instrument.teeStdoutToDocuments("rambleeval-report.txt")
         }
         print("=== RAMBLE EVAL ===")
+        print(
+            Instrument.runStamp(
+                model: brain.status.description,
+                configuration: FoundationModelsEngine.instructionText(for: TriageContext())
+                    + "|floors=\(RambleEval.Floors.standard)|real=\(RambleEval.Floors.real)"))
         print("host engine: \(brain.status.description)")
 
         // CAMPAIGN INVARIANT: a free-arm run makes ZERO cloud provider calls, and
@@ -145,7 +150,7 @@ struct LaunchSeams {
                     let label = AppBrain.errorLabel(error)
                     ModelMetrics.shared.record(
                         .captureTriage, .failed(label), latencyMs: elapsed())
-                    try failures.recordOrAbort(label)
+                    try failures.recordOrAbort(AppBrain.errorLine(error))
                     return []
                 }
             }
@@ -451,11 +456,10 @@ struct LaunchSeams {
                     """)
             }
         } catch {
-            print("arm \(name) FAILED: \(AppBrain.errorLabel(error))")
+            print("arm \(name) FAILED: \(AppBrain.errorLine(error))")
         }
     }
     #endif
-
 
     /// Verification seam for the ONE thing only real hardware can answer: how the
     /// capture pipeline behaves against a live on-device model.
@@ -498,6 +502,10 @@ struct LaunchSeams {
             : "renew my passport before the trip and book flights after it comes through"
 
         print("=== CAPTURE COMPARE ===")
+        print(
+            Instrument.runStamp(
+                model: brain.status.description,
+                configuration: FoundationModelsEngine.instructionText(for: TriageContext())))
         print("input (\(text.count) chars): \(text)")
         // What PRODUCTION would do with this input, before any arm runs — so the
         // comparison is read against the route the user would actually get. Since
@@ -573,7 +581,7 @@ struct LaunchSeams {
                 print(line)
             }
         } catch {
-            print("\n── \(name) — FAILED: \(AppBrain.errorLabel(error))")
+            print("\n── \(name) — FAILED: \(AppBrain.errorLine(error))")
         }
     }
 
@@ -601,6 +609,10 @@ struct LaunchSeams {
                 plumber once the contractor calls back, and renew my passport
                 """
         print("=== CAPTURE DIAGNOSTICS ===")
+        print(
+            Instrument.runStamp(
+                model: brain.status.description,
+                configuration: FoundationModelsEngine.instructionText(for: TriageContext())))
         print("engine: \(brain.status.description)")
         // The first line to read when a capture is slow. `configured` is whether this
         // build is wired to a provider at all; `health` is whether the last calls
@@ -692,7 +704,7 @@ struct LaunchSeams {
                 let elapsed = Int(Date().timeIntervalSince(started) * 1000)
                 print(
                     "continuous turn \(index + 1)/\(snapshots.count) [\(turnLabel)]: "
-                        + "FAILED after \(elapsed)ms · \(AppBrain.errorLabel(error))")
+                        + "FAILED after \(elapsed)ms · \(AppBrain.errorLine(error))")
             }
         }
     }

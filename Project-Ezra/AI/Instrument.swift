@@ -132,16 +132,39 @@ enum Instrument {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
-        var system = utsname()
-        uname(&system)
-        let machine = withUnsafeBytes(of: &system.machine) { raw in
-            String(cString: raw.baseAddress!.assumingMemoryBound(to: CChar.self))
-        }
         let os = ProcessInfo.processInfo.operatingSystemVersion
         return
-            "run stamp: app \(short) (\(build)) · OS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion) · "
-            + "device \(machine) · model \(model) · config \(fingerprint(configuration)) · "
-            + "\(ISO8601DateFormatter().string(from: Date()))"
+            "run stamp: app \(short) (\(build)) · OS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion) "
+            + "(\(osBuild)) · device \(deviceIdentity) · model \(model) · "
+            + "config \(fingerprint(configuration)) · \(ISO8601DateFormatter().string(from: Date()))"
+    }
+
+    /// The OS BUILD (`24A437`), beside the version. The on-device model changed at 26.4
+    /// and again at 27.0 with no version API of its own (`SystemLanguageModel` exposes
+    /// `contextSize` and `tokenCount`, nothing that names the weights), so the OS build
+    /// is the only fingerprint of WHICH model answered — and two 27.0 runs on different
+    /// builds are not the same runtime.
+    static var osBuild: String {
+        var size = 0
+        sysctlbyname("kern.osversion", nil, &size, nil, 0)
+        guard size > 0 else { return "?" }
+        var buffer = [CChar](repeating: 0, count: size)
+        sysctlbyname("kern.osversion", &buffer, &size, nil, 0)
+        return String(cString: buffer)
+    }
+
+    /// `iPhone16,2` on a phone; `sim:iPhone18,1` on the simulator. `utsname.machine` on
+    /// the simulator is the host Mac's `arm64`, which stamped a simulator run as a device
+    /// run on 2026-09-17 — the simulator now runs the real on-device model, so the two
+    /// produce numbers that look comparable and are not (Mac silicon vs phone).
+    static var deviceIdentity: String {
+        let env = ProcessInfo.processInfo.environment
+        if let simulated = env["SIMULATOR_MODEL_IDENTIFIER"] { return "sim:\(simulated)" }
+        var system = utsname()
+        uname(&system)
+        return withUnsafeBytes(of: &system.machine) { raw in
+            String(cString: raw.baseAddress!.assumingMemoryBound(to: CChar.self))
+        }
     }
 
     /// A short, stable fingerprint of a configuration string. Not cryptographic — it only
