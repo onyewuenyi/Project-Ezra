@@ -49,18 +49,6 @@ enum Motion {
     /// The day's centerpiece landing (the Recap hero numeral): rises and settles with a
     /// clean, earned overshoot — rare + celebratory, so a touch of life is right.
     static let heroSettle = Animation.spring(duration: 0.5, bounce: 0.22)
-    /// Capacity capsule entrance — blur + scale materialize together. No bounce: a
-    /// surface arriving shouldn't overshoot.
-    static let capsuleExpand = Animation.spring(duration: 0.4, bounce: 0)
-    /// Plan items landing — the ONE earned bounce in the whole sequence, snappy (0.34s)
-    /// so the payoff feels alive, not springy.
-    static let planLanding = Animation.spring(duration: 0.34, bounce: 0.2)
-    /// The advisor briefing arriving after the Recap cover — a slightly longer,
-    /// confident reveal for the payoff scene.
-    static let briefingReveal = Animation.spring(duration: 0.6, bounce: 0.12)
-    /// The Recap numeral counting up 0→N — an eased roll, not a spring.
-    static let countUp = Animation.easeOut(duration: 0.9)
-
     /// Press feedback — touch-down/up on every pressable surface.
     static let press = Animation.easeOut(duration: 0.15)
     /// Opacity cross-fades: empty-state ↔ list swaps, blocked frost. Comprehension
@@ -242,33 +230,6 @@ enum Motion {
     /// A chip appearing/leaving — a small trailing-anchored scale + fade.
     static let chip = AnyTransition.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing))
 
-    /// The cinematic beat transition (Recap → Docket → Plan): the outgoing beat
-    /// recedes (scales to 0.93, dims, blurs) while the incoming beat advances forward
-    /// (rises from 0.98, clears its blur). The blur bridges the two states so the eye
-    /// reads one transformation, not two screens crossfading (masking trick). Top
-    /// anchor keeps the header edge stable. Callers pass `.opacity` instead under
-    /// Reduce Motion — movement out, comprehension-preserving fade in.
-    static let beatRecede = AnyTransition.asymmetric(
-        insertion: .opacity
-            .combined(with: .scale(scale: 0.98, anchor: .top))
-            .combined(with: blur(4)),
-        removal: .opacity
-            .combined(with: .scale(scale: 0.93, anchor: .top))
-            .combined(with: blur(4))
-    )
-
-    /// A blur transition between `radius` (active/out-of-frame) and 0 (identity).
-    private static func blur(_ radius: CGFloat) -> AnyTransition {
-        .modifier(
-            active: BlurTransitionModifier(radius: radius),
-            identity: BlurTransitionModifier(radius: 0))
-    }
-}
-
-/// Backs `Motion.beatRecede`'s blur masking — a transition-driven blur radius.
-private struct BlurTransitionModifier: ViewModifier {
-    let radius: CGFloat
-    func body(content: Content) -> some View { content.blur(radius: radius) }
 }
 
 // MARK: - Repeating animation helper

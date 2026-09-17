@@ -34,14 +34,6 @@ private func scaledRoundedToken(
 }
 
 extension Font {
-    /// 72pt UltraLight rounded — the Today Recap's completed-count numeral. The thin
-    /// display numeral. Never hardcode 72 in a view — use this token (and
-    /// `heroNumeralStyle()` for its tracking).
-    static var heroNumeral: Font { scaledRoundedToken(72, .ultraLight, relativeTo: .largeTitle) }
-    /// 64pt Bold rounded — the cinematic count-up numeral and the advisor briefing's
-    /// headline. The BOLD big-display token (heroNumeral is too thin for a Wrapped-scale
-    /// moment). Use with `heroDisplayStyle()`.
-    static var heroDisplay: Font { scaledRoundedToken(64, .bold, relativeTo: .largeTitle) }
     /// 34pt Bold — "What should I work on?"
     static var heroLarge: Font { scaledToken(34, .bold, relativeTo: .largeTitle) }
     /// 28pt Semibold — screen titles
@@ -139,23 +131,6 @@ enum IconSize {
 
 /// Convenience text-style modifiers that bundle font + size-specific tracking + color.
 extension View {
-    /// The hero-numeral treatment: `heroNumeral` font with tightened tracking
-    /// (~-2% — large type reads loose at default spacing, spec §4.2). Shared by the
-    /// Recap numeral and the day-framing title card.
-    func heroNumeralStyle() -> some View {
-        self.font(.heroNumeral)
-            .tracking(-1.4)  // ~-0.02em at 72pt
-            .foregroundStyle(Palette.primaryText)
-    }
-
-    /// The bold big-display treatment (count-up numerals, briefing headline):
-    /// `heroDisplay` with tightened tracking. Pairs with a leading multiline layout.
-    func heroDisplayStyle() -> some View {
-        self.font(.heroDisplay)
-            .tracking(-1.2)  // ~-0.02em at 64pt
-            .foregroundStyle(Palette.primaryText)
-    }
-
     func heroLargeStyle() -> some View {
         self.font(.heroLarge)
             .tracking(-0.6)  // ~-0.02em at 34pt
