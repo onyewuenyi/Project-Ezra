@@ -45,6 +45,22 @@ struct ModelDeadlineTests {
         }
     }
 
+    @Test("An operation that IGNORES cancellation still loses at the deadline")
+    func uncancellableOperationStillTimesOut() async {
+        // The 2026-09-17 shape: the GA model wedged inside `respond`, which does not
+        // honour cancellation, and the old task-group race waited on it forever. The
+        // deadline must return on the clock, whatever the operation does.
+        let started = ContinuousClock.now
+        await #expect(throws: ModelDeadline.Exceeded.self) {
+            try await ModelDeadline.race(timeout: 0.1) {
+                let end = ContinuousClock.now + .seconds(3)
+                while ContinuousClock.now < end { /* uncancellable */  }
+                return 1
+            }
+        }
+        #expect(ContinuousClock.now - started < .seconds(2))
+    }
+
     @Test("The operation's OWN error surfaces — never disguised as a timeout")
     func operationErrorIsNotATimeout() async {
         // The distinction is load-bearing: a guardrail refusal and a hung model need

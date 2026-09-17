@@ -496,6 +496,9 @@ struct LaunchSeams {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         guard let flag = args.firstIndex(of: "-CaptureCompare") else { return }
+        if args.contains("-EvalToFile") {
+            Instrument.teeStdoutToDocuments("capturecompare-report.txt")
+        }
         let text =
             args.indices.contains(flag + 1) && !args[flag + 1].hasPrefix("-")
             ? args[flag + 1]
@@ -594,6 +597,9 @@ struct LaunchSeams {
 
     func runCaptureDiagnosticsIfRequested() async {
         guard ProcessInfo.processInfo.arguments.contains("-CaptureDiagnostics") else { return }
+        if ProcessInfo.processInfo.arguments.contains("-EvalToFile") {
+            Instrument.teeStdoutToDocuments("capturediagnostics-report.txt")
+        }
         // Long, messy, and full of the shapes that make the model work: dates, a
         // delegation, a blocker, judgment calls, and a duplicate of a seeded task.
         let ramble =

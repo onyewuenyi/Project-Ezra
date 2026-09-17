@@ -147,8 +147,9 @@ enum AdvisorDiagnostics {
                 configuration: String(describing: CapabilityProfiles.taskAdvisor)))
         // The cloud arm spends only when asked; the guard, not a skip line, is what
         // prevents it (the RambleEval invariant), and the delta below is the receipt.
+        let providerAvailable = CloudModel.isAvailable
         let cloudDecision = LaunchSeams.cloudArmDecision(
-            arguments: args, providerAvailable: CloudModel.isAvailable)
+            arguments: args, providerAvailable: providerAvailable)
         let originalProvider = CloudModel.provider
         if cloudDecision != .run { CloudModel.provider = LaunchSeams.EvalQuotaGuard.self }
         defer { CloudModel.provider = originalProvider }
@@ -180,7 +181,7 @@ enum AdvisorDiagnostics {
             await runArm(.cloud)
         } else {
             print(
-                "\n(cloud arm SKIPPED — \(CloudModel.isAvailable ? "provider configured, -WithCloud not passed" : "no provider installed"); this run spent 0 cloud calls)"
+                "\n(cloud arm SKIPPED — \(providerAvailable ? "provider configured, -WithCloud not passed" : "no provider installed"); this run spent 0 cloud calls)"
             )
         }
         let providerCalls = IntelligenceLedger.shared.cloudCallsToday() - cloudBefore

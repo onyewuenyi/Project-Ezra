@@ -201,21 +201,71 @@ enum ModelDeadline {
     /// Cancelling the enclosing task propagates: `Task.sleep` throws `CancellationError`,
     /// which surfaces here rather than being mistaken for a timeout.
     ///
-    /// Cancellation is cooperative — `cancelAll()` cannot force a wedged `respond` call
-    /// to return. It stops *us* waiting on it, which is what the UI needs.
-    static func race<T: Sendable>(
+    /// Cancellation is cooperative — cancelling cannot force a wedged `respond` call to
+    /// return. It stops *us* waiting on it, which is what the UI needs — and that is
+    /// exactly what the previous shape did NOT do: the operation ran as a child of a
+    /// `withThrowingTaskGroup`, and a task group waits for every child before its error
+    /// propagates, so a `respond` that ignored cancellation held the deadline hostage.
+    /// On 2026-09-17 the iOS 27 GA model wedged on one guided-generation case and the
+    /// 60 s per-case deadline never fired in 15 minutes; under `ModelRun.perform` the
+    /// same shape would have kept the deterministic tail unreachable. The operation now
+    /// runs as an unstructured task the race does not await past the deadline; the loser
+    /// is cancelled and, if it never honours that, it finishes on its own time and its
+    /// result is discarded.
+    /// `nonisolated` and detached on purpose: this file's types are main-actor isolated
+    /// by default, and a race whose timer and operation both inherit the main actor
+    /// runs them one after the other — the timer cannot fire while the operation holds
+    /// the actor. A timing primitive must not share an executor with what it times.
+    nonisolated static func race<T: Sendable>(
         timeout seconds: Double,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw Exceeded()
+        let work = Task.detached { try await operation() }
+        let timer = Task.detached {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        }
+        let claim = Claim()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                Task.detached {
+                    let result = await work.result
+                    guard claim.take() else { return }
+                    timer.cancel()
+                    continuation.resume(with: result)
+                }
+                Task.detached {
+                    do {
+                        try await timer.value
+                        guard claim.take() else { return }
+                        work.cancel()
+                        continuation.resume(throwing: Exceeded())
+                    } catch {
+                        // The timer was cancelled: by the winner (claim already taken —
+                        // nothing to do) or by the enclosing task (propagate it as
+                        // cancellation, never as a timeout).
+                        guard claim.take() else { return }
+                        work.cancel()
+                        continuation.resume(throwing: CancellationError())
+                    }
+                }
             }
-            guard let result = try await group.next() else { throw Exceeded() }
-            group.cancelAll()
-            return result
+        } onCancel: {
+            timer.cancel()
+            work.cancel()
+        }
+    }
+
+    /// First-come claim on the continuation — whichever side finishes first resumes it,
+    /// the other side finds the claim taken and does nothing.
+    private final class Claim: @unchecked Sendable {
+        private let lock = NSLock()
+        private var taken = false
+        func take() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if taken { return false }
+            taken = true
+            return true
         }
     }
 }
