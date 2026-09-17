@@ -214,14 +214,19 @@ enum DuplicateSweepEval {
         let b = OpenTaskSnapshot(id: UUID(), title: pair.b, category: pair.category)
         let vector: (String) -> [Double]? = { EmbeddingStore.computeVector(for: $0) }
         let survivors = DuplicateSweep.candidatePairs(among: [a, b], suppressions: [], vector: vector)
-        let similarity: Double? = {
-            guard let va = vector(pair.a), let vb = vector(pair.b) else { return nil }
-            return EmbeddingStore.similarity(va, vb)
-        }()
         let wa = CorrectionProfile.significantWords(pair.a)
         let wb = CorrectionProfile.significantWords(pair.b)
         let union = Double(wa.union(wb).count)
         let overlap = union > 0 ? Double(wa.intersection(wb).count) / union : 0
+        // Reuse the score candidatePairs already computed; only call similarity() for pairs that
+        // survived the words guard but failed a floor (empty words means the floor was never
+        // reached — showing a similarity value there would misattribute the rejection cause).
+        let similarity: Double? = {
+            if let candidate = survivors.first { return candidate.score }
+            guard !wa.isEmpty, !wb.isEmpty else { return nil }
+            guard let va = vector(pair.a), let vb = vector(pair.b) else { return nil }
+            return EmbeddingStore.similarity(va, vb)
+        }()
         return PrefilterRead(survives: !survivors.isEmpty, similarity: similarity, overlap: overlap)
     }
 
@@ -285,7 +290,7 @@ enum DuplicateSweepEval {
 
         guard brain.status.isOnDevice else {
             print("\n(no on-device model on this host — the judge is device-only)")
-            printPrefilterRecall(corpus.map { ($0, survivesPrefilter($0)) })
+            printPrefilterRecall(corpus.map { ($0, prefilterRead($0)) })
             print("\n── verdict ──")
             print("NOT MEASURED: no on-device model. The prefilter row above still holds.")
             print(markers.end)
@@ -342,7 +347,12 @@ enum DuplicateSweepEval {
         printRows(rows)
         printPrefilterRecall(
             corpus.map { pair in
-                (pair, rows.first { $0.pair.a == pair.a && $0.pair.b == pair.b }?.survivesPrefilter ?? false)
+                let row = rows.first { $0.pair.a == pair.a && $0.pair.b == pair.b }
+                let read = PrefilterRead(
+                    survives: row?.survivesPrefilter ?? false,
+                    similarity: row?.similarity ?? nil,
+                    overlap: row?.overlap ?? 0)
+                return (pair, read)
             })
 
         let latencies = rows.filter(\.served).map(\.ms)
@@ -446,7 +456,7 @@ enum DuplicateSweepEval {
 
     /// **Does the prefilter even let the duplicates through?** A judge measured behind a
     /// filter that drops half the real duplicates looks perfect and does nothing.
-    private static func printPrefilterRecall(_ rows: [(LabeledPair, Bool)]) {
+    private static func printPrefilterRecall(_ rows: [(LabeledPair, PrefilterRead)]) {
         print("\n── prefilter (the population the judge actually sees) ──")
         guard embeddingAvailable else {
             print(
@@ -456,20 +466,22 @@ enum DuplicateSweepEval {
             return
         }
         let duplicates = rows.filter { $0.0.isDuplicate }
-        let shown = duplicates.filter(\.1).count
+        let shown = duplicates.filter { $0.1.survives }.count
         let nearMisses = rows.filter { !$0.0.isDuplicate }
         print(
             "  real duplicates reaching the judge: \(shown)/\(duplicates.count)"
                 + (shown < duplicates.count
                     ? "  ← the floors, not the model, are the ceiling on this feature" : ""))
-        print("  near-misses reaching the judge:     \(nearMisses.filter(\.1).count)/\(nearMisses.count)")
-        for (pair, survives) in duplicates where !survives {
-            print("    dropped by the floors: \(pair.a) / \(pair.b)")
+        print("  near-misses reaching the judge:     \(nearMisses.filter { $0.1.survives }.count)/\(nearMisses.count)")
+        for (pair, read) in duplicates where !read.survives {
+            let simStr = read.similarity.map { String(format: "%.2f", $0) } ?? "—"
+            print(
+                "    dropped by the floors: \(pair.a) / \(pair.b)"
+                    + "  sim=\(simStr) lex=\(String(format: "%.2f", read.overlap))")
         }
         print(
             String(
-                format:
-                    "  floors: similarity ≥ %.2f · word overlap ≥ %.2f  (read the sim/lex columns above against these)",
+                format: "  floors: similarity ≥ %.2f · word overlap ≥ %.2f",
                 DuplicateSweep.embeddingFloor, DuplicateSweep.lexicalFloor))
     }
 
