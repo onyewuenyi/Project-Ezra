@@ -343,8 +343,18 @@ final class InquiryService {
             .historyTransform { history in
                 Array(history.suffix(InquiryPrompt.historyWindow))
             }
+            // A turn that errors (a guardrail refusal, an overflow, a decode failure) is
+            // rolled back out of the transcript rather than left in it, so "Try again"
+            // re-asks the question on the thread as it was — not on a thread that now
+            // carries the failed attempt as context. iOS 27; the default keeps it.
+            .transcriptErrorHandlingPolicy(.revertTranscript)
         }
     }
+
+    /// How often a session had to be replaced mid-thread, by cause — the meter for a
+    /// degrade that would otherwise be invisible (`responding`: a turn the deadline
+    /// abandoned was still generating; `overflow`: the context window filled).
+    private(set) var rebuilds: (responding: Int, overflow: Int) = (0, 0)
 
     /// Warm the session the moment a scope's surface appears — the person is about to
     /// type, which absorbs the prefill. A no-op off-device and under tests.
@@ -381,13 +391,32 @@ final class InquiryService {
         let prompt = turn.prompt
         let box = PartialBox<String>()
         let started = Date()
-        let outcome = await ModelRun.perform(turn.scope.feature, deadline: ModelDeadline.seconds(for: .reply)) {
-            let session = self.session(for: turn.scope)
-            let stream = session.streamResponse(to: prompt)
-            for try await snapshot in stream {
-                box.latest = snapshot.content
+        let outcome = await ModelRun.perform(turn.scope.feature, deadline: ModelDeadline.seconds(for: .reply))
+        {
+            var session = self.session(for: turn.scope)
+            // **A session still answering a turn the deadline abandoned cannot take
+            // another.** `ModelDeadline.race` never awaits the loser, so after a timeout
+            // the model may still be generating on this session, and Foundation Models
+            // rejects a second request on it (`concurrentRequests`) — which made "Try
+            // again" after a timeout fail instantly, every time, until the abandoned
+            // call finished. The thread moves to a fresh session over the same
+            // instructions, carrying the exchanges that did finish.
+            if session.isResponding {
+                self.rebuilds.responding += 1
+                session = self.rebuild(
+                    for: turn.scope, replacing: session, keepingLast: InquiryPrompt.historyWindow)
             }
-            return try await stream.collect().content
+            do {
+                return try await Self.stream(prompt, on: session, into: box)
+            } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
+                // The window filled (the phone's is 4096 tokens; eight long exchanges
+                // plus the facts can reach it). Halve the thread carried and ask once
+                // more; a retry on the same session could only overflow again.
+                self.rebuilds.overflow += 1
+                session = self.rebuild(
+                    for: turn.scope, replacing: session, keepingLast: InquiryPrompt.historyWindow / 2)
+                return try await Self.stream(prompt, on: session, into: box)
+            }
         }
         // Salvage: the deadline fired mid-answer. What streamed is a real answer to the
         // question — shorter than the model intended, which the clamp would have done
@@ -402,13 +431,47 @@ final class InquiryService {
         return outcome
     }
 
+    /// One streamed reply, the partial kept for salvage at the deadline.
+    private static func stream(
+        _ prompt: String, on session: LanguageModelSession, into box: PartialBox<String>
+    ) async throws -> String {
+        let stream = session.streamResponse(to: prompt)
+        for try await snapshot in stream {
+            box.latest = snapshot.content
+        }
+        return try await stream.collect().content
+    }
+
+    /// A fresh session over the scope's instructions, carrying the last `keep` entries
+    /// of the transcript it replaces — the thread survives, the part that could not
+    /// (an in-flight prompt, an overflowing tail) does not. A trailing prompt with no
+    /// response is dropped: it is the question being re-asked, or one nobody answered.
+    private func rebuild<S: InquiryScope>(
+        for scope: S, replacing old: LanguageModelSession, keepingLast keep: Int
+    ) -> LanguageModelSession {
+        var history = old.transcript.filter { entry in
+            if case .instructions = entry { return false }
+            return true
+        }
+        if case .prompt = history.last { history.removeLast() }
+        let session = LanguageModelSession(
+            profile: Profile(
+                instructions: scope.instructions, config: CapabilityProfiles.supported(scope.config)),
+            history: history.suffix(keep))
+        let key = Self.sessionKey(S.self, key: scope.key, discriminator: scope.sessionDiscriminator)
+        live[key] = Live(fingerprint: scope.fingerprint, session: session)
+        return session
+    }
+
     /// Drop a scope's session — the conversation was cleared, or the scope left the
     /// working set.
     func forget<S: InquiryScope>(_ scopeType: S.Type, key: S.Key, discriminator: String = "") {
         live[Self.sessionKey(scopeType, key: key, discriminator: discriminator)] = nil
     }
 
-    private static func sessionKey<S: InquiryScope>(_ scopeType: S.Type, key: S.Key, discriminator: String) -> String {
+    private static func sessionKey<S: InquiryScope>(
+        _ scopeType: S.Type, key: S.Key, discriminator: String
+    ) -> String {
         "\(S.self)#\(key)#\(discriminator)"
     }
 

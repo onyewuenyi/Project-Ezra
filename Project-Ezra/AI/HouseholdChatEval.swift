@@ -55,10 +55,18 @@ enum HouseholdChatEval {
                 updatedAt: now.addingTimeInterval(-touchedDaysAgo * day))
         }
         let open: [HouseholdChatFacts.Line] = [
-            line("Return the Amazon package", owner: you, due: -5, category: "Errands"),
-            line("Renew the car insurance", owner: you, due: -2, category: "Car", effort: 30),
-            line("Submit the expense report", owner: you, due: 0, urgent: true, category: "Work"),
-            line("Call the pharmacy about the refill", owner: maya, due: 0, category: "Health"),
+            // Distinct last-touch ages on the first four, so the stalest order is exact.
+            line("Return the Amazon package", owner: you, due: -5, category: "Errands", touchedDaysAgo: 12),
+            // Started, so the in-progress shape has a labeled row; still overdue and yours.
+            line(
+                "Renew the car insurance", owner: you, due: -2, status: .doing, category: "Car", effort: 30,
+                touchedDaysAgo: 8),
+            line(
+                "Submit the expense report", owner: you, due: 0, urgent: true, category: "Work",
+                touchedDaysAgo: 6),
+            line(
+                "Call the pharmacy about the refill", owner: maya, due: 0, category: "Health",
+                touchedDaysAgo: 5),
             line(
                 "Book the flights for the trip", owner: you, due: 12, blockers: ["Renew the passport"],
                 category: "Travel"),
@@ -73,7 +81,8 @@ enum HouseholdChatEval {
                 "Fix the garden gate", owner: sam, waits: ["the hinge delivery"], category: "Home",
                 effort: 120),
             line("Plan Maya's birthday dinner", owner: sam, due: 6, category: "Family", effort: 60),
-            line("Pay the water bill", owner: you, due: 2, category: "Finance", effort: 15),
+            // Due tomorrow, so the tomorrow shape has a labeled row; still inside this week.
+            line("Pay the water bill", owner: you, due: 1, category: "Finance", effort: 15),
             line("Pick a summer camp", owner: maya, due: 14, decision: true, category: "Family"),
             line("Clear out the garage", owner: nil, category: "Home", effort: 120, touchedDaysAgo: 20),
         ]
@@ -164,6 +173,37 @@ enum HouseholdChatEval {
                 ])),
         Case(question: "What's overdue for Sam?", expect: .floor(.overdue, cites: [])),
         Case(question: "Is anything unowned?", expect: .floor(.unowned, cites: ["Clear out the garage"])),
+        // The four shapes the 2026-09-17 GA transcript earned (they were probes first).
+        Case(question: "What's due tomorrow?", expect: .floor(.dueTomorrow, cites: ["Pay the water bill"])),
+        Case(
+            question: "What's in progress?", expect: .floor(.inProgress, cites: ["Renew the car insurance"])),
+        Case(
+            question: "What's due next week?",
+            expect: .floor(.dueNextWeek, cites: ["Renew the passport", "Book the flights for the trip"])),
+        Case(
+            question: "Anything for the car?", expect: .floor(.category, cites: ["Renew the car insurance"])),
+        Case(
+            question: "What's the travel stuff?",
+            expect: .floor(
+                .category,
+                cites: ["Book the flights for the trip", "Renew the passport", "Get passport photos"])),
+        // The second GA transcript (same day): finished work never reaches the slice, so
+        // "what did Maya finish?" got "no indication that Maya has completed any task"; and
+        // "untouched the longest" got the most overdue task, since the slice never says when
+        // a task was last touched.
+        Case(question: "What did Maya finish?", expect: .floor(.done, cites: ["Order the school shoes"])),
+        Case(
+            question: "What's been sitting untouched the longest?",
+            expect: .floor(
+                .stalest,
+                cites: [
+                    "Clear out the garage", "Return the Amazon package", "Renew the car insurance",
+                    "Submit the expense report", "Call the pharmacy about the refill",
+                ])),
+        // A category word inside a reasoning question is still the model's.
+        Case(
+            question: "Why is the travel stuff all waiting?",
+            expect: .model(sliceMustContain: ["Renew the passport", "Book the flights for the trip"])),
         // Open — reasoning words send these to the model, with the right slice.
         Case(
             question: "Why is the passport stuck?",
@@ -187,6 +227,19 @@ enum HouseholdChatEval {
             expect: .model(sliceMustContain: [
                 "Sort out the invoice discrepancy", "Plan Maya's birthday dinner",
             ])),
+    ]
+
+    /// **Probes: closed-shaped questions the floor DECLINES today.** The tripwire in
+    /// `docs/advisor.md` says a floor shape is added only when a transcript shows a closed
+    /// question reaching the model, never speculatively — so the eval asks them of the real
+    /// model and prints the transcript. A probe that the floor comes to take is moved into
+    /// `cases` with its shape; a probe the model answers well stays a probe. Not labeled:
+    /// nothing here fails CI.
+    static let probes: [String] = [
+        "What's due in the next three days?",
+        "What's the smallest thing I could knock out?",
+        "What's the quickest one on my list?",
+        "What's due this weekend?",
     ]
 
     // MARK: - The pure checks (CI)
@@ -315,9 +368,10 @@ enum HouseholdChatEval {
         var latencies: [Double] = []
         var totalFlags = 0
         var answered = 0
-        for c in cases {
-            guard case .model = c.expect else { continue }
-            let turn = HouseholdChatTurn.make(facts: facts, question: c.question)
+        // One question through the real model, printed as a transcript row. Shared by the
+        // labeled open cases and the probes so the two read alike.
+        func judge(_ question: String) async {
+            let turn = HouseholdChatTurn.make(facts: facts, question: question)
             let slice = turn.slice
             let started = Date()
             let outcome = await service.reply(turn)
@@ -329,21 +383,27 @@ enum HouseholdChatEval {
                 let reply = HouseholdChatPrompt.validatedReply(raw) ?? raw
                 let shown =
                     HouseholdChatPrompt.instructions(for: facts) + "\n"
-                    + HouseholdChatPrompt.turnPrompt(question: c.question, slice: slice, continuity: nil)
+                    + HouseholdChatPrompt.turnPrompt(question: question, slice: slice, continuity: nil)
                 let flags = groundingFlags(reply: reply, shown: shown)
                 totalFlags += flags.count
                 let cited = HouseholdChatCitations.cited(in: reply, among: slice).count
                 print(
                     String(
-                        format: "  %5.0fms · cites %d · flags %d  “%@”", ms, cited, flags.count, c.question))
+                        format: "  %5.0fms · cites %d · flags %d · slice %d  “%@”", ms, cited, flags.count,
+                        slice.count, question))
                 print("      → " + reply.replacingOccurrences(of: "\n", with: " / "))
                 if !flags.isEmpty { print("      unverified: " + flags.joined(separator: ", ")) }
-            case .timedOut: print(String(format: "  %5.0fms · TIMED OUT  “%@”", ms, c.question))
+            case .timedOut: print(String(format: "  %5.0fms · TIMED OUT  “%@”", ms, question))
             case .failed(let label):
-                print(String(format: "  %5.0fms · FAILED %@  “%@”", ms, oneLine(label), c.question))
-            case .unavailable: print("  unavailable  “\(c.question)”")
-            case .cancelled: print("  cancelled  “\(c.question)”")
+                print(String(format: "  %5.0fms · FAILED %@  “%@”", ms, oneLine(label), question))
+            case .unavailable: print("  unavailable  “\(question)”")
+            case .cancelled: print("  cancelled  “\(question)”")
             }
+        }
+        print("open cases (the model's):")
+        for c in cases {
+            guard case .model = c.expect else { continue }
+            await judge(c.question)
         }
         let after = ModelMetrics.shared.stats[.householdChat] ?? .init()
         let delta = Instrument.ArmDelta.between(before, after)
@@ -352,6 +412,17 @@ enum HouseholdChatEval {
                 "model", delta: delta, latenciesMs: latencies,
                 suffix: "grounding flags \(totalFlags) over \(answered) answers"))
         if let banner = Instrument.degradedBanner(delta, arm: "model") { print(banner) }
+        print(
+            "session rebuilds: \(service.rebuilds.responding) after a timeout, \(service.rebuilds.overflow) after an overflow"
+        )
+
+        // The probes: closed questions the floor declines today, asked of the model so
+        // the transcript — not a guess — argues for or against a new shape.
+        let reaching = probes.filter { HouseholdChatFloor.shape(of: $0, facts: facts) == nil }
+        if !reaching.isEmpty {
+            print("probes (closed-shaped, reaching the model today):")
+            for question in reaching { await judge(question) }
+        }
         print("=== END HOUSEHOLD CHAT EVAL ===")
     }
 }

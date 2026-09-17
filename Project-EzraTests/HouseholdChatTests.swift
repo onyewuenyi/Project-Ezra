@@ -95,6 +95,72 @@ struct HouseholdChatFloorTests {
         #expect(slice.prefix(3).map(\.title).contains("Get passport photos"))
         let mayas = HouseholdChatRetrieval.slice(for: "What should Maya do first?", facts: facts)
         #expect(Set(mayas.prefix(3).map(\.ownerName)) == ["Maya"])
+        // …and the chain behind her photos arrives right after her own three.
+        #expect(mayas.prefix(5).map(\.title).contains("Renew the passport"))
+    }
+
+    @Test("The GA-transcript shapes: tomorrow, next week, in progress and a category answer exactly")
+    func transcriptEarnedShapes() {
+        let tomorrow = HouseholdChatFloor.answer(question: "What's due tomorrow?", facts: facts)!
+        #expect(tomorrow.text == "1 task is due tomorrow.")
+        #expect(tomorrow.citedTaskIDs.count == 1)
+        // "tomorrow" beside "today" is the tomorrow question, never the today list.
+        #expect(HouseholdChatFloor.shape(of: "what's due today or tomorrow", facts: facts) == .dueTomorrow)
+        let nextWeek = HouseholdChatFloor.answer(question: "What's due next week?", facts: facts)!
+        #expect(nextWeek.text.hasPrefix("2 tasks are due next week, 7 to 13 days out"))
+        let started = HouseholdChatFloor.answer(question: "What have I started?", facts: facts)!
+        #expect(started.text == "1 task is in progress for you.")
+        #expect(HouseholdChatFloor.shape(of: "What should I have started by now?", facts: facts) == nil)
+        // A category is a whole word from the household's own vocabulary; two is not closed.
+        #expect(facts.category(named: "anything for the car?") == "Car")
+        #expect(facts.category(named: "the carpet needs cleaning") == nil)
+        #expect(facts.category(named: "car or travel?") == nil)
+        let travel = HouseholdChatFloor.answer(question: "What's the travel stuff for Maya?", facts: facts)!
+        #expect(travel.text == "1 task is in Travel for Maya.")
+        // Precedence: every other shape wins over a category word.
+        #expect(HouseholdChatFloor.shape(of: "what's overdue for work", facts: facts) == .overdue)
+        // Finished work in any tense; the stalest by HUMAN touch, longest first, capped at five.
+        #expect(HouseholdChatFloor.shape(of: "What did Maya finish?", facts: facts) == .done)
+        #expect(HouseholdChatFloor.shape(of: "Have we completed anything?", facts: facts) == .done)
+        let stale = HouseholdChatFloor.answer(
+            question: "What's been sitting untouched the longest?", facts: facts)!
+        #expect(stale.citedTaskIDs.count == HouseholdChatFacts.stalestCap)
+        #expect(facts.open.first { $0.id == stale.citedTaskIDs[0] }?.title == "Clear out the garage")
+        #expect(stale.text.hasSuffix("last touched 20 days ago."))
+        var touched = facts.open[0]
+        touched.humanTouchedAt = facts.now
+        #expect(touched.touchedAt == facts.now)
+        // The glance strip gains "in progress" only when something is started.
+        #expect(HouseholdChatPrompt.summary(for: facts).map(\.label).contains("1 in progress"))
+    }
+
+    @Test("A blocked task brings its whole chain into the slice, both directions, within the cap")
+    func retrievalCompletesChains() {
+        // "flights" names one task; the chain behind it shares no word with the question.
+        let slice = HouseholdChatRetrieval.slice(for: "Why are the flights held up?", facts: facts)
+        let titles = slice.map(\.title)
+        #expect(titles.first == "Book the flights for the trip")
+        #expect(titles.prefix(3).contains("Renew the passport"))
+        #expect(titles.prefix(3).contains("Get passport photos"))
+        // Upstream from the leaf: the photos pull in the passport, and the flights behind it.
+        let photos = HouseholdChatRetrieval.slice(for: "Why do the photos matter?", facts: facts)
+        #expect(photos.prefix(3).map(\.title).contains("Book the flights for the trip"))
+        // The cap holds even when every line is one chain.
+        var chained: [HouseholdChatFacts.Line] = []
+        for i in 0..<20 {
+            chained.append(
+                HouseholdChatFacts.Line(
+                    id: UUID(), title: i == 19 ? "Ship the final report" : "Step \(i)", category: "Home",
+                    status: .todo, ownerName: "You", ownerID: HouseholdChatEval.you, dueDate: nil,
+                    daysUntilDue: nil, isUrgent: false, needsDecision: false,
+                    blockerTitles: i == 0 ? [] : ["Step \(i - 1)"], externalWaits: [], effortMinutes: nil,
+                    updatedAt: facts.now))
+        }
+        let long = HouseholdChatFacts(now: facts.now, members: facts.members, open: chained, done: [])
+        let capped = HouseholdChatRetrieval.slice(for: "Why is the final report stuck?", facts: long)
+        #expect(capped.count == HouseholdChatRetrieval.cap)
+        #expect(capped.first?.title == "Ship the final report")
+        #expect(Set(capped.map(\.id)).count == capped.count)
     }
 
     @Test("Citations are verified titles only — a reply that names nothing cites nothing")
@@ -307,7 +373,8 @@ struct HouseholdChatFollowUpTests {
 
     @Test("Follow-ups are shaped by the answered question, never repeat, cap at two")
     func followUps() {
-        let after = HouseholdChatPrompt.followUps(after: "What's overdue?", facts: facts, asked: ["What's overdue?"])
+        let after = HouseholdChatPrompt.followUps(
+            after: "What's overdue?", facts: facts, asked: ["What's overdue?"])
         #expect(after.count <= 2)
         #expect(after.first == "Which one should I do first?")
         #expect(!after.contains("What's overdue?"))
@@ -320,7 +387,8 @@ struct HouseholdChatFollowUpTests {
             #expect(shape != nil || InquiryFloor.isReasoning(chip), "\(chip) is neither floor nor model")
         }
         // After a model answer the chips are the floor's starters, minus what was asked.
-        let model = HouseholdChatPrompt.followUps(after: "Why is the passport stuck?", facts: facts, asked: ["What's overdue?"])
+        let model = HouseholdChatPrompt.followUps(
+            after: "Why is the passport stuck?", facts: facts, asked: ["What's overdue?"])
         #expect(!model.isEmpty)
         #expect(!model.contains("What's overdue?"))
     }
@@ -328,9 +396,15 @@ struct HouseholdChatFollowUpTests {
     @Test("The glance lists only non-zero counts, in triage order, each a floor question")
     func summary() {
         let items = HouseholdChatPrompt.summary(for: facts)
-        #expect(items.map(\.label) == ["2 overdue", "2 due today", "3 waiting", "2 decisions", "14 open", "3 done this week"])
+        #expect(
+            items.map(\.label) == [
+                "2 overdue", "2 due today", "1 in progress", "3 waiting", "2 decisions", "14 open",
+                "3 done this week",
+            ])
         for item in items {
-            #expect(HouseholdChatFloor.shape(of: item.question, facts: facts) != nil, "\(item.question) is not a floor question")
+            #expect(
+                HouseholdChatFloor.shape(of: item.question, facts: facts) != nil,
+                "\(item.question) is not a floor question")
         }
         let quiet = HouseholdChatFacts(now: facts.now, members: facts.members, open: [], done: [])
         #expect(HouseholdChatPrompt.summary(for: quiet).map(\.label) == ["0 open"])
@@ -347,7 +421,9 @@ struct HouseholdChatFollowUpTests {
         #expect(ChatThreadRhythm.needsDivider(before: later, after: reply, now: now))
         #expect(!ChatThreadRhythm.needsDivider(before: later, after: nil, now: now))
         #expect(ChatThreadRhythm.dividerLabel(for: now, now: now).hasPrefix("Today "))
-        #expect(ChatThreadRhythm.dividerLabel(for: now.addingTimeInterval(-86_400), now: now).hasPrefix("Yesterday "))
+        #expect(
+            ChatThreadRhythm.dividerLabel(for: now.addingTimeInterval(-86_400), now: now).hasPrefix(
+                "Yesterday "))
     }
 
     @Test("Stop leaves a STOPPED slot that retries in place")

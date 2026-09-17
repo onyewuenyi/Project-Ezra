@@ -70,14 +70,26 @@ struct HouseholdChatFacts: Sendable, Equatable {
         let externalWaits: [String]
         let effortMinutes: Int?
         let updatedAt: Date
+        /// When a HUMAN last touched it (`TaskItem.humanTouchedAt`) — the staleness input,
+        /// never `updatedAt`, which every sweep bumps. Defaults to `updatedAt` for fixtures.
+        var humanTouchedAt: Date? = nil
+
+        var touchedAt: Date { humanTouchedAt ?? updatedAt }
 
         var isOverdue: Bool { (daysUntilDue ?? 0) < 0 }
         var isDueToday: Bool { daysUntilDue == 0 }
+        var isDueTomorrow: Bool { daysUntilDue == 1 }
         var isBlocked: Bool { !blockerTitles.isEmpty || !externalWaits.isEmpty }
         var isDueThisWeek: Bool {
             guard let days = daysUntilDue else { return false }
             return days >= 0 && days <= 7
         }
+        /// The week after this one, as a window: 7 to 13 days out. The answer says so.
+        var isDueNextWeek: Bool {
+            guard let days = daysUntilDue else { return false }
+            return days >= 7 && days <= 13
+        }
+        var isInProgress: Bool { status == .doing }
     }
 
     struct Done: Sendable, Equatable {
@@ -165,7 +177,8 @@ struct HouseholdChatFacts: Sendable, Equatable {
                     blockerTitles: blockers,
                     externalWaits: waits,
                     effortMinutes: task.effortMinutes,
-                    updatedAt: task.updatedAt)
+                    updatedAt: task.updatedAt,
+                    humanTouchedAt: task.humanTouchedAt)
             }
             .sorted { a, b in
                 // Overdue first, then nearest due, then most recently touched — the
@@ -193,7 +206,28 @@ struct HouseholdChatFacts: Sendable, Equatable {
 
     var overdue: [Line] { open.filter(\.isOverdue) }
     var dueToday: [Line] { open.filter(\.isDueToday) }
+    var dueTomorrow: [Line] { open.filter(\.isDueTomorrow) }
     var dueThisWeek: [Line] { open.filter(\.isDueThisWeek) }
+    var dueNextWeek: [Line] { open.filter(\.isDueNextWeek) }
+    var inProgress: [Line] { open.filter(\.isInProgress) }
+    /// The open set by last human touch, longest-untouched first. Undated and unstarted
+    /// work rots invisibly; this is the one view that surfaces it.
+    var stalest: [Line] { open.sorted { $0.touchedAt < $1.touchedAt } }
+    static let stalestCap = 5
+
+    /// The categories the household's open tasks use, lowercased — a closed vocabulary
+    /// the floor may match a question against.
+    var categories: Set<String> { Set(open.map { $0.category.lowercased() }).subtracting([""]) }
+
+    /// The category a question names, if exactly one of the household's categories
+    /// appears in it as a whole word ("anything for the car?" → Car). Nil when none or
+    /// several do — two categories is not a closed question.
+    func category(named question: String) -> String? {
+        let lowered = question.lowercased()
+        let hits = categories.filter { InquiryFloor.mentions(any: [$0], in: lowered) }
+        guard hits.count == 1, let hit = hits.first else { return nil }
+        return open.first { $0.category.lowercased() == hit }?.category
+    }
     var blocked: [Line] { open.filter(\.isBlocked) }
     var urgent: [Line] { open.filter(\.isUrgent) }
     var decisions: [Line] { open.filter(\.needsDecision) }
@@ -320,13 +354,32 @@ enum HouseholdChatFloor {
         case whoMost
         case overdue
         case dueToday
+        /// Added 2026-09-17 on a GA transcript: asked "what's due tomorrow?" over a
+        /// household with nothing due tomorrow, the model listed a task due today and one
+        /// due in two days, and annotated one "listed for tomorrow context".
+        case dueTomorrow
         case dueThisWeek
+        /// Same transcript: "next week" got tasks 3, 4, 6 and 9 days out. The floor's
+        /// window is stated in its answer.
+        case dueNextWeek
+        /// Same transcript: "what's in progress?" over a household with NO task started
+        /// listed three as in progress. Status is a fact the app holds exactly.
+        case inProgress
         case blocked
         case urgent
         case decisions
         case unowned
         case countOpen
         case personOpen
+        /// A category the household uses, named as a whole word ("anything for the car?").
+        /// The model answered these correctly but from the slice's titles alone, so it
+        /// missed the travel task whose title never says "travel"; the app knows the
+        /// category. Lowest precedence — every other shape wins over it.
+        case category
+        /// "What's been sitting untouched the longest?" — the second GA transcript: the
+        /// model picked the most overdue task, because the slice never carries when a
+        /// task was last touched. The app knows exactly.
+        case stalest
     }
 
     static func mentions(any phrases: [String], in lowered: String) -> Bool {
@@ -354,9 +407,23 @@ enum HouseholdChatFloor {
         // into "this week" (due this week).
         if has(
             "get done", "got done", "finished", "completed", "did we do", "did i do", "done this week",
-            "done today")
+            "done today", "wrapped up", "crossed off", "checked off", "ticked off")
         {
             return .done
+        }
+        // "What did Maya finish?" — the second GA transcript had the model answer that
+        // nothing was finished, because finished work never reaches its slice. A past-tense
+        // opener with a finishing verb is the done question in any tense.
+        if ["what did", "what has", "what have", "has ", "have ", "did "].contains(where: lowered.hasPrefix),
+            has("finish", "complete", "done")
+        {
+            return .done
+        }
+        if has(
+            "untouched", "sitting the longest", "sitting longest", "neglected", "stale", "gathering dust",
+            "haven't touched", "not touched", "least recently", "longest without")
+        {
+            return .stalest
         }
         if has(
             "who has the most", "who's carrying", "who is carrying", "busiest", "most on their plate",
@@ -365,9 +432,14 @@ enum HouseholdChatFloor {
             return .whoMost
         }
         if has("overdue", "past due", "late") { return .overdue }
-        if has("today") && !has("tomorrow") { return .dueToday }
+        if has("tomorrow") { return .dueTomorrow }
+        if has("today") { return .dueToday }
+        if has("next week") { return .dueNextWeek }
         if has("this week", "upcoming", "coming up", "next few days", "next 7 days", "next seven days") {
             return .dueThisWeek
+        }
+        if has("in progress", "underway", "started", "in flight", "half done", "halfway") {
+            return .inProgress
         }
         if has("blocked", "waiting", "stuck") { return .blocked }
         if has("urgent") { return .urgent }
@@ -381,6 +453,7 @@ enum HouseholdChatFloor {
         {
             return .personOpen
         }
+        if facts.category(named: question) != nil { return .category }
         return nil
     }
 
@@ -400,7 +473,8 @@ enum HouseholdChatFloor {
             let ranked = facts.dayAnswer(for: person)
             guard !ranked.isEmpty else {
                 return HouseholdChatAnswer(
-                    text: whose.map { "Nothing is asking for \($0) today." } ?? "Nothing is asking for you today.",
+                    text: whose.map { "Nothing is asking for \($0) today." }
+                        ?? "Nothing is asking for you today.",
                     citedTaskIDs: [])
             }
             // The subject of the sentence IS the scope — never a hardcoded "you" with the
@@ -442,8 +516,32 @@ enum HouseholdChatFloor {
             return list(scoped(facts.overdue), "overdue", whose: whose)
         case .dueToday:
             return list(scoped(facts.dueToday), "due today", whose: whose)
+        case .dueTomorrow:
+            return list(scoped(facts.dueTomorrow), "due tomorrow", whose: whose)
         case .dueThisWeek:
             return list(scoped(facts.dueThisWeek), "due in the next 7 days", whose: whose)
+        case .dueNextWeek:
+            return list(scoped(facts.dueNextWeek), "due next week, 7 to 13 days out", whose: whose)
+        case .inProgress:
+            return list(scoped(facts.inProgress), "in progress", whose: whose)
+        case .category:
+            guard let category = facts.category(named: question) else { return nil }
+            return list(
+                scoped(facts.open.filter { $0.category == category }), "in \(category)", whose: whose)
+        case .stalest:
+            let lines = Array(scoped(facts.stalest).prefix(HouseholdChatFacts.stalestCap))
+            guard let first = lines.first else {
+                return HouseholdChatAnswer(
+                    text: "Nothing is open\(whose.map { " for \($0)" } ?? "").", citedTaskIDs: [])
+            }
+            let days = max(0, Int(facts.now.timeIntervalSince(first.touchedAt) / 86_400))
+            let since = days == 0 ? "today" : days == 1 ? "yesterday" : "\(days) days ago"
+            let lead =
+                lines.count == 1
+                ? "One thing is untouched" : "The \(lines.count) longest untouched, longest first"
+            return HouseholdChatAnswer(
+                text: "\(lead)\(whose.map { " for \($0)" } ?? "") — the first last touched \(since).",
+                citedTaskIDs: lines.map(\.id))
         case .blocked:
             return list(scoped(facts.blocked), "waiting on something", whose: whose)
         case .urgent:
@@ -515,7 +613,9 @@ enum HouseholdChatRetrieval {
             if let person, line.ownerID == person.id { score += 5 }
             if has("overdue", "late"), line.isOverdue { score += 3 }
             if has("today"), line.isDueToday { score += 3 }
+            if has("tomorrow"), line.daysUntilDue == 1 { score += 3 }
             if has("week", "upcoming", "soon"), line.isDueThisWeek { score += 2 }
+            if has("in progress", "started", "working on", "underway"), line.status == .doing { score += 3 }
             if has("blocked", "waiting", "stuck"), line.isBlocked { score += 3 }
             if has("urgent"), line.isUrgent { score += 3 }
             if has("decision", "decide"), line.needsDecision { score += 3 }
@@ -537,14 +637,57 @@ enum HouseholdChatRetrieval {
             if let days = line.daysUntilDue { score += max(0, 1 - Double(abs(days)) / 30) * 0.5 }
             return (line, score)
         }
-        return
+        let ranked =
             scored
             .sorted { a, b in
                 if a.1 != b.1 { return a.1 > b.1 }
                 return a.0.id.uuidString < b.0.id.uuidString
             }
-            .prefix(cap)
             .map(\.0)
+        // A named person's tasks lead, whole, before any chain is walked — "what should
+        // Maya do first?" is about Maya's three before it is about the passport that waits
+        // on her photos. The chain still arrives, right after.
+        let leading = person.map { who in ranked.filter { $0.ownerID == who.id } } ?? []
+        return completingChains(ranked, leading: leading, facts: facts)
+    }
+
+    /// **A blocked task brings its chain.** The slice is what the model reasons over,
+    /// and "why is the passport stuck?" is a question about the chain — the photos the
+    /// passport waits on, the flights that wait on the passport — which the lexical
+    /// score reaches only when their titles share a word with the question. Walking the
+    /// ranked list, each admitted line pulls in the lines it waits on and the lines
+    /// waiting on it (both directions, transitively) ahead of the next lexical hit, so
+    /// a chain the question touches is shown whole and the model never has to guess at
+    /// a blocker it was told about by title alone. Still capped, still deterministic.
+    static func completingChains(
+        _ ranked: [HouseholdChatFacts.Line], leading: [HouseholdChatFacts.Line] = [],
+        facts: HouseholdChatFacts
+    ) -> [HouseholdChatFacts.Line] {
+        let byTitle = Dictionary(facts.open.map { ($0.title, $0) }, uniquingKeysWith: { a, _ in a })
+        var out: [HouseholdChatFacts.Line] = []
+        var seen = Set<UUID>()
+        func admit(_ line: HouseholdChatFacts.Line) {
+            guard out.count < cap, seen.insert(line.id).inserted else { return }
+            out.append(line)
+            expand(line)
+        }
+        // Upstream: what this waits on. Downstream: what waits on this.
+        func expand(_ line: HouseholdChatFacts.Line) {
+            for title in line.blockerTitles {
+                if let blocker = byTitle[title] { admit(blocker) }
+            }
+            for dependent in facts.open where dependent.blockerTitles.contains(line.title) {
+                admit(dependent)
+            }
+        }
+        for line in leading.prefix(cap) where seen.insert(line.id).inserted { out.append(line) }
+        // The leading lines' chains come next, before any lexical hit.
+        for line in leading { expand(line) }
+        for line in ranked {
+            guard out.count < cap else { break }
+            admit(line)
+        }
+        return out
     }
 }
 
@@ -590,7 +733,9 @@ enum HouseholdChatPrompt {
         - You cannot act. You never start, edit, complete, assign, schedule or split a
           task, and you never say you did or will — the person does that on the task
           itself. If they ask you to change something, tell them where it happens.
-        - When you refer to a task, use its exact title from the list.
+        - When you refer to a task, use its exact title from the list. If you list several,
+          one title per line, in your own words after it if needed — never copy the
+          "owner: … · due …" fields from the list.
         - Reporting, never scoring: no verdicts on anyone, no guilt, no streaks, no
           comparisons of who is doing better.
         - If the question has nothing to do with their tasks, say in one sentence that
@@ -631,14 +776,35 @@ enum HouseholdChatPrompt {
     static func summary(for facts: HouseholdChatFacts) -> [SummaryItem] {
         var items: [SummaryItem] = []
         func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)" }
-        if !facts.overdue.isEmpty { items.append(.init(label: count(facts.overdue.count, "overdue"), question: "What's overdue?")) }
-        if !facts.dueToday.isEmpty { items.append(.init(label: count(facts.dueToday.count, "due today"), question: "What's due today?")) }
-        if !facts.blocked.isEmpty { items.append(.init(label: count(facts.blocked.count, "waiting"), question: "What's waiting on something?")) }
+        if !facts.overdue.isEmpty {
+            items.append(.init(label: count(facts.overdue.count, "overdue"), question: "What's overdue?"))
+        }
+        if !facts.dueToday.isEmpty {
+            items.append(
+                .init(label: count(facts.dueToday.count, "due today"), question: "What's due today?"))
+        }
+        if !facts.inProgress.isEmpty {
+            items.append(
+                .init(label: count(facts.inProgress.count, "in progress"), question: "What's in progress?"))
+        }
+        if !facts.blocked.isEmpty {
+            items.append(
+                .init(label: count(facts.blocked.count, "waiting"), question: "What's waiting on something?"))
+        }
         if !facts.decisions.isEmpty {
-            items.append(.init(label: count(facts.decisions.count, facts.decisions.count == 1 ? "decision" : "decisions"), question: "What needs a decision?"))
+            items.append(
+                .init(
+                    label: count(
+                        facts.decisions.count, facts.decisions.count == 1 ? "decision" : "decisions"),
+                    question: "What needs a decision?"))
         }
         items.append(.init(label: count(facts.open.count, "open"), question: "How many tasks are open?"))
-        if !facts.done.isEmpty { items.append(.init(label: count(facts.done.count, "done this week"), question: "What did we get done this week?")) }
+        if !facts.done.isEmpty {
+            items.append(
+                .init(
+                    label: count(facts.done.count, "done this week"),
+                    question: "What did we get done this week?"))
+        }
         return items
     }
 
@@ -653,12 +819,25 @@ enum HouseholdChatPrompt {
         let name = person.map { $0.isYou ? "I" : $0.name }
         // "Which one first?" only makes sense when the answer listed something: an empty
         // list ("Nothing is overdue.") gets the other views instead.
-        let listed = (HouseholdChatFloor.answer(question: question, facts: facts)?.citedTaskIDs.count ?? 0) > 0
+        let listed =
+            (HouseholdChatFloor.answer(question: question, facts: facts)?.citedTaskIDs.count ?? 0) > 0
         switch HouseholdChatFloor.shape(of: question, facts: facts) {
-        case .overdue, .dueToday, .dueThisWeek, .urgent:
-            if listed { out.append(name == nil ? "Which one should I do first?" : "Which should \(name!) do first?") }
-            if facts.dueToday.isEmpty == false, !question.lowercased().contains("today") { out.append("What's due today?") }
-            else if !facts.overdue.isEmpty, !question.lowercased().contains("overdue") { out.append("What's overdue?") }
+        case .overdue, .dueToday, .dueTomorrow, .dueThisWeek, .dueNextWeek, .urgent, .category:
+            if listed {
+                out.append(name == nil ? "Which one should I do first?" : "Which should \(name!) do first?")
+            }
+            if facts.dueToday.isEmpty == false, !question.lowercased().contains("today") {
+                out.append("What's due today?")
+            } else if !facts.overdue.isEmpty, !question.lowercased().contains("overdue") {
+                out.append("What's overdue?")
+            }
+        case .inProgress:
+            // Something started invites finishing it, not starting another.
+            if listed {
+                out.append(
+                    name == nil ? "Which one should I finish first?" : "Which should \(name!) finish first?")
+            }
+            if !facts.overdue.isEmpty { out.append("What's overdue?") }
         case .blocked:
             if listed { out.append("What could I do while I wait?") }
             if !facts.overdue.isEmpty { out.append("What's overdue?") }
@@ -675,12 +854,18 @@ enum HouseholdChatPrompt {
                 out.append("What am I waiting on?")
             }
         case .whoMost:
-            if let top = facts.members.map({ ($0, facts.openTasks(of: $0).count) }).max(by: { $0.1 < $1.1 })?.0, !top.isYou {
+            if let top = facts.members.map({ ($0, facts.openTasks(of: $0).count) }).max(by: { $0.1 < $1.1 })?
+                .0, !top.isYou
+            {
                 out.append("What could \(top.name) hand off?")
             }
             out.append("What's overdue?")
         case .done:
             out.append("What's coming up this week?")
+        case .stalest:
+            // Rot invites a verdict: keep it or let it go — the model's, by its words.
+            if listed { out.append("Which of these is still worth doing?") }
+            if !facts.overdue.isEmpty { out.append("What's overdue?") }
         case .today:
             // The day answer already IS "which first" — offer the two views it hides.
             if !facts.overdue.isEmpty { out.append("What's overdue?") }
@@ -696,7 +881,9 @@ enum HouseholdChatPrompt {
         }
         let askedSet = Set(asked.map { $0.lowercased() })
         var seen = Set<String>()
-        let shaped = out.filter { seen.insert($0.lowercased()).inserted && !askedSet.contains($0.lowercased()) }
+        let shaped = out.filter {
+            seen.insert($0.lowercased()).inserted && !askedSet.contains($0.lowercased())
+        }
         // Never a dead end: when the shaped chips are all spent (an empty list, every
         // view already asked), the floor's starters take over.
         let fallback = starterQuestions(for: facts).filter {
@@ -794,7 +981,8 @@ extension InquiryTurn where Scope == HouseholdInquiryScope {
     /// A turn on an unbroken thread — the eval's shape.
     static func make(facts: HouseholdChatFacts, question: String, continuity: String? = nil) -> Self {
         let scope = HouseholdInquiryScope(facts: facts)
-        return Self(scope: scope, question: question, continuity: continuity, context: scope.context(for: question))
+        return Self(
+            scope: scope, question: question, continuity: continuity, context: scope.context(for: question))
     }
 }
 
@@ -846,7 +1034,8 @@ extension InquiryStore where Scope == HouseholdInquiryScope {
                 .init(role: .user, text: "Why is the passport stuck?"),
                 .init(
                     role: .advisor,
-                    text: "Renew the passport is waiting on Get passport photos, and the flights wait on both — "
+                    text:
+                        "Renew the passport is waiting on Get passport photos, and the flights wait on both — "
                         + "the photos are the one thing that unblocks the rest."),
                 .init(role: .user, text: "What should we do first this weekend?"),
                 .init(role: .advisor, text: "", state: .pending),
