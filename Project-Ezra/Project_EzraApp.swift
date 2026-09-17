@@ -122,7 +122,33 @@ struct Project_EzraApp: App {
                 if record.destroyedData { StoreResetLog.write(record) }
                 container.loadPersistentStores { _, retryError in
                     if let retryError {
-                        fatalError("Could not load the store even after reset: \(retryError)")
+                        // The reset didn't fix it either — a full disk, revoked file
+                        // protection, a second corruption. Crash-looping here would
+                        // brick the app for good (retry-and-crash on every future
+                        // launch too), so fall back to an in-memory store for this
+                        // session: the person can still capture and see tasks tonight,
+                        // and a normal on-disk store is tried fresh next launch.
+                        // Reported through the same receipt a destructive reset uses —
+                        // `SettingsView` surfaces it until dismissed.
+                        PersistenceStack.log.critical(
+                            "Store unusable even after reset: \(retryError.localizedDescription, privacy: .public) — falling back to an in-memory store for this session."
+                        )
+                        StoreResetLog.write(
+                            StoreResetRecord(
+                                reason: .unrecoverable(retryError.localizedDescription),
+                                date: Date(), backupName: record.backupName, destroyedData: true))
+                        for description in container.persistentStoreDescriptions {
+                            description.url = URL(fileURLWithPath: "/dev/null")
+                            description.type = NSInMemoryStoreType
+                            description.cloudKitContainerOptions = nil
+                        }
+                        container.loadPersistentStores { _, fallbackError in
+                            if let fallbackError {
+                                PersistenceStack.log.critical(
+                                    "In-memory fallback also failed: \(fallbackError.localizedDescription, privacy: .public)"
+                                )
+                            }
+                        }
                     }
                 }
             }

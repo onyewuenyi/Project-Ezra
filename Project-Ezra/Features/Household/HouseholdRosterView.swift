@@ -54,6 +54,9 @@ private struct HouseholdRosterContent: View {
     @State private var newPersonName = ""
     /// The member an invite link is being made for (drives `InviteLinkSheet`).
     @State private var inviting: FamilyMember?
+    /// The one honest signal a dropped `saveChanges()` gets on this screen — the edit
+    /// already applied to the pending context either way.
+    @State private var notice: UndoNotice?
 
     /// Live roster only, excluding the current user's own linked member (shown as its
     /// own `youRow`) — soft-deleted people stay in the store for attribution.
@@ -73,7 +76,7 @@ private struct HouseholdRosterContent: View {
     private func syncYou() {
         guard let me = youMember else { return }
         profile.syncIdentity(to: me)
-        context.saveChanges()
+        if !context.saveChanges() { notice = .saveFailed() }
     }
 
     var body: some View {
@@ -89,6 +92,7 @@ private struct HouseholdRosterContent: View {
         .navigationTitle("Manage household")
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear { context.saveChanges() }
+        .undoNotice($notice)
         .alert("Add someone", isPresented: $showAddPerson) {
             TextField("Name", text: $newPersonName)
             Button("Add") { addPerson() }
@@ -127,7 +131,7 @@ private struct HouseholdRosterContent: View {
             PhotoPickerButton { data in
                 household.photoData = data
                 household.photoUpdatedAt = Date()
-                context.saveChanges()
+                if !context.saveChanges() { notice = .saveFailed() }
             } label: {
                 AvatarView(household: household, size: 88)
             }
@@ -198,7 +202,7 @@ private struct HouseholdRosterContent: View {
             PhotoPickerButton { data in
                 member.photoData = data
                 member.photoUpdatedAt = Date()
-                context.saveChanges()
+                if !context.saveChanges() { notice = .saveFailed() }
             } label: {
                 AvatarView(member: member, size: 44)
             }
@@ -218,7 +222,7 @@ private struct HouseholdRosterContent: View {
                     ForEach(FamilyRelationship.allCases) { relation in
                         Button(relation.label) {
                             member.relationship = relation
-                            context.saveChanges()
+                            if !context.saveChanges() { notice = .saveFailed() }
                         }
                     }
                 } label: {
@@ -290,13 +294,13 @@ private struct HouseholdRosterContent: View {
         guard !trimmed.isEmpty else { return }
         let member = FamilyMember(name: trimmed, in: context)
         member.household = household
-        context.saveChanges()
+        if !context.saveChanges() { notice = .saveFailed() }
     }
 
     /// Soft-delete: the record stays so a task they once owned keeps its attribution.
     private func remove(_ member: FamilyMember) {
         Motion.withMotion(Motion.decide) { member.deletedAt = Date() }
-        context.saveChanges()
+        if !context.saveChanges() { notice = .saveFailed() }
     }
 }
 

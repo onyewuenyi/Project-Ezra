@@ -43,6 +43,17 @@ struct UndoNotice: Identifiable, Equatable {
         if let phrase = steps?.openStepsPhrase { message += " — \(phrase)" }
         return UndoNotice(message: message, undoAction: undo)
     }
+
+    /// Shown wherever `context.saveChanges()` reports a dropped write on a path that
+    /// already threads this pill through. The mutation stays pending on its object
+    /// either way (`saveChanges` never rolls back), so this is not a retry prompt —
+    /// just the one honest signal that what looked like it landed might not have yet.
+    /// A plain function, not a `static let`: each occurrence needs its own `id` so a
+    /// second failure re-arms the auto-dismiss timer instead of being swallowed by an
+    /// unchanged identity.
+    static func saveFailed() -> UndoNotice {
+        UndoNotice(message: "Couldn't save — will retry")
+    }
 }
 
 extension View {

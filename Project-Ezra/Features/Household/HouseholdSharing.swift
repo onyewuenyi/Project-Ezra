@@ -136,7 +136,13 @@ final class HouseholdSharing {
                     return fresh
                 }()
             invitation.shareURL = url.absoluteString
-            context.saveChanges()
+            // The link itself was already minted and is returned below regardless — a
+            // dropped save here only risks the invitation record it rides on, which the
+            // next successful save on this context carries. Still worth a word: the
+            // person is about to send a link that names them in a message.
+            if !context.saveChanges() {
+                lastError = "The link works, but saving the invite locally didn't — try reopening this sheet."
+            }
             Telemetry.log(.invite(stage: .linkCreated))
             // The household is about to be shared: the one moment the digest asks.
             await WeeklyDigestScheduler.shared.requestPermissionIfNeeded()
@@ -210,7 +216,9 @@ final class HouseholdSharing {
         // only where the person HAS one; an empty profile keeps the owner's "Maya".
         profile.syncIdentity(to: member)
         invitation?.accept()
-        context.saveChanges()
+        if !context.saveChanges() {
+            lastError = "You're linked, but saving it locally didn't land — reopen the app to confirm."
+        }
         awaitingSharedHousehold = false
         pendingLink = nil
         Telemetry.log(.invite(stage: .identityLinked))

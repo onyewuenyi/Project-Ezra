@@ -32,6 +32,12 @@ enum StoreResetReason: Codable, Equatable {
     /// describes, carrying the safety copy's name — because "where did my backup go?"
     /// is asked hours later, not while the sheet is still open.
     case userRequested(clearedIdentity: Bool)
+    /// The self-heal's own reset (`.loadFailure`) did not fix it — the retry also failed
+    /// (a full disk, revoked file protection, a second corruption). Crash-looping here
+    /// would brick the app for good, so the launch falls back to an in-memory store for
+    /// this session instead: nothing typed tonight is saved, but the app opens, and a
+    /// normal on-disk store is tried fresh on the next launch.
+    case unrecoverable(String)
 
     /// Whether the user chose this. Drives the card's tone; never its existence.
     var isVoluntary: Bool { if case .userRequested = self { return true }; return false }
@@ -45,6 +51,8 @@ enum StoreResetReason: Codable, Equatable {
             return "the saved data couldn't be opened"
         case .userRequested(let clearedIdentity):
             return clearedIdentity ? "you reset everything" : "you cleared all tasks"
+        case .unrecoverable:
+            return "the saved data couldn't be recovered, even after a reset — tonight's session isn't being saved"
         }
     }
 
@@ -52,7 +60,7 @@ enum StoreResetReason: Codable, Equatable {
     var detail: String? {
         switch self {
         case .schemaGeneration, .userRequested: return nil
-        case .loadFailure(let message): return message
+        case .loadFailure(let message), .unrecoverable(let message): return message
         }
     }
 }

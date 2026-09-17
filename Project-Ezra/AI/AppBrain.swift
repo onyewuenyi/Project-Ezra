@@ -906,11 +906,11 @@ final class AppBrain {
         // restructuring. Measure before optimizing: nobody has seen this number yet.
         let commitMs = Int(Date().timeIntervalSince(commitStarted) * 1000)
         ModelMetrics.shared.recordCommit(latencyMs: commitMs)
-        recordProvenance(
+        let provenanceSaved = recordProvenance(
             telemetry: telemetry, capture: capture, drafts: drafts, created: created,
             mergeTargets: mergeTargets, commitMs: commitMs, in: context)
         lastCommitSummary = CommitSummary(
-            saveFailed: !saved,
+            saveFailed: !saved || !provenanceSaved,
             created: created.count, mergedTitles: mergeTargets.map(\.title))
         return created
     }
@@ -929,12 +929,15 @@ final class AppBrain {
     /// undo to restore, and `ChangeLogUndo` has no arm for it. Shipping it reversible
     /// would repeat the `"filed"` mistake — a button that appears to work, does nothing,
     /// and scores as the user REJECTING the AI in `Metrics.acceptanceRate`.
+    /// Returns whether this receipt's own save landed — folded into
+    /// `CommitSummary.saveFailed` by the caller, since a dropped save here loses the
+    /// Activity feed's only trace of the capture even when the tasks themselves saved.
     private func recordProvenance(
         telemetry: CaptureRunTelemetry?, capture: Capture, drafts: [TaskDraft],
         created: [TaskItem], mergeTargets: [TaskItem], commitMs: Int,
         in context: NSManagedObjectContext
-    ) {
-        guard let captureID = capture.uuid else { return }
+    ) -> Bool {
+        guard let captureID = capture.uuid else { return true }
         // A caller with no composer session (onboarding, the seed args) has no telemetry
         // and gets a receipt that says so, rather than one that quietly claims the
         // deterministic route ran.
@@ -973,7 +976,7 @@ final class AppBrain {
             isReversible: false,
             in: context)
         context.insert(entry)
-        context.saveChanges()
+        return context.saveChanges()
     }
 
     /// Apply the reverse dependencies detected at capture: each open task the

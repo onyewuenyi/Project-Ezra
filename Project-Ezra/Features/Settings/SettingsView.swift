@@ -38,6 +38,10 @@ struct SettingsView: View {
     @State private var backupArchiveURL: URL?
     /// The clear awaiting confirmation. Nil is the resting state.
     @State private var pendingScope: DataReset.Scope?
+    /// The one honest signal a dropped `saveChanges()` gets on this screen outside the
+    /// clear-data flow (which already has its own `clearOutcome` card) — the edit
+    /// already applied to the pending context either way.
+    @State private var notice: UndoNotice?
     /// What a clear performed in THIS sheet did — and deliberately NOT read from
     /// `pendingReset`, which is the DURABLE `StoreResetLog` record and stands until
     /// somebody taps Dismiss.
@@ -85,6 +89,7 @@ struct SettingsView: View {
                 }
             }
             .onDisappear { context.saveChanges() }
+            .undoNotice($notice)
             .task {
                 UserProfile.bootstrapIdentity(in: context)
                 digestOn = WeeklyDigest.isEnabled(caretakerCount: caretakerCount, defaults: .standard)
@@ -157,7 +162,7 @@ struct SettingsView: View {
         if let me = members.first(where: { $0.uuid == profile.linkedMemberID }) {
             profile.syncIdentity(to: me)
         }
-        context.saveChanges()
+        if !context.saveChanges() { notice = .saveFailed() }
     }
 
     // MARK: - The week's edition

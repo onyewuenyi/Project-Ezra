@@ -322,7 +322,7 @@ struct TaskMoreMenu: View {
                 Button {
                     actionPulse += 1
                     task.reopenAndReblock(in: context)
-                    context.saveChanges()
+                    if !context.saveChanges() { notice = .saveFailed() }
                 } label: {
                     Label("Reopen", systemImage: "arrow.uturn.backward")
                 }
@@ -334,7 +334,10 @@ struct TaskMoreMenu: View {
                     Button {
                         actionPulse += 1
                         let unblocked = task.completeAndResurface(in: context)
-                        context.saveChanges()
+                        guard context.saveChanges() else {
+                            notice = .saveFailed()
+                            return
+                        }
                         offerUndo(verb: "Completed", unblocked: unblocked)
                         onResolved()
                     } label: {
@@ -346,7 +349,7 @@ struct TaskMoreMenu: View {
                         task.claimAndLog(
                             ownerID: UserProfile.currentMemberID(in: context),
                             among: Array(allTasksResults), in: context)
-                        context.saveChanges()
+                        if !context.saveChanges() { notice = .saveFailed() }
                     } label: {
                         Label("Take it back", systemImage: "person.crop.circle.badge.checkmark")
                     }
@@ -355,7 +358,10 @@ struct TaskMoreMenu: View {
                 Button(role: .destructive) {
                     actionPulse += 1
                     let unblocked = task.killAndResurface(in: context)
-                    context.saveChanges()
+                    guard context.saveChanges() else {
+                        notice = .saveFailed()
+                        return
+                    }
                     offerUndo(verb: "Canceled", unblocked: unblocked)
                     onResolved()
                 } label: {
@@ -406,7 +412,7 @@ struct TaskMoreMenu: View {
             steps: task.stepProgress(among: Array(allTasksResults))
         ) {
             task.reopenAndReblock(in: context)
-            context.saveChanges()
+            if !context.saveChanges() { notice = .saveFailed() }
         }
     }
 }

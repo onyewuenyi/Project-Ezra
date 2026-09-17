@@ -49,7 +49,7 @@ struct AdvisorActions {
             Motion.withMotion(Motion.decide) {
                 task.resolveDecisionAndLog(in: context, choice: choice)
             }
-            context.saveChanges()
+            if !context.saveChanges() { notice.wrappedValue = .saveFailed() }
         }
     }
 
@@ -60,7 +60,7 @@ struct AdvisorActions {
                 task.escalateToDecision()
                 task.touchHuman()
             }
-            context.saveChanges()
+            if !context.saveChanges() { notice.wrappedValue = .saveFailed() }
         }
     }
 
@@ -83,7 +83,10 @@ struct AdvisorActions {
                         fieldCorrected: "split", aiValue: declined.title, userValue: "declined",
                         in: context))
             }
-            context.saveChanges()
+            guard context.saveChanges() else {
+                notice.wrappedValue = .saveFailed()
+                return
+            }
             // A task that has just become a container is a different kind of work than
             // it was a moment ago — re-read axis 2 through the one classifier write.
             reclassifyWorkIntent()
@@ -107,7 +110,7 @@ struct AdvisorActions {
                 request.fetchLimit = 1
                 guard let entry = try? undoContext.fetch(request).first else { return }
                 ChangeLogUndo.revert(entry, in: undoContext)
-                undoContext.saveChanges()
+                if !undoContext.saveChanges() { notice.wrappedValue = .saveFailed() }
             }
         }
     }
@@ -117,7 +120,10 @@ struct AdvisorActions {
         guard state != task.status else { return }
         acted(.advise) {
             Motion.withMotion(Motion.decide) { task.setStatus(state, in: context) }
-            context.saveChanges()
+            guard context.saveChanges() else {
+                notice.wrappedValue = .saveFailed()
+                return
+            }
             if state.isResolved {
                 let task = self.task
                 let context = self.context
@@ -126,7 +132,7 @@ struct AdvisorActions {
                     unblocked: [], steps: task.stepProgress(among: allTasks)
                 ) {
                     task.reopenAndReblock(in: context)
-                    context.saveChanges()
+                    if !context.saveChanges() { notice.wrappedValue = .saveFailed() }
                 }
                 onResolved()
             }
@@ -145,7 +151,7 @@ struct AdvisorActions {
             task.logHumanEdit(
                 field: "dueDate", oldValue: ChangeLogEntry.encodeDate(old),
                 newValue: ChangeLogEntry.encodeDate(date), summary: summary, in: context)
-            context.saveChanges()
+            if !context.saveChanges() { notice.wrappedValue = .saveFailed() }
         }
     }
 

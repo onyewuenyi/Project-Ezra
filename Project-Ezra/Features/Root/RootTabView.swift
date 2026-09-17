@@ -302,7 +302,7 @@ struct RootTabView: View {
         let capture = Capture(rawText: pending.words, source: pending.source, in: context)
         capture.parkedDrafts = []
         context.insert(capture)
-        context.saveChanges()
+        if !context.saveChanges() { commitNotice = .saveFailed() }
         presentComposer(resuming: capture, autoSubmit: true)
     }
 

@@ -65,12 +65,15 @@ func completeTask(
 ) {
     let steps = task.stepProgress(among: tasks)
     let unblocked = task.completeAndResurface(in: context)
-    context.saveChanges()
+    guard context.saveChanges() else {
+        notice.wrappedValue = .saveFailed()
+        return
+    }
     notice.wrappedValue = .resolution(
         "Completed", task.title, unblocked: unblocked, steps: steps
     ) {
         task.reopenAndReblock(in: context)
-        context.saveChanges()
+        if !context.saveChanges() { notice.wrappedValue = .saveFailed() }
     }
 }
 
@@ -81,12 +84,15 @@ func cancelTask(
 ) {
     let steps = task.stepProgress(among: tasks)
     let unblocked = task.killAndResurface(in: context)
-    context.saveChanges()
+    guard context.saveChanges() else {
+        notice.wrappedValue = .saveFailed()
+        return
+    }
     notice.wrappedValue = .resolution(
         "Canceled", task.title, unblocked: unblocked, steps: steps
     ) {
         task.reopenAndReblock(in: context)
-        context.saveChanges()
+        if !context.saveChanges() { notice.wrappedValue = .saveFailed() }
     }
 }
 
@@ -109,7 +115,7 @@ func performRecommended(
     Motion.withMotion(Motion.decide) {
         _ = task.performRecommendedAction(action, among: tasks, in: context)
     }
-    context.saveChanges()
+    if !context.saveChanges() { notice.wrappedValue = .saveFailed() }
 }
 
 // MARK: - The row gesture map (swipes)
