@@ -224,9 +224,10 @@ file. See *Keeping this file current* at the bottom.
 Findings here have been ruled on. Re-raising one is noise; if the *reasoning* has expired,
 say why rather than restating the finding.
 
-- **Firebase branch pin (`wwdc26-preview`)** — deliberate; a broken upstream commit
-  breaking the build is the accepted cost.
-- **Beta toolchain (Xcode 27 / iOS 27 SDK)** — deliberate posture, not a risk to manage
+- **Firebase `GeminiLanguageModel` is a public preview on a tagged release (12.19.2)** —
+  the `wwdc26-preview` branch pin it replaced broke on the GA SDK (2026-09-17); a preview
+  API on a tag is the accepted posture, a branch pin is a bridge to the first such tag.
+- **Newest toolchain (Xcode 27.0 GA / iOS 27 SDK)** — deliberate posture, not a risk to manage
   down. "Wait for GA" is not a finding.
 - **`CapacityLog` / `CapacityBaseline` are inert** — frozen schema after the Brief cut.
 - **One notification, the Sunday digest** — the 2026-09-02 closure stands for the daily

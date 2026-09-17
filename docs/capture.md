@@ -506,8 +506,8 @@ and an OPTIMIZER line separately so nobody reads "cheapest" as the criterion.
   request came from this app on a real device, and the console's per-user quota needs no uid.
 - **Server-side prompt templates / template-only mode** — **deferred, not refused.** Enforce
   only once the cloud contract can be versioned and kept semantically equivalent to the
-  on-device contract (invariant 12); the `wwdc26-preview` `LanguageModel` bridge has no
-  template path, and template-only mode is Preview and project-wide. Re-evaluate after
+  on-device contract (invariant 12); Firebase's `GeminiLanguageModel` bridge (12.19, public
+  preview) has no template path, and template-only mode is Preview and project-wide. Re-evaluate after
   Campaign 4.
 - **A frontier tier behind Flash** — not now. One provider slot is test-pinned and the
   per-ramble `ReasoningBudget` (nil → light → moderate → deep, mapped by the bridge onto

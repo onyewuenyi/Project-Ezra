@@ -13,7 +13,7 @@ The reliable loop for building and visually verifying this app. Requires the **X
    ```bash
    xcodebuild -version    # expect Xcode 27.x
    ```
-   If it shows 26.x: `sudo xcode-select -s /Applications/Xcode-beta.app/Contents/Developer` (needs the user's password — ask them to run it via `! ...`).
+   If it shows 26.x: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` (needs the user's password — ask them to run it via `! ...`).
 
 2. **Build** for the iOS 27 simulator:
    ```bash
@@ -53,7 +53,7 @@ The reliable loop for building and visually verifying this app. Requires the **X
 ## Launch arguments (verification seams)
 
 Append to the `simctl launch` line:
-- `-SeedSampleData` — populate real tasks via the AI engine and skip onboarding (the sim uses the heuristic engine; Foundation Models isn't available there).
+- `-SeedSampleData` — populate real tasks via the AI engine and skip onboarding (the sim runs the real on-device model when the host's Apple Intelligence is on — read the DEBUG footer; it degrades to the heuristic engine otherwise).
 - `-SeedFlowFixtures` — populate deterministic fixture data covering the core user flows (Needs Decision resolution, a dependency chain, owned tasks), bypassing the AI engine so results are exact and identical every run.
 - `-InitialTab N` — a no-op since 2026-09-02: there is no tab bar. `RootTabView` shows Tasks directly, with the capture orb bottom-trailing; Ask is a sheet from the Tasks header's bubble (`-AskHousehold "question"` / `-HouseholdChatFixture` present it). The Activity screen is reachable with `-OpenActivity`.
 - `-OpenCapture ["text"]` — present the capture composer at launch; with a text argument it parks + resumes that text and auto-submits (add `-NoSubmit` to hold the canvas). A BARE `-OpenCapture` lands on the listening orb — or the typed canvas wherever the mic can't lead, which on the sim (no SpeechTranscriber) proves the degrade chain for free.

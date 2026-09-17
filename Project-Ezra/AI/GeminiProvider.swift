@@ -11,9 +11,9 @@
 //  `FoundationModels.LanguageModel`, so it drops into the same `LanguageModelSession`
 //  every caller already builds — streaming, salvage, and guided decoding are unchanged,
 //  and `TodayPlanService` / `TaskAdvisorService` / `FoundationModelsEngine` still cannot
-//  name a provider. That bridge is the entire reason the SPM dependency is pinned to
-//  firebase-ios-sdk's `wwdc26-preview` branch; a tagged release has no
-//  `GeminiLanguageModel` and this file would not compile against one.
+//  name a provider. The bridge shipped in firebase-ios-sdk 12.19.0 as a public preview
+//  (its own `GeminiLanguageModel` product, pulled in by `FirebaseAILogic`); before that
+//  it lived only on the `wwdc26-preview` branch, which the GA FoundationModels SDK broke.
 //
 //  **The availability gate is configuration presence, never a model construction.** The
 //  protocol forbids reaching for the framework to answer `isAvailable`, and that rule
@@ -73,10 +73,9 @@ enum GeminiProvider: CloudModelProvider {
     /// own `capabilities`. Declared statically rather than read off an instance because
     /// answering "can this rung reason?" must not construct a model or require Firebase to
     /// be configured — the same rule `isAvailable` follows. If the SDK's advertised set
-    /// ever changes, this is the line to change with it.
+    /// ever changes, this is the line to change with it (12.19: `.vision` left the set).
     static let capabilities = LanguageModelCapabilities([
         .toolCalling,
-        .vision,
         .reasoning,
         .guidedGeneration,
     ])
