@@ -198,6 +198,7 @@ struct RootTabView: View {
             // changes underneath its 0.85 confidence gate.
             await EmbeddingDiagnostics.runIfRequested()
             await DuplicateSweepEval.runIfRequested(brain: brain)
+            await GroupingSweepEval.runIfRequested(brain: brain, in: context)
             await AdvisorDiagnostics.runIfRequested()
             // Gold-standard-first routing discovery: which cases measurably need depth.
             await AdvisorBenchmark.runIfRequested()

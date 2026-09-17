@@ -117,7 +117,8 @@ extension AppBrain {
         // set, and the ONE bit that leaves (`householdActivated`) fires the first time it
         // flips and never again (`HouseholdActivation.recordIfNewlyActivated`).
         if let household = Household.existing(in: context) {
-            let entries = (try? context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))) ?? []
+            let entries =
+                (try? context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))) ?? []
             let reading = HouseholdActivation.measure(
                 household: household, tasks: TaskItem.fetchAll(in: context), entries: entries, now: now)
             HouseholdActivation.recordIfNewlyActivated(reading, defaults: defaults)
@@ -126,5 +127,7 @@ extension AppBrain {
         // foreground: model judgments run behind a background deadline, hard-capped
         // per run, and the whole pass is absent off-device.
         Task { await DuplicateSweep.run(in: context, now: now) }
+        // The grouping sweep proposes, never writes: its output is a row that asks.
+        Task { await GroupingSweep.run(in: context, now: now) }
     }
 }

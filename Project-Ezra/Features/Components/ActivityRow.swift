@@ -26,7 +26,7 @@ enum ActivityVocab {
         case "unblocked": return "lock.open.fill"
         case "killed": return "xmark"
         case "edited": return "pencil"
-        case "suppressed": return "hand.raised.slash"
+        case "suppressed", "rejectedGroup": return "hand.raised.slash"
         case "captured": return "tray.and.arrow.down"
         default: return "sparkle"
         }
@@ -36,7 +36,7 @@ enum ActivityVocab {
         switch action {
         case "completed": return Palette.success
         // A rejection is a quiet "no", not an event — it reads with the receding verbs.
-        case "killed", "archived", "suppressed": return Palette.mutedText
+        case "killed", "archived", "suppressed", "rejectedGroup": return Palette.mutedText
         case "assigned", "linked", "decided", "unblocked", "captured", "grouped", "split":
             return Palette.accentFlat
         default: return Palette.secondaryText
@@ -60,7 +60,7 @@ enum ActivityVocab {
         case "unblocked": return "Unblocked"
         case "killed": return "Canceled"
         case "edited": return "Updated"
-        case "suppressed": return "Kept apart"
+        case "suppressed", "rejectedGroup": return "Kept apart"
         case "captured": return "Captured"
         default: return "Updated"
         }

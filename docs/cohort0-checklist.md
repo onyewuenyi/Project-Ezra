@@ -102,10 +102,15 @@ file. See *Keeping this file current* at the bottom.
   `ValidatedReading`).
 - **Model output is untrusted transport.** Anything new the model can emit — a move, a
   step, a citation, an edge — passes a deterministic validator that drops or degrades,
-  never substitutes. A new `@Generable` field with no validator is a finding.
+  never substitutes. A new `@Generable` field with no validator is a finding. (2026-09-17:
+  `GroupJudgment` → `GroupingSweep.validated` — a member title the model was not shown
+  rejects the judgment; the proposal is a row that asks, never an edge.)
 - **Chat.** A stopped reply, a failed reply and a reply that never lands are distinct
   states with a way forward (Try again); the two chats stay on-device only
-  (`Inquiry`, `TaskInquiryScope`, `HouseholdInquiryScope`).
+  (`Inquiry`, `TaskInquiryScope`, `HouseholdInquiryScope`). **Try again must WORK after a
+  timeout** — the session the deadline abandoned may still be generating, and a retry on it
+  is rejected; `InquiryService` moves the thread to a fresh session (metered in
+  `rebuilds`). A "Try again" that fails instantly after a timeout is a finding (2026-09-17).
 
 ## 3. Persistence — the user's real data
 

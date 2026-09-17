@@ -58,6 +58,9 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// per attempt, so the arm's served ratio and its latency tail are readable before
     /// anyone argues about whether it should be on.
     case captureSegment
+    /// The grouping sweep — the on-device model naming which loose tasks serve one
+    /// outcome (`GroupingSweep`). Background-tier, capped; it PROPOSES, never writes.
+    case groupingSweep
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -72,6 +75,7 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .advisorChat: return "chat"
         case .householdChat: return "askChat"
         case .captureSegment: return "segment"
+        case .groupingSweep: return "groupSweep"
         }
     }
 }

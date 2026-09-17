@@ -36,6 +36,9 @@ struct RelationshipSuppression: Hashable, Sendable {
     enum SuppressionKind: String, Sendable {
         case duplicateMerge
         case parentLink
+        /// "These two are not steps of one outcome" — a rejected `GroupingSweep`
+        /// proposal, one row per member pair, symmetric like a duplicate.
+        case siblingGroup
     }
 
     var kind: SuppressionKind
@@ -82,8 +85,41 @@ struct RelationshipSuppression: Hashable, Sendable {
     func suppressesPair(kind: SuppressionKind, _ a: UUID, _ b: UUID) -> Bool {
         guard self.kind == kind, let pairKey else { return false }
         switch kind {
-        case .duplicateMerge: return pairKey == Self.symmetricKey(a, b)
+        case .duplicateMerge, .siblingGroup: return pairKey == Self.symmetricKey(a, b)
         case .parentLink: return pairKey == Self.directionalKey(child: a, parent: b)
+        }
+    }
+}
+
+extension SuppressionStore {
+    /// Record that two EXISTING tasks are not siblings under one outcome — written when
+    /// a person rejects a `GroupingSweep` proposal, once per member pair. Symmetric.
+    static func recordRejectedSiblings(
+        _ a: UUID, _ b: UUID, in context: NSManagedObjectContext, now: Date = Date()
+    ) {
+        context.insert(
+            SuppressionRecord(
+                RelationshipSuppression(
+                    kind: .siblingGroup, pairKey: RelationshipSuppression.symmetricKey(a, b),
+                    targetID: nil, normalizedTitle: nil, createdAt: now),
+                in: context))
+    }
+
+    /// Delete every sibling suppression among `ids` — the undo of one rejected group
+    /// proposal, whole.
+    static func undoRejectedSiblings(among ids: [UUID], in context: NSManagedObjectContext) {
+        var keys = Set<String>()
+        for i in ids.indices {
+            for j in ids.indices where j > i {
+                keys.insert(RelationshipSuppression.symmetricKey(ids[i], ids[j]))
+            }
+        }
+        let request = NSFetchRequest<SuppressionRecord>(entityName: "SuppressionRecord")
+        for row in (try? context.fetch(request)) ?? []
+        where row.kindRaw == RelationshipSuppression.SuppressionKind.siblingGroup.rawValue
+            && row.pairKey.map(keys.contains) == true
+        {
+            context.delete(row)
         }
     }
 }
@@ -236,7 +272,8 @@ enum SuppressionStore {
         guard let kind = RelationshipSuppression.SuppressionKind(rawValue: payload.kind) else { return }
         let pairKey = payload.createdID.map { createdID in
             switch kind {
-            case .duplicateMerge: RelationshipSuppression.symmetricKey(createdID, payload.targetID)
+            case .duplicateMerge, .siblingGroup:
+                RelationshipSuppression.symmetricKey(createdID, payload.targetID)
             case .parentLink:
                 RelationshipSuppression.directionalKey(child: createdID, parent: payload.targetID)
             }

@@ -132,6 +132,10 @@ struct TasksHomeView: View {
                 // when nothing is parked.
                 ParkedCapturesRow()
                     .padding(.horizontal, Spacing.lg)
+                // The grouping sweep's one question, in the same quiet register. Renders
+                // nothing when there is nothing to ask.
+                GroupProposalRow(notice: $notice)
+                    .padding(.horizontal, Spacing.lg)
 
                 Group {
                     switch slice {
@@ -310,7 +314,9 @@ struct TasksHomeView: View {
         // height follows the row's measured height, because a reader is otherwise greedy.
         GeometryReader { proxy in
             headerRowContent(offeredWidth: proxy.size.width)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                .onGeometryChange(for: CGFloat.self) {
+                    $0.size.height
+                } action: {
                     headerRowHeight = $0
                 }
         }
@@ -327,7 +333,9 @@ struct TasksHomeView: View {
                         tabButton(candidate)
                     }
                 }
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                .onGeometryChange(for: CGFloat.self) {
+                    $0.size.width
+                } action: {
                     pillsWidth = $0
                 }
                 // No floor of its own: the stack's two gaps already keep 24pt between
@@ -428,7 +436,9 @@ struct TasksHomeView: View {
                 filterCapsule(labelled: true)
                     .hidden()
                     .fixedSize(horizontal: true, vertical: false)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                    .onGeometryChange(for: CGFloat.self) {
+                        $0.size.width
+                    } action: {
                         labelledFilterWidth = $0
                     }
             }
