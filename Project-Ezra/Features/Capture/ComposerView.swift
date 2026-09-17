@@ -172,6 +172,13 @@ struct ComposerView: View {
     /// each mutation bought a redundant view invalidation — nothing in `body` reads
     /// them. `@State` here only pins the box's lifetime to the view's.
     @State private var parse = LiveParseState()
+    /// ONE engine for the sheet's life, not one per submit. The engine's whole design —
+    /// prewarm behind the presentation animation, speculate inside the silence window,
+    /// invalidate on new words — only exists across the listening phase; a fresh
+    /// `PrivateCaptureEngine()` at submit (the shape until 2026-09-17) reached none of
+    /// it, and every private capture paid the cold ~1.5 s pre-first-token the design
+    /// was written to hide. `speculative:` on the outcome was never true.
+    @State private var privateEngine = PrivateCaptureEngine()
     /// The user's past "no"s, loaded once per composer session — they only change at commit
     /// (which writes new `SuppressionRecord`s and dismisses). Loading also lazily prunes
     /// expired/orphaned rows, so caching keeps that off the per-keystroke path.
@@ -369,6 +376,7 @@ struct ComposerView: View {
             .onAppear {
                 refreshRosterCaches()
                 restoreIfResuming()
+                if posture == .onDevice { privateEngine.prewarm() }
                 if phase == .listening {
                     // Fresh open, mic permitted (decided in `init`): the sheet opens
                     // INTO listening. Opening capture is opening a listening
@@ -432,7 +440,12 @@ struct ComposerView: View {
                 // (minus trailing whitespace) and kick off a full re-parse before a
                 // single word had been spoken.
                 let next = dictationBase + transcript
-                if next != text { text = next }
+                if next != text {
+                    text = next
+                    // New words: any hidden generation is about a capture that no
+                    // longer exists.
+                    if posture == .onDevice { privateEngine.transcriptChanged() }
+                }
                 guard Self.shouldArmSilence(transcript: transcript) else { return }
                 usedDictation = true
                 // Armed ONLY here, on words — the system never finishes an empty
@@ -503,6 +516,7 @@ struct ComposerView: View {
             .onDisappear {
                 let midListening = phase == .listening && speech.isActive
                 speech.stop()
+                privateEngine.cancel()
                 parse.silenceTask?.cancel()
                 silenceDeadline = nil
                 parse.parseTask?.cancel()
@@ -738,13 +752,20 @@ struct ComposerView: View {
                 parse.parseTask?.cancel()
                 parse.parseTask = Task {
                     let learned = sessionRules()
-                    let outcome = await PrivateCaptureEngine().finish(text: captured, learned: learned)
+                    let outcome = await privateEngine.finish(text: captured, learned: learned)
                     guard !Task.isCancelled else { return }
                     var run = CaptureRunTelemetry.local(
                         segmentation: Segmentation.structure(of: captured).label,
                         cloudAvailable: CloudModel.isReachable(for: .ramble))
                     run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
                     run.rung = IntelligenceRung.onDevice.rawValue
+                    // The receipt says whether the silence window paid for the read.
+                    switch outcome {
+                    case .captured(_, let speculative):
+                        run.armWon = speculative ? "privateEngine(speculative)" : "privateEngine"
+                    case .fallback:
+                        run.armWon = "deterministic(fallback)"
+                    }
                     lastRun = run
                     await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
                     guard !Task.isCancelled else { return }
@@ -2505,6 +2526,16 @@ struct ComposerView: View {
     private func scheduleSilenceFinish() {
         parse.silenceTask?.cancel()
         silenceDeadline = Date().addingTimeInterval(Self.silenceStopSeconds)
+        // The silence window is the private engine's whole budget: a single thought on
+        // the on-device posture starts generating NOW, hidden, and `finish` collects it
+        // when the window fires. Several things go to the other on-device arm and are
+        // not speculated (`CaptureFlow.plan` decides that at submit; the same predicate
+        // gates the speculation so nothing is generated the plan would discard).
+        if posture == .onDevice, PrivateCaptureEngine.modelAvailable(),
+            !PrivateCaptureEngine.soundsLikeSeveralThings(text)
+        {
+            privateEngine.silenceArmed(text: text)
+        }
         parse.silenceTask = Task {
             try? await Task.sleep(for: .seconds(Self.silenceStopSeconds))
             guard !Task.isCancelled, phase == .listening, speech.state == .listening
