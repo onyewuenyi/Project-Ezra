@@ -447,6 +447,11 @@ struct HeuristicEngine: AIEngine {
     private static let weekdayAlternation =
         "(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)"
 
+    static func isWeekday(_ word: String) -> Bool {
+        ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+            .contains(word.lowercased().trimmingCharacters(in: .punctuationCharacters))
+    }
+
     /// Two or more weekday names joined by commas and/or "and" — "monday and tuesday",
     /// "monday, wednesday and friday" — returned as ONE phrase for the resolver to fan
     /// out. Nil for a single weekday, which the token list below handles.

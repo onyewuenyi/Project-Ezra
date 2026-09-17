@@ -264,6 +264,9 @@ enum Segmentation {
         connective: String, left: Substring, right: Substring
     ) -> Bool {
         let stripped = strippedLeadIn(trimItem(String(right)))
+        if connective == " and ", datedOnBothSides(left: trimItem(String(left)), right: stripped) {
+            return true
+        }
         guard startsAnItem(stripped) else { return false }
         if connective == " and " {
             let leftClause = trimItem(String(left))
@@ -276,6 +279,29 @@ enum Segmentation {
             else { return false }
         }
         return true
+    }
+
+    /// Two clauses that each carry their OWN time phrase are two outcomes even when the
+    /// second has no verb of its own: "dentist on thursday and the vet on friday", "text
+    /// mom about sunday and the dentist about thursday". Measured on 2026-09-17 (iOS 27
+    /// GA): these were 2 of the 3 utterances that still escalated as under-segmented,
+    /// and the on-device boundary pass answered "one part" for both — the deterministic
+    /// read is the only arm that can resolve them, at 2 ms, with no transmission. The
+    /// guard against a day-list ("walk my dog monday and tuesday plan the year") is that
+    /// the right side must not OPEN with a weekday: a clause that starts on a day is
+    /// continuing an enumeration the resolver fans out, never a second outcome. The right
+    /// side must also say more than its day, or "…and friday" would become a card.
+    static func datedOnBothSides(left: String, right: String) -> Bool {
+        let leftLower = left.lowercased()
+        let rightLower = right.lowercased()
+        guard HeuristicEngine.dateExpression(from: leftLower) != nil,
+            HeuristicEngine.dateExpression(from: rightLower) != nil
+        else { return false }
+        let rightWords = rightLower.split(separator: " ").map(String.init)
+        guard rightWords.count >= 2, let first = rightWords.first,
+            !HeuristicEngine.isWeekday(first)
+        else { return false }
+        return left.split(separator: " ").count >= 2
     }
 
     /// A left clause ENDING in one of these is a verb still waiting for its object

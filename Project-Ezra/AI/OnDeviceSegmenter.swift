@@ -118,8 +118,10 @@ enum OnDeviceSegmenter {
         case failed(String)
         /// An anchor was not in the user's own words, or the artifact came apart.
         case ungrounded
-        /// Fewer than two boundaries — there is nothing here the read did not already
-        /// have. Note this is also the answer when the model says "it is all one thing":
+        /// Fewer than two boundaries, or no more than the deterministic read already
+        /// found — there is nothing here the read did not already have (a cut BELOW the
+        /// local count merges outcomes the read had told apart, and refuses here). Note
+        /// this is also the answer when the model says "it is all one thing":
         /// that claim is not accepted on the model's authority, because the signal count
         /// is what escalated and FM's own multi-intent boolean measured 43% precision
         /// against the deterministic detector's 90% (Campaign 3).
@@ -201,6 +203,17 @@ enum OnDeviceSegmenter {
         }
         guard cleaned.count >= 2, !cleaned.contains(where: \.isEmpty) else { return nil }
         return cleaned
+    }
+
+    /// The arm exists to fix UNDER-segmentation. A cut with no more parts than the
+    /// deterministic read already found cannot be a gain, and can be a loss: on
+    /// 2026-09-17 the GA model, which had cut "renew my passport and after that book
+    /// flights … and book the hotel …" into three on three runs, cut it into two on the
+    /// fourth, and the validator accepted a read that merged two errands the local pass
+    /// had already told apart. The count the read had is the floor; fewer than two
+    /// boundaries was never a cut at all.
+    static func isGain(anchors: Int, localCount: Int) -> Bool {
+        anchors >= 2 && anchors > localCount
     }
 
     /// One word of the text, with where it starts. Punctuation is trimmed from the EDGES
@@ -299,7 +312,8 @@ enum OnDeviceSegmenter {
         ModelMetrics.shared.record(
             .captureSegment, .success, latencyMs: Int(Date().timeIntervalSince(started) * 1000))
 
-        guard read.starts.count >= 2 else { return .refused(.noGain) }
+        guard isGain(anchors: read.starts.count, localCount: AppBrain.provisionalDrafts(text).count)
+        else { return .refused(.noGain) }
         guard let fragments = cut(text, at: read.starts) else { return .refused(.ungrounded) }
         let drafts = AppBrain.drafts(
             fromClauses: fragments, learned: learned, ownership: ownership, now: now)

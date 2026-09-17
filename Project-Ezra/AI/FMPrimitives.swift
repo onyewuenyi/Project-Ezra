@@ -79,6 +79,9 @@ enum FMPrimitives {
         case trueReject = "reject"
         /// The artifact never grounded, timed out, or the model was not reachable.
         case noArtifact = "no-artifact"
+        /// The arm stood aside — its cut was no gain over a local read that already had
+        /// the right count. The person gets the right count; the arm cost one call.
+        case standAside = "stand-aside"
     }
 
     struct Row {
@@ -421,18 +424,27 @@ enum FMPrimitives {
                 case .unavailable, .timedOut, .failed: served = false
                 case .ungrounded, .noGain, .validator: served = true
                 }
+                // A no-gain refusal over a local read that was already RIGHT is the arm
+                // standing aside correctly (the gain guard, 2026-09-17): the count the
+                // person gets is the local one, and that is what `fragments` carries.
+                let standsAside: Bool = {
+                    if case .noGain = refusal { return item.localCount == item.expected }
+                    return false
+                }()
                 rows.append(
                     Row(
                         utterance: item.utterance, expected: item.expected, localCount: item.localCount,
-                        fragments: fragments, accepted: false,
+                        fragments: standsAside ? item.localCount : fragments, accepted: false,
                         // One line, always. An unclamped `LanguageModelError` description is
                         // eight lines of nested NSError and it destroys the table it lands in
                         // — which is how the first run of this harness printed a report nobody
                         // could read.
                         refusal: Instrument.oneLine(refusal.label).prefix(26).description,
-                        verdict: verdict(
-                            accepted: false, hadArtifact: hadArtifact, fragments: fragments,
-                            expected: item.expected),
+                        verdict: standsAside
+                            ? .standAside
+                            : verdict(
+                                accepted: false, hadArtifact: hadArtifact, fragments: fragments,
+                                expected: item.expected),
                         ms: ms, served: served))
             }
         }
@@ -482,6 +494,7 @@ enum FMPrimitives {
             (.falseReject, "refused, cut was right — one cloud call spent needlessly"),
             (.trueReject, "refused, cut was wrong — the system working"),
             (.noArtifact, "no artifact to score"),
+            (.standAside, "no gain over a local read that was already right — the arm stood aside"),
         ]
         for (verdict, gloss) in order {
             print("  " + pad(verdict.rawValue, 15) + pad("\(counts[verdict] ?? 0)", 5) + gloss)
