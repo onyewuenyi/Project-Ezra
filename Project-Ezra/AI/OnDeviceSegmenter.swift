@@ -125,9 +125,11 @@ enum OnDeviceSegmenter {
         /// against the deterministic detector's 90% (Campaign 3).
         case noGain
         /// The cut resolved, and the existing validator still refused it. Carries how many
-        /// drafts the cut produced — without it a caller cannot tell a cut that was nearly
-        /// right from one that came apart, and a report scoring this cell would have to
-        /// substitute the deterministic count and quietly score the wrong artifact.
+        /// FRAGMENTS the cut produced (the model's count, not the resolver's draft count,
+        /// which fans a day-list into several) — without it a caller cannot tell a cut
+        /// that was nearly right from one that came apart, and a report scoring this cell
+        /// would have to substitute the deterministic count and quietly score the wrong
+        /// artifact.
         case validator(CaptureEscalationReason, fragments: Int)
 
         var label: String {
@@ -145,7 +147,9 @@ enum OnDeviceSegmenter {
     enum Outcome: Equatable, Sendable {
         /// The capture stays on the device. `fragments` is how many boundaries the cut
         /// produced — drafts may exceed it where `IntentResolver.expand` fans one out.
-        case accepted(drafts: [TaskDraft], fragments: Int)
+        /// `anchors` are the model's verbatim openings, carried so a report can show
+        /// WHERE it cut — a false accept with only a count cannot be argued with.
+        case accepted(drafts: [TaskDraft], fragments: Int, anchors: [String] = [])
         case refused(Refusal)
 
         var isAccepted: Bool { if case .accepted = self { return true }; return false }
@@ -303,8 +307,8 @@ enum OnDeviceSegmenter {
         // The validator, unchanged and authoritative. It is asked about the ORIGINAL text
         // — the signals it counts are the person's, not the cut's.
         if let reason = CaptureEscalation.reason(for: text, drafts: drafts) {
-            return .refused(.validator(reason, fragments: drafts.count))
+            return .refused(.validator(reason, fragments: fragments.count))
         }
-        return .accepted(drafts: drafts, fragments: fragments.count)
+        return .accepted(drafts: drafts, fragments: fragments.count, anchors: read.starts)
     }
 }

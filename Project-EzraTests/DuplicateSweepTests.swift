@@ -30,26 +30,34 @@ struct DuplicateSweepTests {
 
     // MARK: - Prefilter
 
-    @Test("Both floors must clear: near vectors alone or shared words alone are not a pair")
-    func bothFloorsRequired() {
+    @Test("The lexical floor gates; the embedding only ranks")
+    func lexicalGatesEmbeddingRanks() {
         let a = UUID()
         let b = UUID()
         let c = UUID()
-        // cos 0.99 maps to similarity ≈0.86 under the distance formula — above the
-        // 0.82 floor. (cos 0.98 maps to 0.80, BELOW it — the floor is tight.)
+        let d = UUID()
+        // Real device vectors (2026-09-17) put "renew my passport / passport renewal" at
+        // similarity 0.17 — far below the old 0.82 embedding floor — while the judge
+        // scored the pair 1.00. The gate admits the paraphrase on its shared word; a
+        // near vector with NO shared words is still not a pair.
         let table = [
             "renew my passport": [1.0, 0.0],
-            "passport renewal": [0.99, 0.141],  // near vector + shared word → pair
-            "book flights for the trip": [0.99, 0.141],  // near vector, NO shared words → lexical floor drops it
+            "passport renewal": [0.0, 1.0],  // orthogonal vector + shared word → pair
+            "book flights for the trip": [0.99, 0.141],  // near vector, NO shared words → dropped
+            "passport photos": [0.99, 0.141],  // near vector + shared word → pair, ranked first
         ]
         let pairs = DuplicateSweep.candidatePairs(
             among: [
                 snap(a, "renew my passport"), snap(b, "passport renewal"),
-                snap(c, "book flights for the trip"),
+                snap(c, "book flights for the trip"), snap(d, "passport photos"),
             ],
             suppressions: [], vector: vectors(table))
-        #expect(pairs.count == 1)
-        #expect(Set([pairs[0].a.id, pairs[0].b.id]) == Set([a, b]))
+        let keys = Set(pairs.map { Set([$0.a.id, $0.b.id]) })
+        #expect(keys.contains(Set([a, b])))
+        #expect(keys.contains(Set([a, d])))
+        #expect(!keys.contains(where: { $0.contains(c) }))
+        // Ranking: same overlap, the nearer vector sorts first.
+        #expect(Set([pairs[0].a.id, pairs[0].b.id]) == Set([a, d]))
     }
 
     @Test("Any faster candidatePairs must return exactly what the naive one does")
@@ -66,19 +74,19 @@ struct DuplicateSweepTests {
         ) -> [(UUID, UUID, Double)] {
             var out: [(UUID, UUID, Double)] = []
             for i in snapshots.indices {
-                guard let va = vector(snapshots[i].title) else { continue }
+                let va = vector(snapshots[i].title)
                 let wa = CorrectionProfile.significantWords(snapshots[i].title)
                 guard !wa.isEmpty else { continue }
                 for j in snapshots.indices where j > i {
-                    guard let vb = vector(snapshots[j].title) else { continue }
-                    let sim = EmbeddingStore.similarity(va, vb)
-                    guard sim >= DuplicateSweep.embeddingFloor else { continue }
+                    let vb = vector(snapshots[j].title)
                     let wb = CorrectionProfile.significantWords(snapshots[j].title)
                     guard !wb.isEmpty else { continue }
                     let overlap = Double(wa.intersection(wb).count)
                     let union = Double(wa.union(wb).count)
-                    guard union > 0, overlap / union >= DuplicateSweep.lexicalFloor else { continue }
-                    out.append((snapshots[i].id, snapshots[j].id, sim))
+                    let lexical = union > 0 ? overlap / union : 0
+                    guard lexical >= DuplicateSweep.lexicalFloor else { continue }
+                    let sim = (va != nil && vb != nil) ? EmbeddingStore.similarity(va!, vb!) : 0
+                    out.append((snapshots[i].id, snapshots[j].id, lexical + sim))
                 }
             }
             return out
@@ -122,16 +130,21 @@ struct DuplicateSweepTests {
         #expect(actualKeys == expectedKeys)
         // And the fixture actually exercised both floors, or the parity proves nothing.
         #expect(!expected.isEmpty, "the fixture produced no pairs — widen the clusters")
-        #expect(expected.count < 80 * 79 / 2, "every pair passed — the floors were not exercised")
+        #expect(expected.count < 80 * 79 / 2, "every pair passed — the gate was not exercised")
     }
 
-    @Test("A pair missing a vector is skipped — the sweep only reasons over evidence it has")
-    func missingVectorSkips() {
+    @Test("A pair missing a vector is still a pair — it ranks on overlap alone")
+    func missingVectorStillGates() {
+        // The embedding is a tiebreak, not evidence the gate needs: a cold cache or the
+        // accessor's first-call nil must not drop a pair the words admitted.
+        let a = UUID()
+        let b = UUID()
         let pairs = DuplicateSweep.candidatePairs(
-            among: [snap(UUID(), "renew my passport"), snap(UUID(), "passport renewal")],
+            among: [snap(a, "renew my passport"), snap(b, "passport renewal")],
             suppressions: [],
             vector: vectors(["renew my passport": [1.0, 0.0]]))  // second title unembedded
-        #expect(pairs.isEmpty)
+        #expect(pairs.count == 1)
+        #expect(abs(pairs[0].score - 1.0 / 3.0) < 0.001)
     }
 
     @Test("A suppressed pair never surfaces again")

@@ -197,11 +197,13 @@ enum DuplicateSweepEval {
     /// The scores are returned, not just the verdict, because the first MEASURED run of
     /// this report (device, 2026-09-12, after the embedding fix) showed the floors dropping
     /// every real duplicate in the corpus — including "Renew passport / passport renewal",
-    /// the pair the sweep's header names as its reason to exist. `embeddingFloor` (0.82 on
-    /// the store's distance-derived similarity) was calibrated in `DuplicateSweepTests`
-    /// against SYNTHETIC unit vectors (cos 0.99 → 0.86; cos 0.98 → 0.80), i.e. it demands
-    /// cos ≈ 0.985, which no real sentence-embedding paraphrase reaches. A floor can only
-    /// be moved on the numbers real vectors produce, and this is where they are printed.
+    /// the pair the sweep's header names as its reason to exist. The embedding floor (0.82
+    /// on the store's distance-derived similarity) had been calibrated in
+    /// `DuplicateSweepTests` against SYNTHETIC unit vectors (cos 0.99 → 0.86), i.e. it
+    /// demanded cos ≈ 0.985, which no real paraphrase reaches; the GA run (2026-09-17)
+    /// showed the embedding cannot separate duplicates from near-misses at ANY floor, and
+    /// it stopped gating. The columns stay: a gate can only be argued from real vectors,
+    /// and this is where they are printed.
     struct PrefilterRead {
         let survives: Bool
         let similarity: Double?
@@ -218,11 +220,11 @@ enum DuplicateSweepEval {
         let wb = CorrectionProfile.significantWords(pair.b)
         let union = Double(wa.union(wb).count)
         let overlap = union > 0 ? Double(wa.intersection(wb).count) / union : 0
-        // Reuse the score candidatePairs already computed; only call similarity() for pairs that
-        // survived the words guard but failed a floor (empty words means the floor was never
-        // reached — showing a similarity value there would misattribute the rejection cause).
+        // The REAL similarity, never the rank score (which is overlap + similarity since
+        // 2026-09-17): the column exists so a floor can be argued from real vectors.
+        // Empty words means the gate was never reached — a value there would
+        // misattribute the rejection.
         let similarity: Double? = {
-            if let candidate = survivors.first { return candidate.score }
             guard !wa.isEmpty, !wb.isEmpty else { return nil }
             guard let va = vector(pair.a), let vb = vector(pair.b) else { return nil }
             return EmbeddingStore.similarity(va, vb)
@@ -255,7 +257,7 @@ enum DuplicateSweepEval {
                 model: brain.status.description,
                 configuration: DuplicateSweep.judgeInstructions
                     + "|threshold=\(DuplicateSweep.acceptThreshold)"
-                    + "|floors=\(DuplicateSweep.embeddingFloor)/\(DuplicateSweep.lexicalFloor)"))
+                    + "|gate=lexical>=\(DuplicateSweep.lexicalFloor)|rank=lexical+similarity"))
         print("host engine: \(brain.status.description)")
 
         // Sweeps are on-device ONLY by invariant — background work nobody is waiting on has
@@ -481,8 +483,9 @@ enum DuplicateSweepEval {
         }
         print(
             String(
-                format: "  floors: similarity ≥ %.2f · word overlap ≥ %.2f",
-                DuplicateSweep.embeddingFloor, DuplicateSweep.lexicalFloor))
+                format: "  gate: word overlap ≥ %.2f · ranked by overlap + similarity "
+                    + "(the embedding stopped gating 2026-09-17 — it never admitted a real pair)",
+                DuplicateSweep.lexicalFloor))
     }
 
     @discardableResult

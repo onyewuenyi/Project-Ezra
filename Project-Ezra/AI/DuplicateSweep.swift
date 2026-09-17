@@ -49,14 +49,21 @@ enum DuplicateSweep {
 
     // MARK: - Tuning (containment constants, named)
 
-    /// Both floors must clear — semantic nearness alone sweeps in siblings
-    /// ("book flights" / "book the hotel"), lexical overlap alone sweeps in
-    /// re-uses of common words. Near-duplicates clear both. The lexical floor is
-    /// DELIBERATELY `DraftMerge.retitleSimilarityFloor` (0.3), the codebase's one
-    /// established "same thought, re-phrased" word-overlap line — "renew my
-    /// passport" vs "passport renewal" scores exactly 1/3, and a floor above it
-    /// would exclude the flagship duplicate shape this sweep exists to catch.
-    static let embeddingFloor = 0.82
+    /// **The lexical floor gates; the embedding only ranks (2026-09-17).** The first
+    /// shape required BOTH an embedding floor (0.82) and this one, and the embedding
+    /// floor was calibrated on synthetic unit vectors. Measured on the phone with real
+    /// vectors (`-DuplicateSweepEval`, iOS 27 GA), in the store's `1 − √(2 − 2cos)` unit
+    /// the ten real duplicates read 0.00–0.18 and the ten near-misses 0.03–0.57 — the
+    /// embedding does not separate the two populations at any floor, and ranks
+    /// word-sharing siblings ABOVE paraphrases. It dropped 10/10 real pairs; the sweep
+    /// never judged one. The judge, meanwhile, separated them completely (every
+    /// duplicate 0.90–1.00, every near-miss 0.50, FALSE MERGE 0/20, the prerequisite
+    /// near-miss included). So the gate is the one signal that admits paraphrases
+    /// (7/10 on that corpus), the judge is the separator, and the embedding breaks ties
+    /// in the order pairs are judged. The lexical floor is DELIBERATELY
+    /// `DraftMerge.retitleSimilarityFloor` (0.3), the codebase's one established "same
+    /// thought, re-phrased" word-overlap line — "renew my passport" vs "passport
+    /// renewal" scores exactly 1/3.
     static let lexicalFloor = DraftMerge.retitleSimilarityFloor
     static let maxPairsPerRun = 20
     static let maxJudgmentsPerRun = 5
@@ -71,10 +78,13 @@ enum DuplicateSweep {
 
     // MARK: - Prefilter (pure, deterministic, tested)
 
-    /// Embedding-near AND lexically-overlapping pairs of open tasks, suppressed
-    /// pairs dropped, best-first, capped. `vector` is injected so tests run
-    /// without NLEmbedding (absent under XCTest); pairs missing a vector are
-    /// skipped — the sweep only ever reasons over evidence it actually has.
+    /// Lexically-overlapping pairs of open tasks, suppressed pairs dropped, ranked
+    /// by overlap plus embedding similarity, best-first, capped. `vector` is injected so tests run
+    /// without NLEmbedding (absent under XCTest). A pair missing a vector is still a
+    /// pair — the gate is lexical — it just ranks on overlap alone: with the embedding
+    /// demoted to a tiebreak, requiring it would let a cold cache (or the accessor's
+    /// known first-call nil) drop pairs the gate admitted, silently, the way the old
+    /// floor did.
     static func candidatePairs(
         among snapshots: [OpenTaskSnapshot],
         suppressions: [RelationshipSuppression],
@@ -88,20 +98,18 @@ enum DuplicateSweep {
         // word-overlap check, so every pair paid for the expensive floor whether or not
         // it could pass the cheap one. At 206 open tasks that was 88ms on the main
         // actor (Debug, simulator, `ZZAIPathPerfProbeTests`), hourly, growing with the
-        // square of the store; 23ms after. Both floors must clear, so checking the
-        // lexical one first is a pure reordering of an AND: same pairs, same scores,
-        // pinned against the original loop by
-        // `DuplicateSweepTests.fastPathMatchesTheNaiveOne`.
+        // square of the store; 23ms after. The lexical floor is the only gate, so the
+        // dot product runs only for pairs that will be ranked — pinned against a naive
+        // loop by `DuplicateSweepTests.fastPathMatchesTheNaiveOne`.
         struct Prepared {
             let snapshot: OpenTaskSnapshot
-            let vector: [Double]
+            let vector: [Double]?
             let words: Set<String>
         }
         let prepared: [Prepared] = snapshots.compactMap { snapshot in
-            guard let vector = vector(snapshot.title) else { return nil }
             let words = CorrectionProfile.significantWords(snapshot.title)
             guard !words.isEmpty else { return nil }
-            return Prepared(snapshot: snapshot, vector: vector, words: words)
+            return Prepared(snapshot: snapshot, vector: vector(snapshot.title), words: words)
         }
 
         var pairs: [CandidatePair] = []
@@ -113,15 +121,20 @@ enum DuplicateSweep {
                 // most pairs fail. The dot product runs only for survivors.
                 let overlap = Double(a.words.intersection(b.words).count)
                 let union = Double(a.words.union(b.words).count)
-                guard union > 0, overlap / union >= lexicalFloor else { continue }
-                let similarity = EmbeddingStore.similarity(a.vector, b.vector)
-                guard similarity >= embeddingFloor else { continue }
+                let lexical = union > 0 ? overlap / union : 0
+                guard lexical >= lexicalFloor else { continue }
                 guard
                     !suppressions.contains(where: {
                         $0.suppressesPair(kind: .duplicateMerge, a.snapshot.id, b.snapshot.id)
                     })
                 else { continue }
-                pairs.append(CandidatePair(a: a.snapshot, b: b.snapshot, score: similarity))
+                let similarity: Double
+                if let va = a.vector, let vb = b.vector {
+                    similarity = EmbeddingStore.similarity(va, vb)
+                } else {
+                    similarity = 0
+                }
+                pairs.append(CandidatePair(a: a.snapshot, b: b.snapshot, score: lexical + similarity))
             }
         }
         return

@@ -700,7 +700,7 @@ struct ComposerView: View {
                         cloudAvailable: CloudModel.isReachable(for: .ramble))
                     run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
                     let final: [TaskDraft]
-                    if case .accepted(let drafts, let fragments) = outcome {
+                    if case .accepted(let drafts, let fragments, _) = outcome {
                         run.rung = IntelligenceRung.onDevice.rawValue
                         run.engineName = "on-device(segment→\(fragments))"
                         final = drafts
@@ -878,7 +878,7 @@ struct ComposerView: View {
             // the GA report flips it, not an argument here).
             let segmentStarted = Date()
             if OnDeviceSegmenter.attempts(escalation),
-                case .accepted(let segmented, let fragments) = await OnDeviceSegmenter.segment(
+                case .accepted(let segmented, let fragments, _) = await OnDeviceSegmenter.segment(
                     text: captured, learned: learned, ownership: ownership)
             {
                 guard !Task.isCancelled else { return }

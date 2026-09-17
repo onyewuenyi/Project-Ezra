@@ -95,6 +95,8 @@ enum FMPrimitives {
         /// harness printed "p90 2479ms" from nine errors, which is the shape of a
         /// number that looks like a measurement and is not one.
         var served: Bool
+        /// The model's cut points, printed only on a FALSE-ACCEPT row (see below).
+        var anchors: [String] = []
     }
 
     /// The 2×2, from what the validator said and what the label says. Pure — the scorer is
@@ -381,15 +383,21 @@ enum FMPrimitives {
             let outcome = await OnDeviceSegmenter.segment(text: item.utterance)
             let ms = Date().timeIntervalSince(started) * 1000
             switch outcome {
-            case .accepted(let drafts, let fragments):
+            case .accepted(_, let fragments, let anchors):
+                // The CUT count, never the draft count. The resolver fans one outcome into
+                // several drafts by design ("walk my dog monday and tuesday" → two), and
+                // this row scores against INTENTS; taking `max(fragments, drafts.count)`
+                // marked the GA model's exactly-right 8-part cut of case 50 as a
+                // FALSE-ACCEPT of 9 on 2026-09-17 — the anchors printed below are what
+                // exposed it. The draft count is the resolver's, not the model's.
                 rows.append(
                     Row(
                         utterance: item.utterance, expected: item.expected, localCount: item.localCount,
-                        fragments: max(fragments, drafts.count), accepted: true, refusal: "—",
+                        fragments: fragments, accepted: true, refusal: "—",
                         verdict: verdict(
-                            accepted: true, hadArtifact: true, fragments: max(fragments, drafts.count),
+                            accepted: true, hadArtifact: true, fragments: fragments,
                             expected: item.expected),
-                        ms: ms, served: true))
+                        ms: ms, served: true, anchors: anchors))
             case .refused(let refusal):
                 // A refusal that produced a CUT still has a countable artifact — that is
                 // what makes the false-reject cell measurable. A refusal with no artifact
@@ -446,6 +454,12 @@ enum FMPrimitives {
                 "  " + pad(row.verdict.rawValue, 13) + pad("\(row.expected)", 5)
                     + pad("\(row.localCount)", 6) + pad("\(row.fragments)", 4) + pad(row.refusal, 28)
                     + pad(String(format: "%.0f", row.ms), 7) + String(row.utterance.prefix(52)))
+            // THE cell that can hurt, shown with the cut that produced it: a count says
+            // the model was wrong, the anchors say how — the difference between "it split
+            // a day-list" and "it invented a boundary", which need different fixes.
+            if row.verdict == .falseAccept, !row.anchors.isEmpty {
+                print("               cut at: " + row.anchors.map { "⟨\($0)⟩" }.joined(separator: " "))
+            }
         }
         let exact = rows.filter { $0.fragments == $0.expected }.count
         let servedRows = rows.filter(\.served)
