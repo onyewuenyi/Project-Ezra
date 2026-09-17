@@ -16,7 +16,7 @@ Single-developer R&D build, deliberately on non-GA software (Xcode 27 beta, iOS 
 
 - **Xcode 27 (iOS 27 SDK)**, deployment target iOS 27.0. `xcodebuild -version` must read 27.x; else `sudo xcode-select -s /Applications/Xcode-beta.app/Contents/Developer`. macOS Tahoe 26.4+ (26.5 for ASan on the sim). Apple silicon only.
 - Swift language mode 5.0, `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — types are main-actor isolated by default.
-- **firebase-ios-sdk is pinned to the `wwdc26-preview` BRANCH, deliberately** — the only place `GeminiLanguageModel` exists. A build that breaks for no local reason: check `Package.resolved`'s pinned commit first.
+- **firebase-ios-sdk is pinned to the `wwdc26-preview` BRANCH, deliberately** — the only place `GeminiLanguageModel` exists. A build that breaks for no local reason: check `Package.resolved`'s pinned commit first, then the SDK — **the pin can hold and the SDK still move** (2026-09-17: the Xcode 27.0 update's FoundationModels replaced `Transcript.Segment.custom` with `.attachment`; the pinned Firebase commit `5d9b338` conforms four parts to `Transcript.CustomSegment` under `#if compiler(>=6.4)` and no longer compiles; upstream had no fix that day — owner step in `TODO.md`).
 
 ## Build, run, test
 
@@ -141,6 +141,6 @@ Agentic capture (`OpenSetQueryTool` pulling candidates), the confirm-waiting dai
 
 ## Workflow
 
-- Commit directly to `main`; no PR flow. No CI yet.
+- **Two ways onto `main`, by who is committing.** The owner's local sessions commit directly to `main` and push. Cloud/background Claude sessions work on a `claude/<name>` branch and open a PR; the owner merges it on GitHub (no CI, so the PR is the review). **Every local session starts with `git fetch && git status`** — a merged PR lands as a merge commit on `origin/main`, so local `main` diverges silently (2026-09-17: 21 unpushed local commits over 2 remote ones). Reconcile with `git rebase origin/main`, never a merge commit from the local side. A merged `claude/*` branch is deleted; an OPEN PR's branch is left alone — it may be a docs-only audit awaiting the owner's read.
 - **`docs/cohort0-checklist.md` is the audit's ground truth — update it in the same change that changes a flow.**
 - When a rule here changes, change its long-form paragraph in `docs/decisions.md` too.
