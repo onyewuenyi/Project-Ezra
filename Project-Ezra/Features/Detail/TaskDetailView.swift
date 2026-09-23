@@ -178,7 +178,10 @@ struct TaskDetailView: View {
         var opensChat: Bool { kind != .kickoff }
     }
 
-    private var advisorLine: BarLine? {
+    /// `now` is the clock the silence line's "just now" is measured against — the bar
+    /// re-reads it on a minute tick, like the lifecycle caption, so a page left open
+    /// does not keep claiming the look was a moment ago.
+    private func advisorLine(now: Date) -> BarLine? {
         if task.status == .doing, let step = kickoffStep { return BarLine(text: step, kind: .kickoff) }
         switch advisorStore.state(for: task) {
         case .revealed(let reading): return BarLine(text: reading.observation, kind: .reading)
@@ -188,7 +191,8 @@ struct TaskDetailView: View {
             }
             return nil
         case .quiet(.model):
-            return BarLine(text: Self.silenceLine(judgedAt: advisorStore.judgedAt(for: task)), kind: .silence)
+            return BarLine(
+                text: Self.silenceLine(judgedAt: advisorStore.judgedAt(for: task), now: now), kind: .silence)
         default: return nil
         }
     }
@@ -238,6 +242,7 @@ struct TaskDetailView: View {
                 detailsSection.rise(5, appeared, reduceMotion)
             }
             .padding(Spacing.lg)
+            .readableWidth()
         }
         // Hosts every related-task push from this page (spine rows, advisor rows) —
         // attached to the scroll view, not to a section that may not be in the tree.
@@ -306,6 +311,20 @@ struct TaskDetailView: View {
             // still live, and the bar it renders in is now always on screen. Bounded
             // (60-token cap) and silent on any non-success, like the tap path.
             if isActive, task.status == .doing, kickoffStep == nil { fetchKickoff() }
+            if isActive { prewarmKickoffIfStartable() }
+            #if DEBUG
+            // `-PressPrimary`: perform the pinned CTA on arrival, once — the moment
+            // after Start (the kickoff line landing under a relabelled button) was the
+            // one page state no seam could reach, and synthetic taps are blocked on
+            // this host. A short delay so the page has settled and the prewarm above
+            // has had its head start. Never fires in a normal run.
+            if isActive, ProcessInfo.processInfo.arguments.contains("-PressPrimary"),
+                let action = task.recommendedAction(among: allTasks, currentUserID: currentUserID)
+            {
+                try? await Task.sleep(for: .milliseconds(600))
+                performPrimary(action)
+            }
+            #endif
             // Work changes shape. A parent whose last step just completed elsewhere is
             // no longer planning work, and nothing else would notice — resolution
             // happens on rows, in Today, and on other devices, none of which can run an
@@ -354,6 +373,7 @@ struct TaskDetailView: View {
                 // becoming the page on screen is the moment the Advisor judges.
                 advisorStore.ensure(task: task, among: allTasks)
                 if task.status == .doing, kickoffStep == nil { fetchKickoff() }
+                prewarmKickoffIfStartable()
             }
         }
         // THE LOOP CLOSES HERE. Act → the task changes → the Advisor re-judges → the
@@ -500,14 +520,25 @@ struct TaskDetailView: View {
     /// it is a record. Nothing for a plain to-do. The status chip shows the STATE; this
     /// line shows the TIME, which the page used to keep behind the Details disclosure
     /// where nobody read it. Same quiet register as provenance; it is a fact, not a badge.
+    ///
+    /// On a clock: the caption is a relative time, and a page left open reads "Started
+    /// just now" ten minutes later unless something re-renders it. A minute tick is the
+    /// coarsest the wording changes at, so it costs one text re-evaluation a minute.
     @ViewBuilder private var lifecycleLine: some View {
-        if let caption = TaskTimeline.caption(for: task) {
-            Text(caption)
-                .font(.chipLabel)
-                .foregroundStyle(Palette.secondaryText)
-                .transition(.opacity)
+        if TaskTimeline.caption(for: task) != nil {
+            TimelineView(.periodic(from: .now, by: Self.captionTickSeconds)) { context in
+                if let caption = TaskTimeline.caption(for: task, now: context.date) {
+                    Text(caption)
+                        .font(.chipLabel)
+                        .foregroundStyle(Palette.secondaryText)
+                }
+            }
+            .transition(.opacity)
         }
     }
+
+    /// How often the page's relative-time lines re-read the clock.
+    static let captionTickSeconds: TimeInterval = 60
 
     /// The graph's upward direction. A step's page shows what it belongs to, the way
     /// the container's page shows its steps — down, sideways (blockers) and up are
@@ -522,7 +553,8 @@ struct TaskDetailView: View {
             // card a person just tapped agree. Silent once the step is resolved: it has
             // left the deck, and a position in it would be a claim about nothing.
             let open = parent.openSteps(among: allTasks)
-            let position = open.firstIndex { $0.objectID == task.objectID }
+            let position =
+                open.firstIndex { $0.objectID == task.objectID }
                 .map { " · \($0 + 1) of \(open.count) left" } ?? ""
             Button {
                 openedRelated = parent
@@ -532,7 +564,7 @@ struct TaskDetailView: View {
                         .font(.glyphCaption())
                     Text("Part of “\(parent.title)”\(position)")
                         .font(.chipLabel)
-                        .lineLimit(1)
+                        .lineLimit(LayoutMetrics.relatedTitleLines)
                     Image(systemName: "chevron.right")
                         .font(.glyphCaption())
                 }
@@ -863,7 +895,7 @@ struct TaskDetailView: View {
                         .font(.supporting)
                         .foregroundStyle(Palette.primaryText)
                         .strikethrough(done, color: Palette.mutedText)
-                        .lineLimit(1)
+                        .lineLimit(LayoutMetrics.relatedTitleLines)
                         .recessed(done)
                     Spacer(minLength: Spacing.sm)
                     Image(systemName: "chevron.right")
@@ -913,7 +945,7 @@ struct TaskDetailView: View {
                         Text(dependent.title)
                             .font(.supporting)
                             .foregroundStyle(Palette.primaryText)
-                            .lineLimit(1)
+                            .lineLimit(LayoutMetrics.relatedTitleLines)
                         Spacer(minLength: Spacing.sm)
                         // WHEN, in the row's own vocabulary: whether freeing this one
                         // matters today is the question the section exists to answer.
@@ -1001,7 +1033,7 @@ struct TaskDetailView: View {
                         Text(title)
                             .font(.supporting)
                             .foregroundStyle(Palette.primaryText)
-                            .lineLimit(1)
+                            .lineLimit(LayoutMetrics.relatedTitleLines)
                         Image(systemName: "chevron.right")
                             .font(.glyphCaption())
                             .foregroundStyle(Palette.mutedText)
@@ -1016,7 +1048,7 @@ struct TaskDetailView: View {
                 Text(title)
                     .font(.supporting)
                     .foregroundStyle(Palette.primaryText)
-                    .lineLimit(1)
+                    .lineLimit(LayoutMetrics.relatedTitleLines)
             }
             if let label = sinceLabel(blocker.since) {
                 Text(label)
@@ -1157,7 +1189,7 @@ struct TaskDetailView: View {
                         .font(.supporting)
                         .foregroundStyle(Palette.primaryText)
                         .strikethrough(done, color: Palette.mutedText)
-                        .lineLimit(1)
+                        .lineLimit(LayoutMetrics.relatedTitleLines)
                         .recessed(done)
                     if isCurrent {
                         // The pointer, not a label: the next open step in a container is
@@ -1418,51 +1450,63 @@ struct TaskDetailView: View {
             // move (options, steps, the blocker) live as the conversation's opener. It
             // lands in a fixed place with a fade: the bar is where the eyes already are,
             // and nothing above it moves.
-            if let line = advisorLine {
-                Button {
-                    guard line.opensChat else { return }
-                    openTaskChat()
-                } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
-                        Image(
-                            systemName: line.kind == .kickoff
-                                ? "arrow.turn.down.right" : line.kind == .silence ? "circle" : "text.bubble"
-                        )
-                        .font(.glyphCaption())
-                        .foregroundStyle(line.kind == .silence ? Palette.mutedText : Palette.accentFlat)
-                        Text(line.text)
-                            .supportingStyle()
-                            .foregroundStyle(
-                                line.kind == .silence ? Palette.mutedText : Palette.secondaryText
-                            )
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if line.opensChat {
-                            Spacer(minLength: Spacing.xs)
-                            Image(systemName: "chevron.right")
-                                .font(.glyphCaption())
-                                .foregroundStyle(Palette.mutedText)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+            // On the same minute tick as the lifecycle caption: only the silence line
+            // carries a relative time, and the tick re-reads the store, not the model.
+            TimelineView(.periodic(from: .now, by: Self.captionTickSeconds)) { context in
+                if let line = advisorLine(now: context.date) {
+                    barLine(line)
                 }
-                .buttonStyle(.pressableLink)
-                .disabled(!line.opensChat)
-                .accessibilityLabel(line.kind == .kickoff ? "First step: \(line.text)" : "Ezra: \(line.text)")
-                .accessibilityHint(line.opensChat ? "Opens the conversation about this task" : "")
-                .transition(.opacity)
-                .animation(reduceMotion ? nil : Motion.settle, value: line.text)
             }
         }
         .padding(.horizontal, Spacing.lg)
         .padding(.top, Spacing.sm)
         .padding(.bottom, Spacing.xs)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The CTA is a button, not a bar: on an iPad it was 1300pt wide (2026-09-18).
+        // The hairline and the background stay full-bleed; the controls take the column.
+        .readableWidth()
         .background(Palette.background)
         .overlay(alignment: .top) {
             Rectangle().fill(Palette.border).frame(height: 0.5)
         }
+    }
+
+    /// The bar's one line, rendered. Tappable into the chat unless it is the kickoff.
+    private func barLine(_ line: BarLine) -> some View {
+        Button {
+            guard line.opensChat else { return }
+            openTaskChat()
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                Image(
+                    systemName: line.kind == .kickoff
+                        ? "arrow.turn.down.right" : line.kind == .silence ? "circle" : "text.bubble"
+                )
+                .font(.glyphCaption())
+                .foregroundStyle(line.kind == .silence ? Palette.mutedText : Palette.accentFlat)
+                Text(line.text)
+                    .supportingStyle()
+                    .foregroundStyle(
+                        line.kind == .silence ? Palette.mutedText : Palette.secondaryText
+                    )
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if line.opensChat {
+                    Spacer(minLength: Spacing.xs)
+                    Image(systemName: "chevron.right")
+                        .font(.glyphCaption())
+                        .foregroundStyle(Palette.mutedText)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressableLink)
+        .disabled(!line.opensChat)
+        .accessibilityLabel(line.kind == .kickoff ? "First step: \(line.text)" : "Ezra: \(line.text)")
+        .accessibilityHint(line.opensChat ? "Opens the conversation about this task" : "")
+        .transition(.opacity)
+        .animation(reduceMotion ? nil : Motion.settle, value: line.text)
     }
 
     /// The CTA's label on this page. A deliberate, narrow reversal of "the verb
@@ -1546,6 +1590,16 @@ struct TaskDetailView: View {
         Motion.withMotion(Motion.settle) {
             kickoffStep = task.nextOpenStep(among: allTasks)?.title
         }
+    }
+
+    /// Warm the kickoff session while the Start button is the CTA — the tap that follows
+    /// is the one moment a generation runs with the person watching the button. Only
+    /// when the tap WOULD generate: a deciding task gets no line, and a container's
+    /// first move is already stored.
+    private func prewarmKickoffIfStartable() {
+        guard task.status == .todo, !task.needsDecision, task.nextOpenStep(among: allTasks) == nil
+        else { return }
+        KickoffService.prewarm()
     }
 
     private func fetchKickoff() {

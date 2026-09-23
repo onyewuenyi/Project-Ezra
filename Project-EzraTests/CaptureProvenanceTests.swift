@@ -61,6 +61,34 @@ struct CaptureProvenanceTests {
         #expect(found?.run.outcome == "salvaged")
     }
 
+    // MARK: - The feed's byline
+
+    @Test("The Activity byline speaks the product's words — never a route name, a latency or a vendor id")
+    func bylineIsPlain() {
+        var cloud = CaptureRunTelemetry()
+        cloud.route = "cloud"
+        cloud.modelIdentifier = "gemini-flash"
+        cloud.modelVersion = "gemini-3.7-flash"
+        cloud.parseMs = 1200
+        #expect(provenance(run: cloud).bylineLine == "Read in the cloud")
+        // The diagnostic line keeps every fact for the detail page and the reports.
+        #expect(provenance(run: cloud).summaryLine == "cloud(gemini-flash) · 1.2s")
+
+        var local = CaptureRunTelemetry()
+        local.parseMs = 2
+        #expect(provenance(run: local).bylineLine == "Read on your device")
+
+        var salvaged = CaptureRunTelemetry()
+        salvaged.route = "cloud"
+        salvaged.outcome = "salvaged"
+        #expect(provenance(run: salvaged).bylineLine == "Read in the cloud · cut short")
+
+        for line in [provenance(run: cloud).bylineLine, provenance(run: salvaged).bylineLine] {
+            #expect(!line.lowercased().contains("gemini"))
+            #expect(!line.contains("local") && !line.contains("s ·") && !line.contains("ms"))
+        }
+    }
+
     @Test("An unknown capture has no receipt — never a synthesized empty one")
     func unknownCaptureIsNil() {
         #expect(store().provenance(forCapture: UUID()) == nil)

@@ -83,9 +83,16 @@ enum SampleFlowFixtures {
         settings.household = household
         context.insert(settings)
 
+        // ADULT, not owner (2026-09-18). A household has ONE owner — the person whose
+        // profile minted it (`UserProfile`) — and the partner is an adult caretaker.
+        // As a second owner Maya could never be invited (`canInvite` excludes owners),
+        // so the fixture set that exists to cover the core flows could not reach the
+        // launch's headline one: sharing the household with a second phone. The
+        // caretaker count is unchanged — `HouseholdActivation.caretakerIDs` counts
+        // owner AND adult — so the digest default and the activation metrics are too.
         let maya = FamilyMember(
             name: "Maya", photoData: samplePhotoData(for: "Maya"), relationship: .partner,
-            role: .owner, in: context)
+            role: .adult, in: context)
         let ezra = FamilyMember(
             name: "Ezra", photoData: samplePhotoData(for: "Ezra"), relationship: .child, role: .child,
             in: context)

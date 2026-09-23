@@ -56,9 +56,19 @@ struct SettingsView: View {
     private enum ClearOutcome { case cleared, failed }
 
     private var profile: UserProfile? { profilesResults.first }
-    private var tasks: [TaskItem] { Array(tasksResults) }
+
+    /// **LIVE rows only — this screen deletes its own fetches (2026-09-18).** The clear
+    /// lives here, and it wipes `TaskItem`, `ChangeLogEntry` and `Correction` while this
+    /// view holds a `@FetchRequest` for each; the re-render that follows walks them
+    /// (`requiredAttention`, `diagnosticsLine`, the activation line) and read a row Core
+    /// Data had already torn down — SIGSEGV, every time, the crash "Clear all tasks"
+    /// shipped with. A deleted or context-less object is not data any more, so it leaves
+    /// the derivation, which is also exactly what the clear means.
+    private var tasks: [TaskItem] { tasksResults.filter(\.isLiveRow) }
+    private var changes: [ChangeLogEntry] { changesResults.filter(\.isLiveRow) }
+    private var corrections: [Correction] { correctionsResults.filter(\.isLiveRow) }
     /// AI-only entries — the acceptance metric must count the AI's own actions only.
-    private var aiEntries: [ChangeLogEntry] { changesResults.filter { $0.initiatedBy == .ai } }
+    private var aiEntries: [ChangeLogEntry] { changes.filter { $0.initiatedBy == .ai } }
 
     var body: some View {
         NavigationStack {
@@ -71,7 +81,14 @@ struct SettingsView: View {
                     digestCard
                     dataBoundaryCard
                     dataCard
+                    // Developer lines live in DEBUG only. The card's first line — "Kept
+                    // 62% · rot 8% · opens 14 · first payoff 42s" — shipped to customers
+                    // until 2026-09-18: acceptance and rot rates are the product's own
+                    // scorecard, and the guardrails say reporting, never scoring, and no
+                    // user-facing score. The whole card is the developer's.
+                    #if DEBUG
                     diagnosticsCard
+                    #endif
                 }
                 .padding(Spacing.lg)
             }
@@ -84,7 +101,15 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .onDisappear { context.saveChanges() }
+            .onDisappear {
+                context.saveChanges()
+                // The clear emptied the STORE; the screens behind this sheet are still
+                // showing what used to be in it, because the one safe way to delete on
+                // this runtime tells the live context nothing (`DataGeneration`). Rebuild
+                // them now — after the receipt has been read and the sheet is closing, so
+                // the rebuild takes nothing away from the person who asked for it.
+                if clearOutcome == .cleared { DataGeneration.shared.rebuild() }
+            }
             .task {
                 UserProfile.bootstrapIdentity(in: context)
                 digestOn = WeeklyDigest.isEnabled(caretakerCount: caretakerCount, defaults: .standard)
@@ -95,6 +120,30 @@ struct SettingsView: View {
                 // Built once per open, so what you share is what you have. Small enough
                 // (a personal store, no photo blobs) that this is imperceptible.
                 exportURL = try? DataExport.writeTemporaryFile(in: context)
+                #if DEBUG
+                // `-ClearAllTasks` / `-ResetEverything` perform the destructive clear
+                // on arrival. They are the two controls here that cannot be reviewed
+                // any other way: each sits behind a confirmation dialog, and synthetic
+                // taps are blocked on this host. They are also how the SIGSEGV this
+                // path shipped with was found and how it is kept honest — a destructive
+                // button's "it does not crash" has to be re-measurable. The short sleep
+                // lets the screen finish its first render, so the clear lands on a live
+                // view exactly as a tap would. Never fires in a normal run.
+                let args = ProcessInfo.processInfo.arguments
+                if args.contains("-ClearAllTasks") || args.contains("-ResetEverything") {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    performClear(args.contains("-ResetEverything") ? .everything : .work)
+                    // Closes the sheet afterwards so the rebuilt list can be
+                    // screenshotted — the half of the clear that has no other witness.
+                    // Note when reading the frames: the rebuild re-runs `-OpenSettings`
+                    // too, so Settings comes back a second later. The empty list in
+                    // between is the measurement.
+                    if args.contains("-DismissAfterClear") {
+                        try? await Task.sleep(for: .milliseconds(1500))
+                        dismiss()
+                    }
+                }
+                #endif
             }
         }
     }
@@ -103,7 +152,7 @@ struct SettingsView: View {
 
     private var profileCard: some View {
         VStack(spacing: Spacing.md) {
-            PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+            PhotosPicker(selection: $photoItem, matching: .images) {
                 AvatarView(profile: profile, size: 88)
             }
             .buttonStyle(.pressableIcon)
@@ -123,7 +172,11 @@ struct SettingsView: View {
             }
 
             if let profile {
-                TextField("Your name", text: bindingName(profile))
+                // Wraps rather than truncates: at the accessibility sizes a two-word
+                // name read "Charles Ony…" (2026-09-18), and a name is the one field
+                // whose whole value must be readable to be recognised as yours.
+                TextField("Your name", text: bindingName(profile), axis: .vertical)
+                    .lineLimit(1...2)
                     .font(.screenTitle)
                     .foregroundStyle(Palette.primaryText)
                     .multilineTextAlignment(.center)
@@ -249,6 +302,25 @@ struct SettingsView: View {
                         .tint(Palette.accentFlat)
                         .padding(.top, Spacing.xs)
                 }
+                // The long form of the three sentences above, and the place to go when
+                // the app is not working. App Review requires the privacy link to be
+                // reachable inside the app, not only in the listing, and this card is
+                // where a person is already reading about what leaves. Rendered only
+                // when the page exists — a dead link under "Privacy policy" is worse
+                // than none, and it is the first thing a reviewer taps (`SupportLinks`).
+                if SupportLinks.privacyPolicy != nil || SupportLinks.support != nil {
+                    HStack(spacing: Spacing.md) {
+                        if let policy = SupportLinks.privacyPolicy {
+                            Link("Privacy policy", destination: policy)
+                        }
+                        if let support = SupportLinks.support {
+                            Link("Get help", destination: support)
+                        }
+                    }
+                    .font(.supporting)
+                    .tint(Palette.accentFlat)
+                    .padding(.top, Spacing.xs)
+                }
             }
         }
     }
@@ -280,6 +352,19 @@ struct SettingsView: View {
                 // The retrieval substrate's meter (2026-09-12): the phone ran for weeks with
                 // this reading UNAVAILABLE and nothing said so.
                 Text(EmbeddingStore.statusLine())
+                    .metadataStyle()
+                // The submission gate that no build failure will ever mention: an app
+                // that collects data must link its privacy policy from inside the app,
+                // and neither page is written yet. Counted down here for the same reason
+                // App Check is — prose in a header is not a reminder (`SupportLinks`).
+                Text(SupportLinks.debugStatusLine)
+                    .metadataStyle()
+                // Whether sync is working, and when it last did. The second meter added
+                // for the same reason as the embedding one above it: CloudKit degrades
+                // in silence, so an app that has never once exported a record reads
+                // exactly like an app with nothing to send. `SCHEMA NOT DEPLOYED` here
+                // is the launch-day failure, named (`SyncHealth`).
+                Text(SyncHealth.shared.statusLine)
                     .metadataStyle()
                 // The one deadline in this build that cannot be undone once it passes.
                 // Prose in a header is not a reminder; a line that counts down is. When
@@ -319,7 +404,7 @@ struct SettingsView: View {
                 if let household = Household.existing(in: context) {
                     Text(
                         HouseholdActivation.measure(
-                            household: household, tasks: tasks, entries: Array(changesResults)
+                            household: household, tasks: tasks, entries: changes
                         ).footerLine
                     )
                     .metadataStyle()
@@ -372,8 +457,8 @@ struct SettingsView: View {
                 .compactMap(\.uuid))
         let planned: Set<UUID>? = surfacedToday.isEmpty ? nil : surfacedToday
         return RequiredAttention.measure(
-            tasks: tasks, entries: Array(changesResults),
-            corrections: Array(correctionsResults), plannedTaskIDs: planned,
+            tasks: tasks, entries: changes,
+            corrections: corrections, plannedTaskIDs: planned,
             advisor: AdvisorMetrics.shared)
     }
 
@@ -578,6 +663,24 @@ struct SettingsView: View {
     /// A clear that did not destroy anything writes no receipt and must not raise one
     /// here either — `destroyedData` is the fact, and the card would otherwise say the
     /// data went while the list behind the sheet still holds every task.
+    /// **The sheet closes FIRST, and the data goes once it is gone (2026-09-19).**
+    ///
+    /// This screen holds live `@FetchRequest`s for `TaskItem`, `ChangeLogEntry` and
+    /// `Correction`, and derives from all three on every render (the activation line,
+    /// the metrics line). Deleting those rows while it is on screen is deleting the
+    /// data out from under a bound, live view tree, and it crashed the app — not once,
+    /// but in every shape the deletion was tried: object-by-object (`deleteObject:`
+    /// snapshotting a torn-down row), as a batch delete merged back in (`mergeChanges`
+    /// calling that same `deleteObject:` internally), and after the fact, in the render
+    /// that followed a clear which had itself completed. Each of those was a real bug
+    /// and each is fixed; none of them was the whole bug, because the last one is not a
+    /// deletion bug at all — it is a lifetime bug, and the only reliable cure for a view
+    /// reading data that no longer exists is for the view to be gone first.
+    ///
+    /// Dismissing is also the honest product beat: you asked for everything to go, so
+    /// the screen you asked from has nothing left to show. The receipt is not lost —
+    /// `DataReset` writes it to `StoreResetLog`, which is durable, so the card is at the
+    /// top of Settings the next time it opens, and after a relaunch.
     private func performClear(_ scope: DataReset.Scope) {
         let record = DataReset.clear(
             scope, in: context, metrics: brain.metrics,

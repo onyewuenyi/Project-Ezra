@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// One transient notice. Identity-based equality so replacing a notice re-arms
 /// the dismiss timer and the transition.
@@ -73,7 +74,7 @@ private struct UndoNoticeModifier: ViewModifier {
                         .transition(reduceMotion ? .opacity : Motion.cardEntry)
                         .task(id: notice.id) {
                             AccessibilityNotification.Announcement(notice.message).post()
-                            try? await Task.sleep(for: .seconds(4))
+                            try? await Task.sleep(for: .seconds(Self.dwell))
                             if self.notice?.id == notice.id { self.notice = nil }
                         }
                 }
@@ -81,13 +82,35 @@ private struct UndoNoticeModifier: ViewModifier {
             .animation(reduceMotion ? Motion.fade : Motion.snap, value: notice?.id)
     }
 
+    /// How long the pill waits before dismissing itself.
+    ///
+    /// **Four seconds is not four seconds with VoiceOver on (2026-09-20).** The pill
+    /// posts its whole sentence as an announcement — "Completed “Renew my passport” —
+    /// unblocked “Book flights for the trip”" — which takes roughly the entire four
+    /// seconds to speak at the default rate. Only then could someone start swiping
+    /// toward the Undo button, and by then the overlay is gone. This is the app's only
+    /// reversal affordance for a completion, a cancel, an AI structural act and the
+    /// grouping sweep, so the failure is not "a nicety is hard to reach" — it is that a
+    /// blind user can destroy work and cannot take it back.
+    ///
+    /// The sighted timing is untouched: four seconds is right for a glance, and a longer
+    /// pill would sit over the list for no reason. The reader gets the time the reading
+    /// costs them.
+    static var dwell: Double { UIAccessibility.isVoiceOverRunning ? 14 : 4 }
+
     private func pill(_ notice: UndoNotice) -> some View {
         HStack(spacing: Spacing.sm) {
+            // Two lines, not one (2026-09-18): the pill is the RECEIPT for a resolution
+            // — "Completed “Renew passport” — unblocked “Book flights for the trip”" —
+            // and a one-line, middle-truncated pill read "Completed “Ren…the trip”",
+            // losing the very names the notice exists to say. The announcement always
+            // carried the whole sentence; the eyes now get it too.
             Text(notice.message)
                 .font(.supporting)
                 .foregroundStyle(Palette.primaryText)
-                .lineLimit(1)
+                .lineLimit(2)
                 .truncationMode(.middle)
+                .fixedSize(horizontal: false, vertical: true)
             if let undo = notice.undoAction {
                 Button("Undo") {
                     undo()

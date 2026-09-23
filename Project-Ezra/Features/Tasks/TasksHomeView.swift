@@ -52,7 +52,13 @@ struct TasksHomeView: View {
     /// take the whole screen. Starts at the row's floor and follows Dynamic Type.
     @State private var headerRowHeight: CGFloat = LayoutMetrics.tasksHeaderRow
 
-    private var tasks: [TaskItem] { Array(tasksResults) }
+    /// LIVE rows only (2026-09-18). A destructive clear deletes every task and saves,
+    /// and for the render between the delete and the fetch refresh the results still
+    /// hand back objects Core Data has torn down — every attribute answers empty, so
+    /// the rows lose their identity and the list crashes on duplicate ids. A deleted or
+    /// context-less object is not a task any more; it simply leaves the list, which is
+    /// also exactly what the clear means.
+    private var tasks: [TaskItem] { tasksResults.filter(\.isLiveRow) }
     private var members: [FamilyMember] { Array(membersResults) }
     private var profiles: [UserProfile] { Array(profilesResults) }
 
@@ -165,6 +171,9 @@ struct TasksHomeView: View {
                 .transition(.opacity)
             }
             .animation(Motion.fade, value: tab)
+            // A column, not a sheet of glass: on an iPad the list ran edge to edge with
+            // the due label a screen-width from its title (2026-09-18).
+            .readableWidth()
             .background(Palette.background)
             .navigationTitle(title)
             .toolbar {
@@ -221,6 +230,7 @@ struct TasksHomeView: View {
                 applyFilterArgsIfRequested()
                 openDetailIfRequested()
                 openSettingsIfRequested()
+                openRosterIfRequested()
             }
         }
     }
@@ -230,12 +240,14 @@ struct TasksHomeView: View {
     /// is reachable without a synthetic tap (blocked by Accessibility here). Never fires
     /// in normal runs.
     private func openDetailIfRequested() {
+        #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         guard let flag = args.firstIndex(of: "-OpenTaskDetail") else { return }
         let index = args.indices.contains(flag + 1) ? Int(args[flag + 1]) ?? 0 : 0
         let peers = visibleSlice.peers
         guard peers.indices.contains(index) else { return }
         selectedTask = peers[index]
+        #endif
     }
 
     /// Deterministic verification seam. `-FilterStatus <raw>` / `-FilterCategory <name>`
@@ -245,6 +257,7 @@ struct TasksHomeView: View {
     /// so a typo in a verification command reads as "no filter", not a failed launch.
     /// Never fires in normal runs.
     private func applyFilterArgsIfRequested() {
+        #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         if let flag = args.firstIndex(of: "-FilterStatus"), args.indices.contains(flag + 1) {
             statusFilter = TaskStatus(rawValue: args[flag + 1])
@@ -260,6 +273,7 @@ struct TasksHomeView: View {
         {
             tab = candidate
         }
+        #endif
     }
 
     /// Deterministic verification seam. Launch with `-OpenSettings` to present the
@@ -267,8 +281,23 @@ struct TasksHomeView: View {
     /// the destructive clears, and a screen that can delete everything should be reviewable
     /// without a synthetic tap (blocked by Accessibility here). Never fires in normal runs.
     private func openSettingsIfRequested() {
+        #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("-OpenSettings") else { return }
         showSettings = true
+        #endif
+    }
+
+    /// Deterministic verification seam. `-OpenRoster` pushes Manage household — the
+    /// multi-user surface, two taps deep behind the "…" menu, and until 2026-09-18 the
+    /// one launch-critical screen no seam could reach. It carries the invite flow (the
+    /// CKShare link, the per-member state, the reshare), so "the sharing UI is polished"
+    /// was an untested claim on a build heading for a two-phone sitting. Never fires in
+    /// normal runs.
+    private func openRosterIfRequested() {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("-OpenRoster") else { return }
+        showRoster = true
+        #endif
     }
 
     // MARK: - Header row (ownership navigation · filter — two independent dimensions)
@@ -389,6 +418,14 @@ struct TasksHomeView: View {
         // both capsules stretched to fill the entire screen.
         .frame(minHeight: LayoutMetrics.tasksHeaderRow)
         .background { pillBackground(isSelected: isSelected) }
+        // **Which scope is showing was carried entirely by pixels (2026-09-20).**
+        // Selection here is a font weight, a text colour and a solid capsule — all of
+        // them invisible to VoiceOver, which read three identically-named buttons. The
+        // navigation title separates Mine from the other two and nothing separated
+        // Everyone from Created, so the answer to "whose tasks am I looking at?" was
+        // unavailable. The app already does this correctly on the composer's posture
+        // chip; this is the same trait.
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     @ViewBuilder

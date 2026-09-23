@@ -22,11 +22,17 @@ import SwiftUI
 /// The one place the browse filters are defined, so every surface agrees. Search is a
 /// fast, local, case-insensitive substring over the title.
 enum TaskSlice {
+    /// Title, notes, and the words the person said at capture (2026-09-18): a person
+    /// searching remembers a word they SAID ("the blue one", "for Sam") more often than
+    /// the verb-led title the resolver wrote, and the title alone answered "No matches"
+    /// to a task they could see in their own notes.
     static func matches(_ task: TaskItem, search: String, category: String?) -> Bool {
         if let category, task.category != category { return false }
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return true }
         return task.title.localizedCaseInsensitiveContains(query)
+            || (task.notes?.localizedCaseInsensitiveContains(query) ?? false)
+            || task.rawCapture.localizedCaseInsensitiveContains(query)
     }
 }
 
@@ -181,6 +187,30 @@ struct TaskSwipeActions: ViewModifier {
                     }
                 }
             }
+            // **The same two moves, reachable without a gesture (2026-09-20).** These
+            // rows are not in a `List` — they are a `LazyVStack` — so whether SwiftUI
+            // surfaces `.swipeActions` as VoiceOver custom actions here is undocumented
+            // and was unverified. The row's own action list offered only "Complete" and
+            // "Cancel Task", so the LEADING swipe — which is `performRecommendedAction`,
+            // the same move as the detail's pinned CTA, and reads Start / Reopen /
+            // That's mine / Unblock — had no spoken equivalent at all. Declaring them
+            // here rather than in `TaskRow` keeps one owner for the gesture contract:
+            // the modifier that defines a swipe defines how it is reached without one.
+            .accessibilityActions {
+                if includesLeading,
+                    let action = task.recommendedAction(among: allTasks, currentUserID: currentUserID)
+                {
+                    Button(action.title) {
+                        performRecommended(
+                            action, on: task, in: context, tasks: allTasks, notice: $notice)
+                    }
+                }
+                if !task.status.isResolved {
+                    Button("Cancel task") {
+                        cancelTask(task, in: context, tasks: allTasks, notice: $notice)
+                    }
+                }
+            }
     }
 }
 
@@ -293,21 +323,48 @@ struct AssignedSectionsView: View {
     @Binding var notice: UndoNotice?
     @Environment(\.openCapture) private var openCapture
 
+    /// The empty list's words. A SOLO household — nobody else on the roster, which is
+    /// every brand-new install — must not read "Nothing assigned to you" / "Work
+    /// assigned to you shows up here" (2026-09-18): nobody assigns anything to a person
+    /// who lives alone in the app, and the first screen after onboarding was framing
+    /// the product as someone else's inbox. Alone, the words are about capture; with a
+    /// household, the scope decides. Pinned by `MyTasksEmptyCopyTests`.
+    static func emptyCopy(
+        scope: MyTasksTab, solo: Bool, searching: Bool, filteredMessage: String?
+    ) -> (title: String, message: String) {
+        if searching {
+            return ("No matches", filteredMessage ?? "Nothing here matches. Try a different filter.")
+        }
+        if solo {
+            return (
+                "Nothing here yet",
+                "Say what's on your mind and it becomes tasks here — ordered by what deserves attention, never by folder."
+            )
+        }
+        if scope == .everyone {
+            return (
+                "Nothing here yet",
+                "Everything anyone in the household captures shows up here, grouped by state — ordered by what deserves attention, never by folder."
+            )
+        }
+        return (
+            "Nothing assigned to you",
+            "Work assigned to you shows up here, grouped by state — ordered by what deserves attention, never by folder."
+        )
+    }
+
     var body: some View {
         if sections.isEmpty {
             // An empty list gets the way OUT of empty. Only when the emptiness is real,
             // though: a search that matched nothing needs a different filter, not a new
             // task, and offering capture there would answer a question nobody asked.
+            let copy = Self.emptyCopy(
+                scope: scope, solo: othersRoster.isEmpty, searching: searchIsActive,
+                filteredMessage: filteredEmptyMessage)
             EmptyStateView(
                 symbol: "square.stack.3d.up",
-                title: searchIsActive
-                    ? "No matches"
-                    : (scope == .everyone ? "Nothing here yet" : "Nothing assigned to you"),
-                message: searchIsActive
-                    ? (filteredEmptyMessage ?? "Nothing here matches. Try a different filter.")
-                    : (scope == .everyone
-                        ? "Everything anyone in the household captures shows up here, grouped by state — ordered by what deserves attention, never by folder."
-                        : "Work assigned to you shows up here, grouped by state — ordered by what deserves attention, never by folder."),
+                title: copy.title,
+                message: copy.message,
                 actionTitle: searchIsActive ? "Clear filters" : "Capture something",
                 action: searchIsActive ? { onClearFilters() } : { openCapture() }
             )

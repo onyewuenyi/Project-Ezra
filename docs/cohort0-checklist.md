@@ -100,6 +100,20 @@ file. See *Keeping this file current* at the bottom.
 - **Rung 0 always answers or is honestly silent.** An Advisor generation failure renders
   *nothing* — never an error string, never a labelled empty box (`DeterministicReading`,
   `ValidatedReading`).
+- **Every promise on the privacy screen is kept by the code, checked against the code.**
+  Two were not, both found on 2026-09-20 by writing the privacy policy FROM the source
+  rather than from the copy. "Your corrections and your history never leave this device"
+  was false — the private store mirrors every entity to the person's own iCloud; the real
+  guarantee is that they never reach us and never reach anyone invited. And "only
+  structured task information goes out — titles, dates and flags, never your raw notes"
+  was false on the Advisor's cloud rung, which was handed the facts whole: `NOTES:`,
+  `THEY SAID:` (the verbatim capture) and `WHY IT EXISTS:`, unclipped. A finding here is
+  any sentence in `DataBoundary` that the code does not keep — check the claim, not the
+  comment above it. **Exactly two production workloads open a cloud session** (capture,
+  and the Advisor), one sentence each; `CloudCallerTests` walks the target and fails on a
+  third, because `CloudModel.provider` is a static slot and reaching it is one line from
+  anywhere. Two false claims found in one afternoon is a pattern, and a pattern earns a
+  tripwire rather than another careful reading.
 - **Model output is untrusted transport.** Anything new the model can emit — a move, a
   step, a citation, an edge — passes a deterministic validator that drops or degrades,
   never substitutes. A new `@Generable` field with no validator is a finding. (2026-09-17:
@@ -125,6 +139,18 @@ file. See *Keeping this file current* at the bottom.
   (currently 10) is bumped only when stored *meaning* changes.
 - **Every wipe is backed up and reported.** `PersistenceStack.destroyStore(reason:)` takes
   a safety copy first, and `StoreResetRecord` surfaces it in Settings.
+- **A bulk delete happens in the store, and the interface is rebuilt, not refreshed**
+  (fixed 2026-09-19 — Settings ▸ "Clear all tasks" and "Reset everything" crashed with
+  SIGSEGV on every tap, from the screen that holds live fetches for the entities it
+  deletes). `DataReset` deletes with `NSBatchDeleteRequest`, tells the live context
+  nothing, and parks `registeredObjects` for the process's life; `DataGeneration.rebuild()`
+  re-keys the root view so every `@FetchRequest` re-reads the emptied store. A finding
+  here is any new `mergeChanges(fromRemoteContextSave:)`, `refreshAllObjects()` or
+  `context.reset()` on this path (each one was measured crashing), a view deriving from
+  `FetchedResults` without an `isLiveRow` filter, or a clear that leaves the list
+  populated until relaunch. Re-measure with `-ClearAllTasks` / `-ResetEverything`
+  (+ `-DismissAfterClear`), always in a loop that launches with no arguments first — this
+  simulator's runtime breaks on its own and reads exactly like an app crash.
 - **Undo restores every field its action wrote**, not just the headline one
   (`ChangeLogUndo`).
 
@@ -174,11 +200,32 @@ file. See *Keeping this file current* at the bottom.
   steps, or a done member still in the deck is a finding. The deck's cards carry NO
   lifecycle swipes (horizontal is navigation there) — the glyph is the completion target
   and must route through the undo-aware complete/cancel seams like every other row.
-- **The home survives accessibility text sizes.** Render My Tasks with
-  `-UIPreferredContentSizeCategoryName UICTContentSizeCategoryAccessibilityL`: the header
-  wraps rather than pushing the filter off screen, no caption folds into a column of
-  letters (the parked row's age did, 2026-09-12), decks keep their caption and card. A
-  control that leaves the screen or a word that breaks per letter is a finding.
+- **Every surface survives accessibility text sizes.** Set the simulator with
+  `xcrun simctl ui <udid> content_size accessibility-extra-large` (reset to `medium`
+  after) and walk the home, the detail, the capture canvas and reveal, Activity, Ask,
+  Settings: the header wraps rather than pushing the filter off screen, no caption folds
+  into a column of letters (the parked row's age did, 2026-09-12), decks keep their
+  caption and card, row titles get a second line rather than "Pay th…" (2026-09-17), a
+  due token never splits ("1d / over", 2026-09-18), the reveal and the canvas stay on
+  screen with no text clipped (a fixed-width capsule row slid the whole reveal off the
+  left edge, and the field's fixed floor clipped the first typed line, 2026-09-18). A
+  control that leaves the screen, a word that breaks per letter, a heading that
+  truncates, or a column that shifts off an edge is a finding — five of six defects on
+  2026-09-18 lived only at this size.
+- **Wide surfaces keep a readable column.** On an iPad simulator (the app ships to iPad,
+  device family 1,2) the home and the detail must hold their content in the leading
+  700pt column (`LayoutMetrics.readableWidth`, 2026-09-18) — a due label a screen-width
+  from its title or a 1300pt CTA is a finding. Sheets are form sheets there and need
+  nothing. iPhone landscape is unverified on this host.
+- **An empty reveal has no primary button.** "Nothing actionable in that" shows the
+  hint and "Keep it as one task" only (2026-09-18) — a gradient "Create 0 tasks" is a
+  finding. A filler-only line ("hmm ok so") reaches that reveal instantly, never the
+  understanding orb.
+- **A new person's empty list is about capture, not assignment.** Clean install, onboarding
+  done, no tasks: the home must read "Nothing here yet" and point at saying what's on
+  your mind (`AssignedSectionsView.emptyCopy`, 2026-09-18) — it read "Nothing assigned
+  to you / Work assigned to you shows up here", framing the product as someone else's
+  inbox to a person alone in the app. "Assigned" appears only once a household exists.
 - **An empty list under a filter names the filter and offers the way out.** A filtered
   My Tasks that matches nothing is indistinguishable from a list with tasks missing — a
   trust failure, not a discoverability one. The empty state must say which filter is on
@@ -265,3 +312,107 @@ matters.
 
 **On product rename.** This file says "this repo" rather than a product name on purpose; a
 rename should not require a checklist edit.
+
+## 7b. First run — the first sixty seconds (added 2026-09-20)
+
+Every check here was a real defect on 2026-09-20, and every one of them was invisible to
+the whole suite and to a green build. Re-walk this section on a device, with
+`simctl ui <sim> content_size accessibility-extra-large` for half of it.
+
+- **No screen names the engine.** The onboarding settling screen rendered
+  `brain.status.description` to every new user — "Apple Intelligence · on-device", or on
+  an ineligible phone "Rules engine · device not eligible". A finding is any
+  customer-facing surface reading `brain.status`, `AppBrain.Status`, a provider name or a
+  model id. Seams: `-OnboardingIntro`, `-OnboardingResult`.
+- **Every capture surface says where the words are read.** The composer carries the
+  posture chip; Settings carries `DataBoundary`'s sentences; onboarding's paste screen
+  carries `DataBoundary.captureShort(cloudReachable:)`. A new capture entry point with
+  none of the three is a finding — that screen is usually the one receiving the most raw
+  text.
+- **Both buttons are reachable at accessibility-extra-large.** The paste screen overflowed
+  top and bottom at once: the hero ran under the status bar, and "Start empty" — the only
+  way past for someone with nothing to paste — was off the display. A fixed `VStack` with
+  a `Spacer` at each end around a fixed-height editor is the shape to look for.
+- **No picker passes `photoLibrary:`.** It makes the picker in-process, which needs
+  `NSPhotoLibraryUsageDescription`; the app declares none, so iOS terminates it on open.
+  All four sites carried it. `SubmissionGateTests` greps it, comments stripped.
+- **A stop stops the microphone, including during warm-up.** `start()` suspends on the
+  permission prompt and again on the first-run model download; neither honours
+  cancellation. Tap "Type instead" while "Getting the mic ready…" is showing and confirm
+  no recording indicator appears afterwards.
+- **Voice works for a region Apple does not ship.** Set the device to a locale like
+  `en-NG` and confirm dictation still runs (a sibling English model), rather than
+  "Voice capture isn't available for your language yet".
+- **Every product invariant holds for VoiceOver too.** Checked 2026-09-20 and one did
+  not: "not yours to advance" removed the swipe and inerted the menu on someone else's
+  task while the spoken action list still offered Complete. A finding is any lifecycle
+  channel — swipe, long-press menu, glyph, accessibility action — that disagrees with the
+  other three about whose task it is. Also check: nothing faded with `.opacity(0)` is
+  still in the accessibility tree; every timed affordance outlives its own announcement;
+  the capture sheet says the microphone is live; a horizontal pager has named actions.
+- **No framework error text reaches a person.** The canvas printed AVFoundation's own
+  sentence verbatim. A failure that could plausibly work next time offers Try again.
+- **The longest wait has a way out.** Onboarding's settling screen had no back edge and
+  the budget behind it is the full 30 seconds for an escalated first paste; a captive
+  Wi-Fi turned screen two into half a minute of no-exit spinner holding the person's
+  whole mental list. A way back appears after nine seconds, keeps every word, and names
+  which of the two things happened. Any new surface that can wait on a model without a
+  back edge is a finding.
+
+## 8. Launch gates — the things that block submission, not the experience
+
+- **The privacy manifest ships.** `Project-Ezra/PrivacyInfo.xcprivacy` must appear inside
+  the BUILT `.app` in Debug and Release (`ls "$APP" | grep -i privacy`). Absent is an App
+  Store rejection, and it is absent silently — nothing in a green build says so. Its
+  contents must still match `Models/DataBoundary.swift`; if a workload starts sending
+  something new, both change together (2026-09-18).
+- **The Release binary carries no verification seam.** The gate is
+  `ReleaseSeamTests`, which walks every file in the app target that reads
+  `ProcessInfo.processInfo.arguments` and requires each read to sit inside `#if DEBUG`.
+  **Do not use `strings` for this.** It was the gate until 2026-09-20 and it lies:
+  Swift stores any string of 15 UTF-8 bytes or fewer inside the `String` value itself,
+  so it never reaches the binary as a searchable literal. `-SeedSampleData` is exactly
+  15 characters, `-OpenSettings` 13, `-OpenRoster` 11 — every one of them invisible to
+  the check that names them. The 2026-09-11 leak was caught only because
+  `-ResetAndSeedEvalCorpus` happens to be 23 characters long. When the walk replaced the
+  hand-written two-file list on 2026-09-20 it immediately found six more unfenced seams
+  in three files, including `-CaptureDiagnostics`, which runs a fourteen-item corpus
+  through `brain.triage` (a path that can TRANSMIT) and tees stdout into the app's
+  Documents. `strings` remains useful as a second opinion for a name over 15 characters,
+  and for nothing else.
+- **A sharing failure reads as a sentence, not a code.** With no iCloud account on the
+  device, tapping Invite must say "Sign in to iCloud on this device to share your
+  household", never "CKErrorDomain error 9" (`HouseholdSharingError.naming`, 2026-09-18).
+  The arriving phone's accept path follows the same rule.
+- **The invite is reachable without a hunt.** Manage household (`-OpenRoster`) shows
+  **Invite** inline on every adult who can be invited and has not been; children and pets
+  show none. The fixture household must have exactly one owner, or the flow cannot be
+  rehearsed at all.
+- **Export compliance is answered in the binary.** `ITSAppUsesNonExemptEncryption` is
+  `false` in `Project-Ezra/Info.plist` and must stay true to the code: the app ships no
+  cryptography of its own, only HTTPS. Without the key, App Store Connect stops every
+  upload on the question and TestFlight will not distribute (2026-09-20). If the app ever
+  encrypts anything itself, the answer changes and so does this line.
+- **The privacy policy is reachable from inside the app.** Guideline 5.1.1(i), because the
+  app collects data. `Models/SupportLinks.swift` holds the URL; while it is `nil` the app
+  renders no link at all — deliberate, a dead link is worse — and the DEBUG diagnostics
+  card reads `privacy policy blocks submission`. The gate is met when that line reads
+  `links: ready` and the link opens from "What leaves this device" (2026-09-20).
+- **The CloudKit schema is deployed to PRODUCTION.** The gate with no symptom: a
+  development-signed build uses the container's Development environment, TestFlight and
+  the App Store use Production, and the schema has only ever existed in the first. Sync
+  degrades silently by design, so an undeployed schema looks exactly like a quiet app.
+  Re-check after every model version. Owner step in `TODO.md` (2026-09-20).
+- **Run `scripts/submit.sh`.** It is this section, executed: it stops at the first
+  human-only blocker, audits the archived bundle for the manifest, the encryption key and
+  the seams, exports with `method: app-store-connect` and validates. A gate you have to
+  remember six flags to run is a gate nobody runs.
+- **Screenshots exist at both required sizes.** 6.9" iPhone and — because the app ships to
+  iPad — 13" iPad. `scripts/screenshots.sh` generates them from the seams; look at every
+  one before uploading. The reveal shot is the one to check hardest: the first version of
+  it advertised a misread (a three-outcome sentence read as one), which is how that
+  defect was found at all.
+- **The archive can actually be exported.** `xcodebuild archive` succeeding proves
+  nothing about submission: with only an Apple Development identity it produces a build
+  carrying `get-task-allow` and `aps-environment: development`. The gate is an
+  `-exportArchive` with `method: app-store-connect` that succeeds (2026-09-20).

@@ -105,20 +105,42 @@ extension SuppressionStore {
                 in: context))
     }
 
-    /// Delete every sibling suppression among `ids` — the undo of one rejected group
-    /// proposal, whole.
-    static func undoRejectedSiblings(among ids: [UUID], in context: NSManagedObjectContext) {
+    /// Record that an EXISTING task is not a step of an existing outcome — the pair form,
+    /// directional (child:parent), written when a person rejects an attach proposal.
+    static func recordRejectedParentLink(
+        child: UUID, parent: UUID, in context: NSManagedObjectContext, now: Date = Date()
+    ) {
+        context.insert(
+            SuppressionRecord(
+                RelationshipSuppression(
+                    kind: .parentLink,
+                    pairKey: RelationshipSuppression.directionalKey(child: child, parent: parent),
+                    targetID: nil, normalizedTitle: nil, createdAt: now),
+                in: context))
+    }
+
+    /// The undo of one rejected proposal, whole: every sibling suppression among `ids`
+    /// for a refused group, or every `ids`→`umbrellaID` parent suppression for a refused
+    /// attach. All of it, or the sweep would stay vetoed on the pairs the undo missed.
+    static func undoRejectedProposal(
+        memberIDs ids: [UUID], umbrellaID: UUID?, in context: NSManagedObjectContext
+    ) {
         var keys = Set<String>()
-        for i in ids.indices {
-            for j in ids.indices where j > i {
-                keys.insert(RelationshipSuppression.symmetricKey(ids[i], ids[j]))
+        let kind: RelationshipSuppression.SuppressionKind
+        if let umbrellaID {
+            kind = .parentLink
+            for id in ids { keys.insert(RelationshipSuppression.directionalKey(child: id, parent: umbrellaID)) }
+        } else {
+            kind = .siblingGroup
+            for i in ids.indices {
+                for j in ids.indices where j > i {
+                    keys.insert(RelationshipSuppression.symmetricKey(ids[i], ids[j]))
+                }
             }
         }
         let request = NSFetchRequest<SuppressionRecord>(entityName: "SuppressionRecord")
         for row in (try? context.fetch(request)) ?? []
-        where row.kindRaw == RelationshipSuppression.SuppressionKind.siblingGroup.rawValue
-            && row.pairKey.map(keys.contains) == true
-        {
+        where row.kindRaw == kind.rawValue && row.pairKey.map(keys.contains) == true {
             context.delete(row)
         }
     }

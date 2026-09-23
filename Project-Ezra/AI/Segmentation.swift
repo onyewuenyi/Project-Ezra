@@ -45,7 +45,11 @@ enum Segmentation {
             for sentence in sentences(in: trimmed) {
                 for clause in splitClauses(sentence) {
                     for run in splitAfterTimeExpressions(clause) {
-                        items.append(contentsOf: splitCommaList(run))
+                        // The filler check runs on every FRAGMENT the cuts produce, not
+                        // only on the line (2026-09-18): the time-expression cut left
+                        // "ok so this week" standing in front of "I need to renew…",
+                        // and it became a card titled "Ok so" with a due chip.
+                        items.append(contentsOf: splitCommaList(run).filter { !isBareFiller($0) })
                     }
                 }
             }
@@ -370,11 +374,29 @@ enum Segmentation {
     /// "Hello" each became a card on the real-utterance corpus (2026-09-17), where the
     /// label says nothing was said. The one-word rule in `cleanTitle` ("a one-word line
     /// keeps its word") is for a real word — "Laundry" is a task; "Have" is a breath.
+    /// A line made ONLY of filler is nothing, however many words (2026-09-18): "hmm ok
+    /// so" became a card titled "Hmm ok so" with a Create button under it, because the
+    /// rule read one word only. Every word has to be filler for the line to be
+    /// nothing; one content word anywhere and the line is a capture.
+    ///
+    /// A date phrase does not make filler a task either (2026-09-18): the dump "ok so
+    /// this week I need to renew…" was cut at its time signal, and "ok so this week"
+    /// became a card titled "Ok so" with a due chip — a WHEN with nothing to do on it.
+    /// The date phrase is set aside before the words are judged.
     static func isBareFiller(_ line: String) -> Bool {
-        let words = line.lowercased().split(separator: " ")
-        guard words.count == 1, let word = words.first else { return false }
-        let bare = word.trimmingCharacters(in: .punctuationCharacters)
-        return fillerOpeners.contains(bare) || bareAuxiliaries.contains(bare)
+        var lowered = line.lowercased()
+        var hadDate = false
+        if let when = HeuristicEngine.dateExpression(from: lowered), let range = lowered.range(of: when) {
+            lowered.replaceSubrange(range, with: " ")
+            hadDate = true
+        }
+        let words = lowered.split(separator: " ")
+            .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+            .filter { !$0.isEmpty }
+        // A line that was ONLY its date ("tomorrow") is nothing; an empty line is not
+        // filler, it is empty, and the caller already handles that.
+        guard !words.isEmpty else { return hadDate }
+        return words.allSatisfy { fillerOpeners.contains($0) || bareAuxiliaries.contains($0) }
     }
 
     private static let bareAuxiliaries: Set<String> = [
@@ -402,7 +424,10 @@ enum Segmentation {
         "remind me to ", "reminder to ", "reminder ", "don't let me forget to ",
         "i keep forgetting to ",
         "i really need to ", "i also need to ", "i still need to ", "don't forget to ",
-        "i've got to ", "i have to ", "i need to ", "i should probably ",
+        // "i should really cancel the gym membership" (2026-09-18): the hedged forms
+        // beside the one already here. Longest first.
+        "i've got to ", "i have to ", "i need to ", "i should probably ", "i should really ",
+        "i really should ", "i should ",
         "i want to ", "we need to ", "we have to ", "make sure to ",
         "make sure i ", "remember to ", "need to ", "i gotta ", "gotta ", "have to ",
         "try to ", "so basically ", "so i ", "oh and ", "also ", "then ", "to ",
@@ -458,11 +483,15 @@ enum Segmentation {
             guard startsAnItem(rightItem), rightItem.split(separator: " ").count >= 2
             else { continue }
             let leftItem = trimItem(String(clause[start..<range.upperBound]))
-            if !leftItem.isEmpty { pieces.append(leftItem) }
+            if !leftItem.isEmpty { pieces.append(strippedLeadIn(leftItem)) }
             start = right.startIndex
         }
+        // Lead-ins come off every piece, not only the one the check read (2026-09-18):
+        // "pick up groceries at noon then text Sarah" was cut after "noon", the check
+        // saw "text Sarah", and the piece kept its "then" — the card read "Then text
+        // Sarah". `splitClauses` already strips its clauses; the time cut now does too.
         let tail = trimItem(String(clause[start...]))
-        if !tail.isEmpty { pieces.append(tail) }
+        if !tail.isEmpty { pieces.append(strippedLeadIn(tail)) }
         return pieces.isEmpty ? [clause] : pieces
     }
 
@@ -491,11 +520,47 @@ enum Segmentation {
 
         let trimmedParts = parts.map { strippedLeadIn(trimItem($0)) }.filter { $0.count > 1 }
         guard trimmedParts.count > 1 else { return [clause] }
-        let allItemLike = trimmedParts.allSatisfy { part in
-            startsAnItem(part) || part.split(separator: " ").count <= 4
-        }
+        let allItemLike = trimmedParts.allSatisfy(isItemLike)
         return allItemLike ? trimmedParts : [clause]
     }
+
+    /// Whether one comma part can stand as its own outcome.
+    ///
+    /// **The veto is all-or-nothing, and that is deliberate** — one part that reads as
+    /// continuation means the commas were punctuation inside a sentence, not a list, and
+    /// splitting them would invent outcomes. False accept is the critical error here.
+    ///
+    /// The third arm (2026-09-20) exists because the first two made the veto too easy to
+    /// trip: a part carrying its own DEADLINE — "daycare forms are due friday" — is an
+    /// outcome by any reading, but it opens on a noun, so it vetoed a list whose other
+    /// two parts were unambiguous and the whole utterance came back as one task. The
+    /// pronoun guard is what keeps it honest: "call mom, she's back from the trip on
+    /// friday" also carries a day, and it is one task with context — a part that opens on
+    /// a pronoun is talking ABOUT something, not naming a new thing to do.
+    private static func isItemLike(_ part: String) -> Bool {
+        if startsAnItem(part) { return true }
+        if part.split(separator: " ").count <= 4 { return true }
+        return carriesOwnDeadline(part) && !opensOnAPronoun(part)
+    }
+
+    private static func carriesOwnDeadline(_ part: String) -> Bool {
+        let lowered = " " + part.lowercased() + " "
+        return ["is due ", "are due ", "is overdue ", "are overdue ", " due "].contains {
+            lowered.contains($0)
+        }
+    }
+
+    private static func opensOnAPronoun(_ part: String) -> Bool {
+        guard let first = part.lowercased().split(separator: " ").first else { return false }
+        return continuationOpeners.contains(String(first))
+    }
+
+    /// A part that opens on one of these is describing what was just said, not starting
+    /// something new.
+    private static let continuationOpeners: Set<String> = [
+        "i", "we", "you", "he", "she", "it", "they", "that", "this", "these", "those",
+        "which", "who", "there", "hers", "his", "theirs", "mine", "ours",
+    ]
 
     // MARK: - Folding
 
@@ -543,5 +608,14 @@ enum Segmentation {
         // "be ready to go to brunch", "pickup shirt" — spoken imperatives the corpus
         // produced that the list had no word for.
         "be", "pickup", "stop", "reach",
+        // "buy stamps and post the parcel" stayed ONE card (2026-09-18): the second
+        // clause's verb was not in the lexicon, so the bare " and " never cut. Errands
+        // and housework verbs the list had never met.
+        "post", "collect", "hang", "throw", "empty", "iron", "sweep", "mop", "defrost",
+        // "chase him about it next week" could never open its own card (2026-09-18).
+        // Household follow-ups, money moves and the trades.
+        "chase", "follow", "contact", "phone", "ring", "arrange", "hire", "fetch",
+        "measure", "paint", "clear", "declutter", "transfer", "deposit", "withdraw",
+        "top", "insure", "enrol", "enroll",
     ]
 }

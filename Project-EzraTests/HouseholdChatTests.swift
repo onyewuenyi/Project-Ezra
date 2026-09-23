@@ -61,6 +61,33 @@ struct HouseholdChatFloorTests {
         #expect(answer.citedTaskIDs.isEmpty)
     }
 
+    @Test("A name the roster does not hold makes the question not closed — the floor declines")
+    func unknownNameDeclines() {
+        // Sam is on this fixture's roster; Priya is not. The same closed question is
+        // answered for one and handed to the model for the other, which is shown the
+        // roster and can say who it knows.
+        #expect(HouseholdChatFloor.answer(question: "What did Sam finish this week?", facts: facts) != nil)
+        #expect(HouseholdChatFloor.answer(question: "What did Priya finish this week?", facts: facts) == nil)
+        #expect(HouseholdChatFloor.answer(question: "What's overdue for Priya?", facts: facts) == nil)
+        #expect(HouseholdChatFloor.answer(question: "What's on Priya's list?", facts: facts) == nil)
+        // A category, a weekday, the first word and "I" are not unknown people.
+        #expect(HouseholdChatFloor.answer(question: "What's overdue for Travel?", facts: facts) != nil)
+        #expect(!HouseholdChatFloor.namesSomeoneUnknown("What's due for Friday?", facts: facts))
+        #expect(!HouseholdChatFloor.namesSomeoneUnknown("Priya what's overdue?", facts: facts))
+        #expect(!HouseholdChatFloor.namesSomeoneUnknown("What should I do first?", facts: facts))
+        #expect(HouseholdChatFloor.answer(question: "Overdue for me?", facts: facts) != nil)
+    }
+
+    @Test("The blocked shape puts the person before the verb — the trailing scope attached to the wrong noun")
+    func blockedScopeReadsRight() {
+        let answer = HouseholdChatFloor.answer(
+            question: "What's waiting on something for Sam?", facts: facts)!
+        // "…waiting on something for Sam" read as a task waiting on a thing that is for
+        // Sam; the scope now precedes the verb whatever the count.
+        #expect(!answer.text.contains("something for Sam"))
+        #expect(answer.text.contains(" for Sam is ") || answer.text.contains(" for Sam are "))
+    }
+
     @Test("Lists cap at the list ceiling and say so")
     func listCap() {
         var lines = facts.open

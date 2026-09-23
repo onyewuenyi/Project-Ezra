@@ -461,6 +461,11 @@ enum HouseholdChatFloor {
     static func answer(question: String, facts: HouseholdChatFacts) -> HouseholdChatAnswer? {
         guard let shape = shape(of: question, facts: facts) else { return nil }
         let person = facts.member(named: question)
+        // A name the roster does not hold makes the question NOT closed (2026-09-18):
+        // "what did Sam finish this week?" on a household with no Sam answered the
+        // unscoped done shape — everyone's finished work, presented as the answer. The
+        // floor declines and the model, which is shown the roster, says who it knows.
+        if person == nil, namesSomeoneUnknown(question, facts: facts) { return nil }
         // A named person scopes every list: "what's overdue for Maya?".
         func scoped(_ lines: [HouseholdChatFacts.Line]) -> [HouseholdChatFacts.Line] {
             guard let person else { return lines }
@@ -543,7 +548,7 @@ enum HouseholdChatFloor {
                 text: "\(lead)\(whose.map { " for \($0)" } ?? "") — the first last touched \(since).",
                 citedTaskIDs: lines.map(\.id))
         case .blocked:
-            return list(scoped(facts.blocked), "waiting on something", whose: whose)
+            return list(scoped(facts.blocked), "waiting on something", whose: whose, scopeBeforeVerb: true)
         case .urgent:
             return list(scoped(facts.urgent), "marked urgent", whose: whose)
         case .decisions:
@@ -570,23 +575,62 @@ enum HouseholdChatFloor {
         }
     }
 
+    /// `scopeBeforeVerb` puts the person before the verb — "1 task for Maya is waiting
+    /// on something" — for the one predicate where the trailing scope attached to the
+    /// wrong noun: "1 task is waiting on something for Maya" read as a task waiting on
+    /// a thing that is for Maya (2026-09-18). Every other shape keeps the trailing
+    /// scope ("overdue for Maya", "in Travel for Maya"), which reads as intended.
     private static func list(
-        _ lines: [HouseholdChatFacts.Line], _ predicate: String, whose: String?
+        _ lines: [HouseholdChatFacts.Line], _ predicate: String, whose: String?,
+        scopeBeforeVerb: Bool = false
     ) -> HouseholdChatAnswer {
         let scope = whose.map { " for \($0)" } ?? ""
+        let leading = scopeBeforeVerb ? scope : ""
+        let trailing = scopeBeforeVerb ? "" : scope
         guard !lines.isEmpty else {
-            return HouseholdChatAnswer(text: "Nothing is \(predicate)\(scope).", citedTaskIDs: [])
+            return HouseholdChatAnswer(
+                text: "Nothing\(leading) is \(predicate)\(trailing).", citedTaskIDs: [])
         }
         let capped = Array(lines.prefix(HouseholdChatFacts.listCap))
         let more = lines.count > capped.count ? " Showing the nearest \(capped.count)." : ""
         let verb = lines.count == 1 ? "is" : "are"
         return HouseholdChatAnswer(
-            text: "\(count(lines.count, "task")) \(verb) \(predicate)\(scope).\(more)",
+            text: "\(count(lines.count, "task"))\(leading) \(verb) \(predicate)\(trailing).\(more)",
             citedTaskIDs: capped.map(\.id))
     }
 
     private static func count(_ n: Int, _ noun: String) -> String {
         "\(n) \(noun)\(n == 1 ? "" : "s")"
+    }
+
+    /// A capitalised word in the person's slot — after "for"/"did"/"has"/"is"/"can"/
+    /// "should", or wearing a possessive — that names nobody on the roster and is not a
+    /// category, a weekday or a month. Mid-sentence only: the first word is capitalised
+    /// by the keyboard, and "I" is the person asking.
+    static func namesSomeoneUnknown(_ question: String, facts: HouseholdChatFacts) -> Bool {
+        let patterns = [
+            #"\b(?:for|did|does|has|have|is|can|could|should|with|about)\s+([A-Z][a-z]+)\b"#,
+            #"\b([A-Z][a-z]+)'s\b"#,
+        ]
+        let known = Set(
+            facts.members.map { $0.name.lowercased() } + TaskCategory.all.map { $0.lowercased() }
+                + [
+                    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                    "january", "february", "march", "april", "may", "june", "july", "august",
+                    "september", "october", "november", "december", "ezra", "i",
+                ])
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(question.startIndex..., in: question)
+            for match in regex.matches(in: question, range: range) {
+                guard let wordRange = Range(match.range(at: 1), in: question),
+                    wordRange.lowerBound != question.startIndex
+                else { continue }
+                let word = String(question[wordRange]).lowercased()
+                if !known.contains(word) { return true }
+            }
+        }
+        return false
     }
 }
 

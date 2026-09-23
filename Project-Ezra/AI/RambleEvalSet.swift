@@ -210,6 +210,7 @@ enum RambleEval {
         EvalCase(
             utterance: "sort out the passport it expires in march",
             expected: [ExpectedTask(titleContains: ["passport"], expectDue: true)]),
+
     ]
 
     // MARK: - The real-utterance corpus (quarantined)
@@ -750,6 +751,49 @@ enum RambleEval {
             expected: [
                 ExpectedTask(titleContains: ["dentist"], category: "Health"),
                 ExpectedTask(titleContains: ["water bill"], category: "Finance", expectDue: true),
+            ]),
+        // **A comma list whose last item does not open on a verb (added 2026-09-20).**
+        // The deterministic read currently returns ONE draft for this — titled
+        // "Renew my passport, book flights", with a wait chip holding the other two
+        // outcomes verbatim — because `splitCommaList` requires EVERY part to be
+        // item-like (a verb, or four words or fewer) and vetoes the whole split when one
+        // is not. "daycare forms are due friday" opens on a noun, so it vetoes, and the
+        // two parts that were unambiguous go down with it.
+        //
+        // The same veto explains "daycare forms are due friday and the oil change is
+        // overdue", which also comes back as one draft: neither half opens on a verb.
+        // Swap the last clause for one that does — "…, call mom back" — and all three
+        // outcomes appear, dependency edge included. So the boundary is the veto, not
+        // the sentence's complexity.
+        //
+        // It is in the corpus because it was found by eye, on a screenshot, and a defect
+        // found by eye is a defect nobody is measuring. The router does notice — this
+        // escalates as `underSegmented`, so a build with the cloud reachable reads it
+        // correctly and the free tail is what under-reads. That is the documented
+        // design, which is exactly why the gap belongs in the number rather than in an
+        // argument about whether it matters.
+        //
+        // **FIXED the same day, and only because the eval said it was safe.** The veto
+        // now has a third arm (`Segmentation.isItemLike`): a part carrying its own
+        // DEADLINE counts as an outcome unless it opens on a pronoun, which is what
+        // separates "and daycare forms are due friday" from "call mom, she's back from
+        // the trip on friday" — the second carries a day too, and is one task with
+        // context. Measured against the 2026-09-20 baseline (segmentation 51/52 golden ·
+        // 23/26 real · false-keep 0 · adversarial false-keep 2 · coverage 96%): this
+        // case now passes, and every other number is unchanged. **Any further loosening
+        // needs the same evidence** — false-keep is the critical error, and
+        // `email the landlord about the boiler and the leak` sits one heuristic away.
+        EvalCase(
+            utterance:
+                "renew my passport, book flights after it comes through, and daycare forms are due friday",
+            expected: [
+                // The renewal's lead time is inferred, and the flights wait on it — both
+                // were mislabeled when this case was added on 2026-09-20 and the eval
+                // said so on the next run. The labels are the oracle; getting them wrong
+                // is how a corpus quietly starts certifying the wrong answer.
+                ExpectedTask(titleContains: ["passport"], expectDue: true),
+                ExpectedTask(titleContains: ["flights"], blocked: true),
+                ExpectedTask(titleContains: ["daycare"], expectDue: true),
             ]),
     ]
 

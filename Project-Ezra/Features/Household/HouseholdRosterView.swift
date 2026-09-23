@@ -133,7 +133,12 @@ private struct HouseholdRosterContent: View {
             }
             .accessibilityLabel("Family photo")
 
-            TextField("Family name (optional)", text: $household.name.orEmpty)
+            // Wraps rather than truncates: at the accessibility sizes the family name
+            // read "The Onyewuen…" (2026-09-18) — a household's own name is the one
+            // string on this screen that has to be readable whole, the same rule the
+            // Settings profile name follows.
+            TextField("Family name (optional)", text: $household.name.orEmpty, axis: .vertical)
+                .lineLimit(1...2)
                 .font(.screenTitle)
                 .foregroundStyle(Palette.primaryText)
                 .multilineTextAlignment(.center)
@@ -179,7 +184,12 @@ private struct HouseholdRosterContent: View {
             .accessibilityLabel("Your photo")
 
             VStack(alignment: .leading, spacing: 2) {
-                TextField("Your name", text: $profile.displayName.orEmpty)
+                // Wraps at the accessibility sizes — a person's own name in the roster
+                // read "Charles Onyewu…" (2026-09-18); the roster exists to say who is
+                // in the household, so a name it cannot show whole is the one thing it
+                // may not truncate.
+                TextField("Your name", text: $profile.displayName.orEmpty, axis: .vertical)
+                    .lineLimit(1...2)
                     .font(.supporting.weight(.medium))
                     .foregroundStyle(Palette.primaryText)
                     .textInputAutocapitalization(.words)
@@ -206,8 +216,10 @@ private struct HouseholdRosterContent: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 TextField(
-                    "Name", text: Binding(get: { member.name }, set: { member.name = $0 })
+                    "Name", text: Binding(get: { member.name }, set: { member.name = $0 }),
+                    axis: .vertical
                 )
+                .lineLimit(1...2)
                 .font(.supporting.weight(.medium))
                 .foregroundStyle(Palette.primaryText)
                 .textInputAutocapitalization(.words)
@@ -234,10 +246,27 @@ private struct HouseholdRosterContent: View {
             }
             Spacer(minLength: 0)
 
+            // The household's whole point is the second phone, and until 2026-09-18 the
+            // only way to reach it was opening each member's "…" — beside "Remove from
+            // household" — so nothing on this screen said sharing was possible, and an
+            // invitable adult looked exactly like a child who cannot be. Inline on the
+            // rows that CAN be invited and have not been, secondary (`accentFlat`, never
+            // the gradient) and never a second control: once a link exists the caption
+            // carries the state ("Invited · waiting" / "Joined") and the resend stays in
+            // the menu where a repeat action belongs.
+            if canInvite(member), household.invitationState(for: member.uuid) == nil {
+                Button("Invite") { inviting = member }
+                    .font(.controlLabel)
+                    .foregroundStyle(Palette.accentFlat)
+                    .buttonStyle(.pressableLink)
+                    .accessibilityLabel("Invite \(member.name) to share this household")
+            }
+
             Menu {
                 if canInvite(member) {
                     Button(
-                        household.invitationState(for: member.uuid) == .pending ? "Send the link again" : "Invite to share this household",
+                        household.invitationState(for: member.uuid) == .pending
+                            ? "Send the link again" : "Invite to share this household",
                         systemImage: "person.badge.plus"
                     ) { inviting = member }
                 }
@@ -310,7 +339,7 @@ private struct PhotoPickerButton<Label: View>: View {
     @State private var item: PhotosPickerItem?
 
     var body: some View {
-        PhotosPicker(selection: $item, matching: .images, photoLibrary: .shared()) {
+        PhotosPicker(selection: $item, matching: .images) {
             label
         }
         .buttonStyle(.pressableIcon)

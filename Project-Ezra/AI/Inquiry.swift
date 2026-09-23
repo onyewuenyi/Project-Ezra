@@ -375,6 +375,12 @@ final class InquiryService {
         spares[key] = session
     }
 
+    /// Adopt a warmed spare for a ONE-SHOT call that has no scope — the kickoff step,
+    /// asked once on the Start tap. Nil when nothing was warmed; the caller builds cold.
+    func takeSpare(instructions: String, config: CapabilityProfiles.Config) -> LanguageModelSession? {
+        spares.removeValue(forKey: Self.spareKey(instructions: instructions, config: config))
+    }
+
     /// The ZERO-TURN answer (G2): one typed, guided generation over the scope's session —
     /// the ambient Advisor reading. Streaming and salvage stay the reply path's; a judgment
     /// is one value or nothing, never a partial rendered as truth.
@@ -408,10 +414,18 @@ final class InquiryService {
             }
             do {
                 return try await Self.stream(prompt, on: session, into: box)
-            } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
+            } catch {
                 // The window filled (the phone's is 4096 tokens; eight long exchanges
                 // plus the facts can reach it). Halve the thread carried and ask once
                 // more; a retry on the same session could only overflow again.
+                //
+                // Matched by LABEL, not by case (2026-09-17): this caught only the
+                // deprecated `GenerationError.exceededContextWindowSize`, and the GA
+                // model throws `LanguageModelError.contextSizeExceeded` — so on iOS 27
+                // the rebuild never fired and an overflowing thread failed every turn
+                // until the person cleared it. `AppBrain.errorLabel` is the one map over
+                // both vocabularies; matching its name keeps this catch true on either.
+                guard await Self.isContextOverflow(error) else { throw error }
                 self.rebuilds.overflow += 1
                 session = self.rebuild(
                     for: turn.scope, replacing: session, keepingLast: InquiryPrompt.historyWindow / 2)
@@ -429,6 +443,11 @@ final class InquiryService {
             return .success(partial)
         }
         return outcome
+    }
+
+    /// Whether an error is the model's context window filling — on either OS vocabulary.
+    static func isContextOverflow(_ error: Error) -> Bool {
+        AppBrain.errorLabel(error) == "contextSizeExceeded"
     }
 
     /// One streamed reply, the partial kept for salvage at the deadline.

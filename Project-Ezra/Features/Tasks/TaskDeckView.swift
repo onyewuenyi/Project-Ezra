@@ -263,6 +263,24 @@ struct TaskDeckView: View {
         // glyph column stays aligned with every other row (see the header).
         .padding(.horizontal, -Spacing.md)
         .animation(Motion.settle, value: members.map(\.objectID))
+        // **Paging without the gesture (2026-09-20).** `TaskDetailPager` already gives
+        // its horizontal pager "Next task" / "Previous task" actions for exactly this
+        // reason; the deck did not, so reaching a card meant a three-finger scroll or
+        // traversing into cards a lazy stack has not built yet. Same interaction, same
+        // affordance — the inconsistency was the bug.
+        .accessibilityAction(named: "Next task") { step(by: 1) }
+        .accessibilityAction(named: "Previous task") { step(by: -1) }
+    }
+
+    /// Move the deck one card, for the accessibility actions above. Clamped rather than
+    /// wrapped: a pager that silently loops is disorienting when you cannot see it.
+    private func step(by offset: Int) {
+        let ids = members.map(\.objectID)
+        guard !ids.isEmpty else { return }
+        let current = shownID.flatMap { ids.firstIndex(of: $0) } ?? 0
+        let next = current + offset
+        guard ids.indices.contains(next) else { return }
+        withAnimation(Motion.settle) { shownID = ids[next] }
     }
 
     /// One card: the member as a real `TaskRow` in the card chrome, the glyph its

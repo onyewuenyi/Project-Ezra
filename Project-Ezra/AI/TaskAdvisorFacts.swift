@@ -246,6 +246,60 @@ struct TaskAdvisorFacts: Sendable, Equatable {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: - Fitting the phone's window
+
+    /// How much of the volatile tail to give up so the prompt fits the model's context
+    /// window — the phone's is 4096 tokens (the simulator's 8192 hides this). Ordered
+    /// cheapest-loss first: the retrieved neighbours go before the person's own words,
+    /// and the words are clipped before they are dropped. The first three levels leave
+    /// the FINGERPRINT untouched; the notes levels do not (`notes` is in it), which is
+    /// why the service fits only the PROMPT and keys the session, the validation and
+    /// the evidence on the original facts — the calm invariant never sees a trim.
+    enum TrimLevel: Int, CaseIterable, Sendable {
+        /// Everything, as `make` built it.
+        case full
+        /// No related open tasks.
+        case noRelated
+        /// The capture quote and the reasoning clipped to `quoteClip` characters.
+        case shortQuotes
+        /// The notes clipped too.
+        case shortNotes
+        /// Title, sensors and graph only — the facts the reading must never lose.
+        case bare
+    }
+
+    /// Where a long free-text field is cut at the two clipping levels.
+    static let quoteClip = 240
+
+    /// These facts at `level`. Pure; `.full` returns `self`.
+    func trimmed(to level: TrimLevel) -> TaskAdvisorFacts {
+        var out = self
+        if level.rawValue >= TrimLevel.noRelated.rawValue { out.relatedLines = [] }
+        if level.rawValue >= TrimLevel.shortQuotes.rawValue {
+            out.rawCapture = Self.clip(rawCapture, to: Self.quoteClip)
+            out.reasoning = Self.clip(reasoning, to: Self.quoteClip)
+        }
+        if level.rawValue >= TrimLevel.shortNotes.rawValue {
+            out.notes = notes.map { Self.clip($0, to: Self.quoteClip) }
+        }
+        if level == .bare {
+            out.rawCapture = ""
+            out.reasoning = ""
+            out.notes = nil
+            out.advisorPreferences = []
+        }
+        return out
+    }
+
+    /// The first `limit` characters, cut back to the last word boundary, with an
+    /// ellipsis so the model reads it as a fragment rather than a sentence that ends.
+    static func clip(_ text: String, to limit: Int) -> String {
+        guard text.count > limit else { return text }
+        let head = text.prefix(limit)
+        let cut = head.lastIndex(where: \.isWhitespace).map { head[..<$0] } ?? head
+        return cut.trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
     /// The evidence behind a reading, in the user's terms — what "Why this?" reveals.
     ///
     /// **Evidence, never reasoning.** Every line is a fact the user can already see

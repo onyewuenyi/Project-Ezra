@@ -92,7 +92,16 @@ enum CaptureRoute: String, Equatable, CaseIterable {
         // An empty read can't be revealed whatever the structure said — this arm
         // predates the verifier (the composer's old `local.isEmpty ? .cloud`), and it
         // outranks the explicit short-circuit for the same reason it always did.
-        guard !drafts.isEmpty else { return (.cloud, .emptyRead) }
+        //
+        // One refinement (2026-09-18): when the segmenter found NO items at all — the
+        // line was filler only ("hmm ok so"), or a lone character — there is nothing
+        // in it for any model to find, and the transmission bought a cloud call plus
+        // the 30 s empty-read deadline on the orb to learn nothing. Nothing in, nothing
+        // to escalate: it reveals locally as "Nothing actionable". A real line the read
+        // could not turn into a draft still goes to the authority.
+        guard !drafts.isEmpty else {
+            return Segmentation.items(from: text).isEmpty ? (.local, nil) : (.cloud, .emptyRead)
+        }
         // A SPOKEN capture that reads like a caught conversation escalates BEFORE the
         // explicit short-circuit (F-02): dictated sentence punctuation is not structure
         // the person drew, and only the authority may say "nothing here". Typed text

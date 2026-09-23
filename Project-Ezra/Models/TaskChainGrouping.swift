@@ -10,6 +10,7 @@
 //  instead of being flattened into a single line.
 //
 
+import CoreData
 import Foundation
 
 /// A dependency-linked group of active tasks, in execution order: root(s) first,
@@ -25,9 +26,16 @@ struct TaskChain: Identifiable {
     /// could be driven by different `effectiveAttention` values.
     let rankKeys: [UUID: RankKey]
 
-    /// Stable enough for a single render pass: the sorted member uuids joined.
+    /// Stable enough for a single render pass: the sorted member uuids joined — and
+    /// never EMPTY (2026-09-18). A chain whose members have all just been deleted
+    /// `compactMap`s to nothing and joined to "", which is the same duplicate-id crash
+    /// `TaskLaneEntry.id` carries the long note about; the object identities are the
+    /// fallback that cannot collide.
     var id: String {
-        members.compactMap(\.uuid).map(\.uuidString).sorted().joined(separator: "-")
+        let uuids = members.compactMap(\.uuid).map(\.uuidString).sorted()
+        guard uuids.isEmpty else { return uuids.joined(separator: "-") }
+        return members.map { $0.objectID.uriRepresentation().absoluteString }.sorted()
+            .joined(separator: "-")
     }
 
     /// The member that decides this chain's lane and sort position: whichever root
@@ -86,9 +94,19 @@ enum TaskLaneEntry: Identifiable {
     case single(TaskItem)
     case chain(TaskChain)
 
+    /// **The fallback must be UNIQUE, not merely present (2026-09-18).** It used to be
+    /// `task.title`, and a DELETED managed object answers "" for every attribute — so
+    /// the instant "Clear all tasks" deleted the store's rows, every entry still on
+    /// screen collapsed to the same empty id, SwiftUI logged
+    /// *"the ID  occurs multiple times within the collection"* at fatal level, and the
+    /// app died before the fetch could refresh. `objectID` is the identity Core Data
+    /// guarantees for the object itself: unique, never empty, and still answerable
+    /// after a delete. The uuid stays the primary id, because it is stable across a
+    /// temporary objectID becoming permanent at save.
     var id: String {
         switch self {
-        case .single(let task): return task.uuid?.uuidString ?? task.title
+        case .single(let task):
+            return task.uuid?.uuidString ?? task.objectID.uriRepresentation().absoluteString
         case .chain(let chain): return chain.id
         }
     }

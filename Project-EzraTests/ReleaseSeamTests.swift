@@ -24,15 +24,47 @@ import Testing
 @Suite("Release hygiene · verification seams are compiled out")
 struct ReleaseSeamTests {
 
-    private func shellSource() throws -> String {
-        let root = URL(fileURLWithPath: #filePath)
+    private static var appRoot: URL {
+        URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Project-Ezra")
-        return try String(
-            contentsOf: root.appendingPathComponent("Features/Root/RootTabView.swift"),
-            encoding: .utf8)
     }
+
+    /// **Every file in the app target that reads launch arguments, DISCOVERED (2026-09-20).**
+    ///
+    /// This was a hand-written list of two files, and on 2026-09-20 a `strings` pass over
+    /// an actual Release archive found `-CaptureDiagnostics` and `-OnboardingResult`
+    /// compiled into the shipping binary — in `LaunchSeams.swift` and `OnboardingView.swift`,
+    /// neither of which the list named. The capture one is the worse of the two: it runs a
+    /// fourteen-item corpus through `brain.triage`, which can TRANSMIT, and tees stdout
+    /// into the app's Documents. That is the second time this exact thing has shipped
+    /// (`-ResetAndSeedEvalCorpus`, 2026-09-11).
+    ///
+    /// A list of files is a list of the places someone remembered. Walking the tree for
+    /// `ProcessInfo.processInfo.arguments` covers the file written tomorrow, which is the
+    /// failure mode this suite exists for. The same argument the test below already makes
+    /// about seams within a file, applied one level up.
+    private static var seamFiles: [String] {
+        let root = appRoot
+        let all =
+            FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" } ?? []
+        return
+            all
+            .filter {
+                (try? String(contentsOf: $0, encoding: .utf8))?.contains("processInfo.arguments") == true
+            }
+            .map { $0.path.replacingOccurrences(of: root.path + "/", with: "") }
+            .sorted()
+    }
+
+    private func source(_ path: String) throws -> String {
+        try String(contentsOf: Self.appRoot.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    private func shellSource() throws -> String { try source("Features/Root/RootTabView.swift") }
 
     /// Every line of a source file, paired with whether it compiles ONLY in DEBUG.
     ///
@@ -72,9 +104,9 @@ struct ReleaseSeamTests {
     /// Walked over the whole file rather than matched per seam, so a NEW seam is covered
     /// the day it is written instead of the day someone remembers to list it here — which
     /// is the failure mode this test exists for.
-    @Test("No launch argument is read outside a DEBUG fence")
-    func everyLaunchArgumentIsFenced() throws {
-        let leaked = debugOnlyByLine(try shellSource())
+    @Test("No launch argument is read outside a DEBUG fence", arguments: ReleaseSeamTests.seamFiles)
+    func everyLaunchArgumentIsFenced(path: String) throws {
+        let leaked = debugOnlyByLine(try source(path))
             .filter { !$0.debugOnly }
             .filter { $0.text.contains("\"-") && !$0.text.hasPrefix("//") }
             .map { "line \($0.line): \($0.text)" }
@@ -82,10 +114,25 @@ struct ReleaseSeamTests {
         #expect(
             leaked.isEmpty,
             """
-            A launch argument is readable in a Release build of RootTabView. Put the seam \
+            A launch argument is readable in a Release build of \(path). Put the seam \
             behind `#if DEBUG` — a seam guarded only on its own name ships:
             \(leaked.joined(separator: "\n"))
             """)
+    }
+
+    /// The Settings seam, named for the same reason the destructive seed is named below:
+    /// its failure mode is a cohort member losing their work. It is also the one seam that
+    /// runs WITHOUT a tap — it fires from `.task` — so a Release leak here would wipe a
+    /// store on arrival rather than offer to.
+    @Test("The two clear-on-arrival seams are named only inside a DEBUG fence")
+    func theClearSeamsAreFenced() throws {
+        let lines = debugOnlyByLine(try source("Features/Settings/SettingsView.swift"))
+            .filter { $0.text.contains("\"-ClearAllTasks\"") || $0.text.contains("\"-ResetEverything\"") }
+        for line in lines {
+            #expect(
+                line.debugOnly,
+                "line \(line.line) names a store-clearing seam outside a DEBUG fence")
+        }
     }
 
     /// The destructive seam specifically, named — because this is the one whose failure

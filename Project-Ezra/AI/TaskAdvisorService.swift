@@ -42,6 +42,34 @@ struct TaskAdvisorService {
     func read(
         _ facts: TaskAdvisorFacts, rung: IntelligenceRung = .onDevice, presenceTime: Bool = true
     ) async -> ModelResult<ValidatedReading> {
+        // The on-device arm answers inside a 4096-token window on the phone, and the
+        // facts block carries free text the person wrote (notes, the capture, the
+        // reasoning) plus five retrieved neighbours. A block that overflows fails the
+        // call outright — `contextSizeExceeded`, the reading falls to rung 0 and nothing
+        // says why. Fit it FIRST, by the model's own count, giving up the cheapest lines.
+        // Only the PROMPT is fitted: the scope (the session key), the validation and
+        // the evidence all read the original facts, so a clipped notes line can never
+        // change which session answers or what "Why this?" shows.
+        //
+        // **The CLOUD arm gets none of the person's own words (2026-09-20).** It used to
+        // get `facts` whole — `NOTES:`, `THEY SAID:` (the verbatim capture) and
+        // `WHY IT EXISTS:` included, unclipped, straight to the provider — while the
+        // screen where the app states what leaves this device said, in as many words,
+        // "only structured task information goes out — titles, dates and flags, never
+        // your raw notes". The design note in `DataBoundary` says the same thing and
+        // explains why it matters: capture parsing genuinely needs the verbatim words,
+        // and judgment does not, and that asymmetry is what makes the capture sentence
+        // acceptable at all. The code had drifted off its own contract, and the drift
+        // ran the wrong way — an explicit negative promise about a transmission that was
+        // happening. `.bare` is exactly the promised shape: title, sensors and graph,
+        // with the free text and the learned preferences (which are built from the
+        // person's corrections, and those never leave) dropped.
+        //
+        // It costs the cloud reading the notes and the capture quote, which is a real
+        // quality cost, knowingly paid. Safe defaults for data is one of the two things
+        // this project never relaxes, and a promise on the privacy screen is not a place
+        // to spend quality budget.
+        let fitted = rung == .cloud ? facts.trimmed(to: .bare) : await Self.fitted(facts)
         let outcome = await ModelRun.perform(
             .taskAdvisor,
             deadline: ModelDeadline.advisorSeconds(rung: rung, presenceTime: presenceTime)
@@ -53,7 +81,7 @@ struct TaskAdvisorService {
                 let session = try CloudModel.provider.session(
                     instructions: Self.instructions, config: CapabilityProfiles.taskAdvisor)
                 return try await session.respond(
-                    to: Self.prompt(for: facts), generating: TaskAdvisorReading.self
+                    to: Self.prompt(for: fitted), generating: TaskAdvisorReading.self
                 ).content
             case .onDevice, .facts, .memory:
                 // The ZERO-TURN inquiry (G2): the reading is generated over the task's own
@@ -63,7 +91,7 @@ struct TaskAdvisorService {
                 // — so treating them as on-device is a total switch, not a fallback.
                 let scope = TaskInquiryScope(taskID: facts.id ?? UUID(), facts: facts, mode: .reading)
                 return try await InquiryService.shared.respond(
-                    scope, prompt: Self.prompt(for: facts), generating: TaskAdvisorReading.self)
+                    scope, prompt: Self.prompt(for: fitted), generating: TaskAdvisorReading.self)
             }
         }
         // **Salvage down a rung rather than surfacing a failure.** A deep read that ran out
@@ -90,6 +118,52 @@ struct TaskAdvisorService {
         case .failed(let label): return .failed(label)
         }
     }
+
+    /// The facts, trimmed until their prompt fits the on-device window beside the fixed
+    /// overhead (instructions, the guided schema, the answer budget). The count is the
+    /// model's own (`tokenCount(for:)`, iOS 27), never a character estimate — the two
+    /// disagree by a factor that depends on the text. Off-device, or when the model
+    /// cannot count, the facts return untouched: fitting is a courtesy, not a gate.
+    ///
+    /// The prompt's token count is recorded for `.taskAdvisor` on every fit, so the
+    /// diagnostics card can show how close the phone's readings run to the window.
+    static func fitted(_ facts: TaskAdvisorFacts) async -> TaskAdvisorFacts {
+        guard AppBrain.onDeviceModelAvailable() else { return facts }
+        let model = SystemLanguageModel.default
+        guard let overhead = await fixedOverheadTokens() else { return facts }
+        let budget = model.contextSize - overhead
+        var current = facts
+        for level in TaskAdvisorFacts.TrimLevel.allCases {
+            current = facts.trimmed(to: level)
+            guard let tokens = try? await model.tokenCount(for: current.promptBlock) else { return facts }
+            if tokens <= budget {
+                ModelMetrics.shared.recordTokens(
+                    .taskAdvisor, promptTokens: tokens, contextSize: model.contextSize)
+                return current
+            }
+        }
+        return current
+    }
+
+    /// Instructions + schema + the answer budget + a margin, in the model's tokens.
+    /// Counted once per launch — none of it changes.
+    private static var overheadCache: Int?
+
+    private static func fixedOverheadTokens() async -> Int? {
+        if let cached = overheadCache { return cached }
+        let model = SystemLanguageModel.default
+        guard let instructionTokens = try? await model.tokenCount(for: Instructions(instructions)),
+            let schemaTokens = try? await model.tokenCount(for: TaskAdvisorReading.generationSchema)
+        else { return nil }
+        let answer =
+            CapabilityProfiles.taskAdvisor.maximumResponseTokens ?? CapabilityProfiles.defaultAnswerTokens
+        let total = instructionTokens + schemaTokens + answer + overheadMargin
+        overheadCache = total
+        return total
+    }
+
+    /// Room for the framework's own framing around a guided call.
+    static let overheadMargin = 128
 
     /// Warm the Advisor's prefix while a detail page settles — a spare for the static
     /// instructions, adopted by the first task judged. A no-op off-device and under tests;

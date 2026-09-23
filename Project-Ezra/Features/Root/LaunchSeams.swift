@@ -596,6 +596,7 @@ struct LaunchSeams {
     #endif
 
     func runCaptureDiagnosticsIfRequested() async {
+        #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("-CaptureDiagnostics") else { return }
         if ProcessInfo.processInfo.arguments.contains("-EvalToFile") {
             Instrument.teeStdoutToDocuments("capturediagnostics-report.txt")
@@ -668,6 +669,7 @@ struct LaunchSeams {
         }
         await runContinuousDiagnosticsArm(ramble: ramble)
         print("=== END CAPTURE DIAGNOSTICS ===")
+        #endif
     }
 
     /// The A/B arm for the CONTINUOUS capture session (`CaptureConversation`): the
@@ -677,6 +679,7 @@ struct LaunchSeams {
     /// the single-use baseline above on real hardware; until then it is measured,
     /// not shipped (the capture-deadline precedent: tuned on evidence).
     func runContinuousDiagnosticsArm(ramble: String) async {
+        #if DEBUG
         guard brain.status.isOnDevice else {
             print("continuous: skipped (engine is not on-device)")
             return
@@ -713,6 +716,7 @@ struct LaunchSeams {
                         + "FAILED after \(elapsed)ms · \(AppBrain.errorLine(error))")
             }
         }
+        #endif
     }
 
 }

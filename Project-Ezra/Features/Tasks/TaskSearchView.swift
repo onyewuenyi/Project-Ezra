@@ -48,7 +48,9 @@ struct TaskSearchView: View {
                     EmptyStateView(
                         symbol: "magnifyingglass",
                         title: "Search your tasks",
-                        message: "Find anything by title — across every owner and every status.")
+                        message:
+                            "Find anything by its title, its notes or what you said — across every owner and every status."
+                    )
                 } else if matches.isEmpty {
                     EmptyStateView(
                         symbol: "questionmark.circle",

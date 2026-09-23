@@ -52,6 +52,7 @@ struct ComposerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppBrain.self) private var brain
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// Backs the owner proposal (see `OwnerProposer`) and the on-device
     /// resolve-person tool. A solo install has nobody to hand work to, so the whole
     /// ownership ladder terminates at the capturer.
@@ -321,7 +322,13 @@ struct ComposerView: View {
             .safeAreaInset(edge: .bottom) {
                 switch phase {
                 case .capture: captureBar
-                case .confirm: confirmBar
+                // No bar on an empty reveal (2026-09-18): a disabled "Create 0 tasks"
+                // still wore the full primary gradient under "Nothing actionable in
+                // that" — a dead affordance in the one accented slot, the same fault
+                // the canvas's empty state already refuses. "Keep it as one task" is
+                // the honest action there, and it lives in the content.
+                case .confirm:
+                    if !interpretation.drafts.isEmpty { confirmBar }
                 default: EmptyView()
                 }
             }
@@ -410,6 +417,7 @@ struct ComposerView: View {
             // The orb's reassurance line — long work must read as calm, never as stuck.
             .onChange(of: phase) { _, newPhase in
                 showReassurance = false
+                announcePhase(newPhase)
                 // The last unreachable beat: `-AutoCreate` taps Create for us, so the
                 // ✓ receipt and the return-to-where-you-were can be verified headlessly
                 // like every other phase. The receipt keeps its real duration — a seam
@@ -556,10 +564,7 @@ struct ComposerView: View {
             // hook between the tap and the sheet, and the mic must not stay hot behind
             // it. The canvas's own `imageButton` is still a plain `PhotosPicker`; it has
             // nothing to tear down.
-            .photosPicker(
-                isPresented: $showPhotoPicker, selection: $photoItem, matching: .images,
-                photoLibrary: .shared()
-            )
+            .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
             .alert("Couldn't read that photo", isPresented: $showPhotoImportFailedAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -1118,11 +1123,22 @@ struct ComposerView: View {
     /// anything; the bar also rides above the keyboard, so Ramble stays one tap away
     /// while typing instead of hiding under it.
     @ViewBuilder private var captureSurface: some View {
+        // The title never truncates. This stack is height-bound (the field below
+        // takes the ROOM, see the clamp), and a `Text` that is squeezed gives up
+        // lines before the field gives up its floor — at accessibility-extra-large the
+        // canvas read "What's on your…" / "Dump it all here. I'll sort it…"
+        // (2026-09-18). The title holds its height and wraps to two lines; the helper
+        // subtitle yields entirely at those sizes, since the room it would take is
+        // the field's, and the title already asks the question.
         Text("What's on your mind?")
             .screenTitleStyle()
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.top, Spacing.xs)
-        Text("Dump it all here. I'll sort it out.")
-            .supportingStyle()
+        if !dynamicTypeSize.isAccessibilitySize {
+            Text("Dump it all here. I'll sort it out.")
+                .supportingStyle()
+        }
 
         imageChip
         // GROWS with the words, between a floor and a ceiling — and never past the ROOM.
@@ -1147,7 +1163,7 @@ struct ComposerView: View {
         // one line, so the editor never collapses to a hairline on a short screen.
         GeometryReader { room in
             let height = min(
-                clampedCanvasHeight, max(Self.canvasCompressedFloor, room.size.height))
+                clampedCanvasHeight, max(canvasCompressedFloor, room.size.height))
             composerField
                 .frame(height: height)
                 .animation(Motion.settle, value: height)
@@ -1454,9 +1470,13 @@ struct ComposerView: View {
     /// scale — never an animated headline competing with the orb. The space keeps the
     /// line's height reserved while `.preparing` stays unlabeled.
     private var statusWord: some View {
+        // The space reserves the line's height; it is not something to stop on. Without
+        // the hide, VoiceOver lands on an element containing one space between the
+        // (hidden) orb and the aux line and says nothing (2026-09-20).
         Text(statusText.isEmpty ? " " : statusText)
             .font(.sectionHeader)
             .foregroundStyle(Palette.primaryText)
+            .accessibilityHidden(statusText.isEmpty)
             .contentTransition(.opacity)
             .animation(Motion.fade, value: statusText)
     }
@@ -1499,9 +1519,19 @@ struct ComposerView: View {
     @ViewBuilder private var listeningCountdown: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
             let remaining = silenceDeadline.map { $0.timeIntervalSince(timeline.date) } ?? 0
+            // **`.opacity(0)` hides a view from the eyes and not from VoiceOver
+            // (2026-09-20).** The line is built unconditionally so the row keeps its
+            // height, and it was faded rather than removed — so for the WHOLE listening
+            // phase a VoiceOver user swiping the screen heard "Finishing up — keep
+            // talking to continue", whether or not the silence window was armed. The one
+            // piece of copy that warns about the five-second auto-submit was permanently
+            // true-sounding and therefore told nobody anything. The fade stays (the
+            // height reservation is the point); the element leaves the tree with it.
+            let counting = remaining > 0 && remaining <= Self.countdownVisibleSeconds
             Text("Finishing up — keep talking to continue.")
                 .metadataStyle()
-                .opacity(remaining > 0 && remaining <= Self.countdownVisibleSeconds ? 1 : 0)
+                .opacity(counting ? 1 : 0)
+                .accessibilityHidden(!counting)
                 .animation(Motion.fade, value: remaining <= Self.countdownVisibleSeconds)
         }
         .frame(height: Spacing.md)
@@ -1831,7 +1861,18 @@ struct ComposerView: View {
     /// The floor under the room clamp: one input line. Below this the editor is a
     /// hairline with a cursor in it, which is worse than letting the bar lose a few
     /// points on a screen that short — and no portrait phone this app runs on is.
-    private static let canvasCompressedFloor: CGFloat = LayoutMetrics.hitTarget
+    ///
+    /// One line at the CURRENT text size, never a fixed number (2026-09-18): the floor
+    /// was the 44pt hit target, and at accessibility-extra-large the editor's scaled
+    /// font plus its insets need more than that, so the first line of the person's own
+    /// words rendered clipped along the top. Measured from the same metrics the
+    /// `bodyInput` token scales with, plus the editor's text-container inset and the
+    /// field's padding on both sides; the hit target stays the floor's floor.
+    private var canvasCompressedFloor: CGFloat {
+        let line = UIFontMetrics(forTextStyle: .callout)
+            .scaledFont(for: .systemFont(ofSize: 16, weight: .regular)).lineHeight
+        return max(LayoutMetrics.hitTarget, line + 2 * (Self.transcriptEditorInset + Spacing.sm))
+    }
 
     /// A short capture must still read as a box, not a chip.
     private static let transcriptMinHeight: CGFloat = 88
@@ -1854,8 +1895,17 @@ struct ComposerView: View {
         HStack(spacing: Spacing.sm) {
             // "Say more", never "Speak instead" — on this page the mic ADDS to a capture
             // that has already been read, and the tasks below stay.
-            micButton("Say more")
-            imageButton
+            //
+            // Glyph-only at the accessibility sizes (2026-09-18). Both capsules are
+            // fixed-width, and at accessibility-extra-large the pair outgrew the sheet:
+            // a vertical ScrollView CENTRES content wider than itself, so the whole
+            // reveal slid off the left edge — "lere's what understood", "all the
+            // dentist". The fourth composer layout trap, and the same shape as the
+            // first three: a fixed width inside a container that quietly resizes to it.
+            // The buttons keep their spoken labels ("Dictate", "Add a photo of a list
+            // or note"), so VoiceOver loses nothing.
+            micButton(dynamicTypeSize.isAccessibilitySize ? nil : "Say more")
+            imageButton(dynamicTypeSize.isAccessibilitySize ? nil : "Add a photo")
             Spacer(minLength: 0)
             if transcriptEdited { rereadButton.transition(.opacity) }
         }
@@ -1986,6 +2036,36 @@ struct ComposerView: View {
     /// are the answer to "did it understand me?", which is the question the reveal exists
     /// to answer.
     ///
+    /// Say what just happened, for the two beats that were silent.
+    ///
+    /// **The sheet opens INTO a live microphone (2026-09-20).** That is the product's
+    /// whole shape and it is the one thing a VoiceOver user was never told: the orb is
+    /// `accessibilityHidden` (it is a mood, not information), there is no live transcript
+    /// by design, and focus lands on the toolbar rather than the "Listening" word. So the
+    /// sheet opened, the mic went hot, and nothing said so.
+    ///
+    /// The other silence was longer. Pressing Done replaces the whole screen, the button
+    /// vanishes, focus is lost, and on a cloud route the next spoken word — the reveal —
+    /// can be thirty seconds away. The arrival was announced; the departure and the wait
+    /// were not, which reads as the app having stopped.
+    ///
+    /// Two sentences, once each per transition. A no-op when VoiceOver is off.
+    private func announcePhase(_ phase: RamblePhase) {
+        switch phase {
+        case .listening:
+            AccessibilityNotification.Announcement(
+                "Listening. Say what's on your mind, then choose Done when you've finished."
+            ).post()
+        case .understanding:
+            AccessibilityNotification.Announcement("Reading what you said.").post()
+        case .capture, .confirm:
+            // The canvas is a text field the user was sent to deliberately, and the
+            // reveal has `announceReveal`, which says something far more useful than
+            // the name of a phase.
+            break
+        }
+    }
+
     /// A no-op when VoiceOver is off.
     private func announceReveal() {
         let drafts = interpretation.drafts
@@ -2219,15 +2299,25 @@ struct ComposerView: View {
 
     // MARK: - Dictation
 
-    /// Capture by photo — the third input mode. Library-only in V1 (`PhotosPicker`
-    /// is out-of-process, so no privacy prompt); the live camera is the recorded
-    /// fast-follow. Recognized text streams into the SAME field the keyboard and
-    /// the mic feed, so the rolling parse needs no new path.
+    /// Capture by photo — the third input mode. Library-only in V1; the live camera is
+    /// the recorded fast-follow. Recognized text streams into the SAME field the keyboard
+    /// and the mic feed, so the rolling parse needs no new path.
+    ///
+    /// **Never pass `photoLibrary:` to a picker in this app (2026-09-20).** That one
+    /// argument is the whole difference between the out-of-process picker, which needs no
+    /// permission and no usage string, and an in-process one, which needs photo-library
+    /// AUTHORIZATION — and the app declares no `NSPhotoLibraryUsageDescription`, so iOS
+    /// terminates it the moment the picker opens. All four pickers in the app carried it,
+    /// including the one on the first screen a new user ever sees, while this very comment
+    /// said the picker was out-of-process and therefore promptless. Nothing in the
+    /// simulator catches it, because the simulator's TCC is usually already primed.
+    /// Every site only calls `loadTransferable` on the one item the person chose, so
+    /// library access buys nothing — the correct answer is the one that asks for less.
     private var imageButton: some View { imageButton("Add a photo") }
 
     /// Nil title = glyph only (the row's tightest widths).
     private func imageButton(_ title: String?) -> some View {
-        PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+        PhotosPicker(selection: $photoItem, matching: .images) {
             Label(readingImage ? "Reading…" : (title ?? "Add a photo"), systemImage: "photo")
                 .labelStyle(CapsuleLabelStyle(iconOnly: title == nil && !readingImage))
                 .font(.controlLabel)
@@ -2383,10 +2473,21 @@ struct ComposerView: View {
     /// already available right here) or unavailable. The listening states themselves
     /// live on the orb surface now; the canvas never hosts a hot mic.
     @ViewBuilder private var dictationHint: some View {
-        if case .unavailable(let message) = speech.state {
-            Text(message)
-                .metadataStyle()
-                .transition(.opacity)
+        if case .unavailable(let message, let retryable) = speech.state {
+            HStack(spacing: Spacing.xs) {
+                Text(message)
+                    .metadataStyle()
+                // A failed first-use model download is a condition, not a verdict, and
+                // without this the only way back was closing and reopening the sheet —
+                // which nobody discovers (2026-09-20).
+                if retryable {
+                    Button("Try again") { Task { await speech.retry() } }
+                        .font(.metadata.weight(.semibold))
+                        .foregroundStyle(Palette.accentFlat)
+                        .buttonStyle(.pressableLink)
+                }
+            }
+            .transition(.opacity)
         } else if !micUsable {
             HStack(spacing: Spacing.xs) {
                 Text("Microphone access is off.")

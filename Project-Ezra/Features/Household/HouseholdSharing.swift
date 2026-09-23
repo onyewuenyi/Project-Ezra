@@ -44,6 +44,8 @@ enum HouseholdSharingError: LocalizedError {
     case linkNotReady
     case noSharedStore
     case accountRequired
+    case offline
+    case storageFull
 
     var errorDescription: String? {
         switch self {
@@ -51,6 +53,25 @@ enum HouseholdSharingError: LocalizedError {
         case .linkNotReady: return "The link isn't ready yet — give it a moment and try again."
         case .noSharedStore: return "This device can't join a household right now."
         case .accountRequired: return "Sign in to iCloud on this device to share your household."
+        case .offline: return "No connection — the link needs the network for a moment. Try again."
+        case .storageFull: return "There's no iCloud storage left to share the household with."
+        }
+    }
+
+    /// The sharing failure in the PRODUCT's words, or nil when this is not one we can
+    /// name (2026-09-18). Every sharing path rethrew the raw framework error, so the
+    /// likeliest real failure — nobody is signed into iCloud — reached the invite sheet
+    /// as "This operation couldn't be completed. (CKErrorDomain error 9.)": unactionable,
+    /// and a vendor string on a customer screen. `.accountRequired` had the right
+    /// sentence and nothing ever threw it. Unknown codes still surface as they were, so
+    /// a failure we have not met is never disguised as one we have.
+    static func naming(_ error: Error) -> HouseholdSharingError? {
+        guard let ck = error as? CKError else { return nil }
+        switch ck.code {
+        case .notAuthenticated, .managedAccountRestricted, .permissionFailure: return .accountRequired
+        case .networkUnavailable, .networkFailure, .serviceUnavailable: return .offline
+        case .quotaExceeded: return .storageFull
+        default: return nil
         }
     }
 }
@@ -143,8 +164,11 @@ final class HouseholdSharing {
             return url
         } catch {
             Telemetry.log(.invite(stage: .linkFailed))
-            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            throw error
+            // Named in the product's words where we can name it; the raw error only
+            // where we genuinely have not met the failure before.
+            let named = HouseholdSharingError.naming(error) ?? error
+            lastError = (named as? LocalizedError)?.errorDescription ?? named.localizedDescription
+            throw named
         }
     }
 
@@ -164,7 +188,10 @@ final class HouseholdSharing {
             Telemetry.log(.invite(stage: .accepted))
             retryPendingLink()
         } catch {
-            lastError = error.localizedDescription
+            // The ARRIVING phone's half of the same rule: the person who just tapped a
+            // link is the likeliest of all to have no iCloud account on this device.
+            let named = HouseholdSharingError.naming(error) ?? error
+            lastError = (named as? LocalizedError)?.errorDescription ?? named.localizedDescription
             Telemetry.log(.invite(stage: .acceptFailed))
         }
     }

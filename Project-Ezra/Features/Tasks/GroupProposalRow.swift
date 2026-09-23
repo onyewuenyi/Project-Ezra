@@ -29,10 +29,15 @@ struct GroupProposalRow: View {
     /// The first proposal whose members are still open and loose. One the household has
     /// moved past (a member resolved, or grouped by hand) simply stops showing.
     private var proposal: GroupProposal? {
-        let live = Set(
-            tasksResults.filter { !$0.status.isResolved && $0.parentTaskID == nil }.compactMap(\.uuid))
+        let open = tasksResults.filter { !$0.status.isResolved }
+        let live = Set(open.filter { $0.parentTaskID == nil }.compactMap(\.uuid))
+        let openIDs = Set(open.compactMap(\.uuid))
         return proposals.pending.first { candidate in
-            candidate.memberIDs.filter(live.contains).count >= GroupingSweep.minClusterSize
+            let members = candidate.memberIDs.filter(live.contains).count
+            if let umbrellaID = candidate.umbrellaID {
+                return members >= 1 && openIDs.contains(umbrellaID)
+            }
+            return members >= GroupingSweep.minClusterSize
         }
     }
 
@@ -46,26 +51,26 @@ struct GroupProposalRow: View {
                 }
                 .buttonStyle(.pressableLink)
                 .contextMenu {
-                    Button("Group them", systemImage: "rectangle.3.group") { accept(proposal) }
+                    Button(proposal.isAttach ? "Add it" : "Group them", systemImage: "rectangle.3.group") {
+                        accept(proposal)
+                    }
                     Button("Not these", systemImage: "xmark") {
                         GroupingSweep.reject(proposal, currentUserID: currentUserID, in: context)
                     }
                     Button("Not now") { proposals.dismissForNow(proposal) }
                 }
-                .accessibilityLabel(
-                    "Group \(proposal.memberTitles.count) tasks as \(proposal.title)? "
-                        + proposal.memberTitles.joined(separator: ", ")
-                )
+                .accessibilityLabel(Self.question(proposal) + " " + proposal.memberTitles.joined(separator: ", "))
                 .accessibilityHint("Shows the tasks and asks")
             }
         }
         .onAppear { seedIfRequested() }
+        .onChange(of: proposals.pending.count) { _, _ in acceptIfRequested() }
         .confirmationDialog(
-            asking.map { "Group as “\($0.title)”?" } ?? "", isPresented: askingPresented,
+            asking.map(Self.question) ?? "", isPresented: askingPresented,
             titleVisibility: .visible
         ) {
             if let asking {
-                Button("Group them") { accept(asking) }
+                Button(asking.isAttach ? "Add it" : "Group them") { accept(asking) }
                 Button("Not these") {
                     GroupingSweep.reject(asking, currentUserID: currentUserID, in: context)
                 }
@@ -95,28 +100,46 @@ struct GroupProposalRow: View {
         #endif
     }
 
+    /// Deterministic verification seam. `-AcceptGroupProposal` accepts the first proposal
+    /// the moment one is offered, so the RESULT — a deck captioned by the named outcome,
+    /// the Undo pill — is screenshot-reachable without a tap. Never fires in normal runs.
+    private func acceptIfRequested() {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("-AcceptGroupProposal"), let proposal else { return }
+        accept(proposal)
+        #endif
+    }
+
     private var askingPresented: Binding<Bool> {
         Binding(get: { asking != nil }, set: { if !$0 { asking = nil } })
     }
 
+    /// The row's and the dialog's one line: what is being asked, in the proposal's shape.
+    static func question(_ proposal: GroupProposal) -> String {
+        guard proposal.isAttach else { return "Group as “\(proposal.title)”?" }
+        return proposal.memberTitles.count == 1
+            ? "Add “\(proposal.memberTitles[0])” to “\(proposal.title)”?"
+            : "Add \(proposal.memberTitles.count) tasks to “\(proposal.title)”?"
+    }
+
     private func accept(_ proposal: GroupProposal) {
-        guard
-            let umbrella = GroupingSweep.apply(proposal, currentUserID: currentUserID, in: context)
-        else { return }
+        let entries = GroupingSweep.apply(proposal, currentUserID: currentUserID, in: context)
+        guard !entries.isEmpty else { return }
         // The same receipt every AI structural act gets: the pill, and the trail's
-        // "grouped" entry, whose undo unlinks the steps and removes the umbrella.
-        let request = NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry")
-        let entry = (try? context.fetch(request)).flatMap { entries in
-            entries.filter { $0.action == "grouped" && $0.taskUUID == umbrella.uuid }
-                .max { ($0.timestamp ?? .distantPast) < ($1.timestamp ?? .distantPast) }
-        }
+        // entries — "grouped" (undo unlinks the steps and removes the umbrella) or one
+        // "linked" per added step (undo removes that link). The pill reverts them all.
         notice = UndoNotice(
-            message: "Grouped \(proposal.memberTitles.count) tasks as “\(proposal.title)”",
-            undoAction: entry.map { entry in
-                {
+            message: proposal.isAttach
+                ? (proposal.memberTitles.count == 1
+                    ? "Added “\(proposal.memberTitles[0])” to “\(proposal.title)”"
+                    : "Added \(proposal.memberTitles.count) tasks to “\(proposal.title)”")
+                : "Grouped \(proposal.memberTitles.count) tasks as “\(proposal.title)”",
+            undoAction: {
+                for entry in entries {
                     ChangeLogUndo.revert(entry, in: context)
-                    context.saveChanges()
+                    entry.undone = true
                 }
+                context.saveChanges()
             })
     }
 
@@ -125,14 +148,16 @@ struct GroupProposalRow: View {
             Image(systemName: "rectangle.3.group")
                 .font(.glyphCaption())
                 .foregroundStyle(Palette.mutedText)
-            Text("Group as “\(proposal.title)”?")
+            Text(Self.question(proposal))
                 .supportingStyle()
                 .lineLimit(1)
                 .layoutPriority(1)
-            Text("\(proposal.memberTitles.count) tasks")
-                .supportingStyle()
-                .foregroundStyle(Palette.mutedText)
-                .lineLimit(1)
+            if !proposal.isAttach {
+                Text("\(proposal.memberTitles.count) tasks")
+                    .supportingStyle()
+                    .foregroundStyle(Palette.mutedText)
+                    .lineLimit(1)
+            }
             Spacer(minLength: Spacing.xs)
             Image(systemName: "chevron.right")
                 .font(.glyphCaption())

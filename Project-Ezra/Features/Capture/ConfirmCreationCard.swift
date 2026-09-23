@@ -290,7 +290,9 @@ struct ConfirmCreationCard: View, Equatable {
     /// not missing a date; a task where someone said "Thursday" and we could not read it
     /// is.
     private var whenAskChip: some View {
-        Button { showDatePicker.toggle() } label: {
+        Button {
+            showDatePicker.toggle()
+        } label: {
             MetadataChip {
                 Image(systemName: "calendar.badge.questionmark").font(.glyphCaption())
                 Text("When?").font(.metadata.weight(.medium))
@@ -829,11 +831,14 @@ struct ConfirmCreationCard: View, Equatable {
         draft.markEdited(.dueDate)
     }
 
+    /// The ONE due vocabulary (`DueLabel`), at the detail's density. This card kept its
+    /// own until 2026-09-18 — "Thu 1" for a date nine months out, a weekday-and-day form
+    /// that only means something inside a fortnight — the very drift `DueLabel` was
+    /// written to end. A draft's date is never "overdue" (it is not a task yet), so a
+    /// past date reads as a plain date.
     private func dueText(_ date: Date) -> String {
-        let cal = Calendar.current
-        if cal.isDateInToday(date) { return "Today" }
-        if cal.isDateInTomorrow(date) { return "Tomorrow" }
-        return date.formatted(.dateTime.weekday(.abbreviated).day())
+        if let label = DueLabel.make(due: date, style: .full), !label.isOverdue { return label.text }
+        return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
     }
 }
 

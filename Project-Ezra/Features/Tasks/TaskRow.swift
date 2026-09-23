@@ -78,6 +78,7 @@ struct TaskRow: View {
 
     @Environment(\.managedObjectContext) private var context
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var isCompleting = false
     /// True while a finger is held on the row — drives the Linear-style press
     /// highlight that communicates what's about to lift into the context menu.
@@ -145,7 +146,7 @@ struct TaskRow: View {
                 Text(task.title)
                     .taskTitleStyle()
                     .foregroundStyle(Palette.primaryText)
-                    .lineLimit(1)
+                    .lineLimit(LayoutMetrics.listTitleLines(for: dynamicTypeSize))
                     .truncationMode(.tail)
                 // Only when there is something to say. Reserving the line on every deck
                 // card was tried — a blank second line reads as a card missing its
@@ -173,11 +174,17 @@ struct TaskRow: View {
             // identically without this. Only a real date earns the ink (undated shows
             // nothing), only live work (a resolved row is a record; its due is over),
             // and overdue wears the one token that means exactly that.
+            // The WHEN token is one word to the eye — "1d over", "Sun", "2h ago" — and
+            // holds its width: at accessibility sizes, beside the avatar column, the
+            // HStack folded "1d over" into "1d" over "over" (2026-09-18). The title is
+            // the part that yields; it has two lines there for exactly this.
             if let due = dueLabel {
                 Text(due.text)
                     .font(.chipLabel)
                     .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .recessed(isBlocked)
             } else if let age = resolvedAge {
                 // A resolved row is a record, and a record says when. Same slot, the
@@ -187,6 +194,8 @@ struct TaskRow: View {
                     .font(.chipLabel)
                     .foregroundStyle(Palette.mutedText)
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             trailingAvatar
@@ -213,8 +222,9 @@ struct TaskRow: View {
             }
         )
         .onAppear {
-            guard Self.isFreshArrival(confirmedAt: task.confirmedAt)
-                || Self.isFreshArrival(confirmedAt: surfacedAt)
+            guard
+                Self.isFreshArrival(confirmedAt: task.confirmedAt)
+                    || Self.isFreshArrival(confirmedAt: surfacedAt)
             else { return }
             arrivalWash = true
             // Held long enough to be seen after the composer sheet finishes leaving, then
@@ -241,9 +251,18 @@ struct TaskRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
         .accessibilityAddTraits(.isButton)
+        // **Gated on `interactive`, like the swipe and the menu (2026-09-20).** These
+        // were gated only on the closures being non-nil, and the list passes those
+        // whenever the task is unresolved — so on SOMEONE ELSE'S task, where the leading
+        // swipe is deliberately absent and the long-press menu is deliberately inert,
+        // VoiceOver was still offered "Complete". "Not yours to advance" is one of this
+        // product's stated invariants and it held for the eyes and broke for everyone
+        // else. `interactive` is exactly `!resolved && recommendedAction != nil`, which
+        // is the rule the other two channels already use, and the deck passes the same
+        // `advanceable` flag — so all four channels now agree.
         .accessibilityActions {
-            if onComplete != nil { Button("Complete") { complete() } }
-            if onCancel != nil { Button("Cancel Task") { onCancel?() } }
+            if interactive, onComplete != nil { Button("Complete") { complete() } }
+            if interactive, onCancel != nil { Button("Cancel Task") { onCancel?() } }
         }
         .sensoryFeedback(.error, trigger: saveFailed)
         // Completing from the row had no haptic at all — a tap that resolves a task is
@@ -386,7 +405,16 @@ struct TaskRow: View {
         // the reader open the task to learn the same thing the row was already carrying.
         if isBlocked { parts.append(blockerSummary.map { "blocked, \($0)" } ?? "blocked") }
         if let stepProgress { parts.append(stepProgress.label) }
-        if let subtitle, !isBlocked { parts.append(subtitle) }
+        // A subtitle that is only whitespace is a HEIGHT RESERVATION, not a sentence —
+            // `TaskDeckView` passes a single space to keep non-waiting cards the same
+            // height as waiting ones. Spoken verbatim it produced "Book flights, To do,
+            // due Friday, , " — a trailing empty component and a spurious pause on every
+            // card in any deck that contains a waiting member (2026-09-20).
+            if let subtitle, !isBlocked,
+                !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                parts.append(subtitle)
+            }
         if let ownerDisplayName {
             parts.append("owned by \(ownerDisplayName)")
         } else if task.ownerID == nil {

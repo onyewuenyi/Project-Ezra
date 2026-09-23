@@ -11,7 +11,8 @@
 //
 //    1. your raw words may be understood in the cloud when Ezra needs to understand better
 //    2. only structured task information leaves for advice
-//    3. your corrections and your history never leave this device
+//    3. your corrections and your history never reach US, and never reach the people
+//       you share with (they DO sit in your own iCloud — see `neverSentence`)
 //
 //  It is a value type rather than copy inlined in a view for the reason every policy in
 //  this codebase is: the claim has to be checkable. "Only structured task information
@@ -62,9 +63,55 @@ struct DataBoundary: Equatable {
         return boundary
     }
 
+    /// The capture boundary in one short line, for a surface that has no room for the
+    /// paragraph (2026-09-20).
+    ///
+    /// Written for onboarding's paste screen, which asks for "everything on your mind" —
+    /// the largest block of raw personal text this product will ever receive, typed by
+    /// someone ninety seconds into knowing it, and (being unstructured) exactly the shape
+    /// the router escalates. It said nothing at all about where those words were read.
+    /// The full `capture` sentence is around two hundred characters; under a 220-point
+    /// editor at accessibility-extra-large that is a wall, and the screen already has a
+    /// primary and a secondary button to fit. So: the same two facts, in the same
+    /// vocabulary the Activity byline uses ("Read on your device"), short enough to read.
+    ///
+    /// It carries the SAME truth conditions as the long form, including the one that
+    /// matters most — on a build with no cloud reachable it promises the words are not
+    /// sent to be read, because they are not. It says "to be understood" rather than
+    /// "anywhere" on purpose (2026-09-20): this screen is shown without the sync
+    /// sentence beside it, and on a signed-in phone the person's own copy does go to
+    /// their own iCloud. Claim the thing that is true. See `neverSentence`.
+    static func captureShort(cloudReachable: Bool) -> String {
+        cloudReachable
+            ? "Read on your device first. A long brain dump may go to the cloud for a deeper read."
+            : "Read on your device. Your words are not sent anywhere to be understood."
+    }
+
+    /// The promise that holds under every configuration — and it is about US, not about
+    /// the device (corrected 2026-09-20).
+    ///
+    /// **It used to read "Your corrections and your history never leave this device", and
+    /// that was not true.** The private store carries
+    /// `NSPersistentCloudKitContainerOptions` at `.private` scope with no entity
+    /// exclusions, so on a signed-in phone EVERY entity — `Correction`, `Capture`,
+    /// `UserProfile`, the learned caches — mirrors to the person's own iCloud. What the
+    /// old sentence was actually describing is the `CKShare`: those entities carry no
+    /// `household` edge, so they never reach anyone the person invites. That is a real
+    /// and important guarantee, and it is not the one the words made.
+    ///
+    /// A privacy sentence that is wrong in the person's favour is still wrong, and this
+    /// one is on the screen where the app asks to be believed. So it says the two things
+    /// that ARE true and are the ones a person actually cares about: nothing reaches us,
+    /// and nothing reaches the people they share with. Where their own copy lives is the
+    /// sync sentence's job, because "your own iCloud" is a place they already understand.
+    static let neverSentence =
+        "Your corrections and the record of what you changed never reach us, and are never "
+        + "shared with anyone you invite."
+
     /// Sync, in the person's words: WHO sees, not which cloud carries it. No vendor.
     static let syncSentence =
-        "Your household's tasks are shared only with the people you invite, and only after you invite them."
+        "Your tasks are kept in your own iCloud, so they are on all your devices — and "
+        + "shared with someone else only after you invite them."
 
     private static func base(cloudReachable: Bool, posture: CapturePosture) -> DataBoundary {
         // The posture (F-03) is the person's own setting, so it is said first when it is
@@ -76,13 +123,13 @@ struct DataBoundary: Equatable {
                 judgment: cloudReachable
                     ? "Advice may use the cloud, and sends only the task itself — never your captures."
                     : "Nothing is sent anywhere to prepare your advice.",
-                never: "Your corrections and your history never leave this device.")
+                never: neverSentence)
         }
         guard cloudReachable else {
             return DataBoundary(
                 capture: "Everything you capture is understood on this device.",
                 judgment: "Nothing is sent anywhere to prepare your advice.",
-                never: "Your corrections and your history never leave this device.")
+                never: neverSentence)
         }
         return DataBoundary(
             // Rewritten 2026-08-29, the honest half of the device-first routing change
@@ -102,6 +149,6 @@ struct DataBoundary: Equatable {
             judgment:
                 "To prepare your advice, only structured task information "
                 + "goes out — titles, dates and flags, never your raw notes.",
-            never: "Your corrections and your history never leave this device.")
+            never: neverSentence)
     }
 }

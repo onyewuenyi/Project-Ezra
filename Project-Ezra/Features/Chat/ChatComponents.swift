@@ -120,8 +120,22 @@ struct ChatAdvisorLine: View {
                 }
 
             case .failed(let retryable):
-                Text(retryable ? "That didn't come through." : "Not available on this device.")
-                    .supportingStyle()
+                // **The non-retryable arm is a dead end, so it has to point somewhere
+                // (2026-09-20).** It read "Not available on this device." — which names
+                // a capability the person cannot get, on a phone they already own, and
+                // reads like a bug rather than an answer. It is also only half true:
+                // every question the deterministic floor can answer — what is due, what
+                // is blocked, who has what — is answered instantly on ANY phone, and
+                // only an open-ended one ever reaches this line. So say which questions
+                // work instead of which phone does.
+                Text(
+                    retryable
+                        ? "That didn't come through."
+                        : "I can't work that one out on this phone. Direct questions about your "
+                            + "list — what's due, what's blocked, who has what — still work."
+                )
+                .supportingStyle()
+                .fixedSize(horizontal: false, vertical: true)
                 if retryable { retryButton }
 
             case .stopped:
@@ -163,11 +177,10 @@ struct ChatCitedTaskRow: View {
                 parts.append(name)
             }
         }
-        if let due = task.dueDate, let days = TaskItem.daysUntil(due, now: Date()) {
-            parts.append(
-                days < 0
-                    ? "\(-days)d over" : days == 0 ? "Today" : "in \(days)d")
-        }
+        // The ONE due vocabulary, at the row's density — and nil for resolved work, which
+        // is what stops a finished task reading "You · in 2d · Done" (2026-09-18): a
+        // resolved row is a record, and its due is over.
+        if let due = DueLabel.make(for: task, style: .compact) { parts.append(due.text) }
         if task.status.isResolved { parts.append("Done") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

@@ -72,7 +72,14 @@ enum CaptureEscalation {
     static func reason(
         for text: String, drafts: [TaskDraft]
     ) -> CaptureEscalationReason? {
-        guard !drafts.isEmpty else { return .emptyRead }
+        // An empty read escalates — the deterministic pass may have missed a task a
+        // model would find — UNLESS there was nothing to read: a line the segmenter
+        // dropped whole (filler only, or a lone character) has no task in it for any
+        // model to find, and sending "hmm ok so" to the cloud bought a 30 s wait on
+        // the orb to learn nothing (2026-09-18). Nothing in, nothing to escalate.
+        guard !drafts.isEmpty else {
+            return Segmentation.items(from: text).isEmpty ? nil : .emptyRead
+        }
         let items = Segmentation.items(from: text).count
         if text.count >= CaptureRoute.depthCharacterFloor || items >= CaptureRoute.depthItemFloor {
             return .bigDump

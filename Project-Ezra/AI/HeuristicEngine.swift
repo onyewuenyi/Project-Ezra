@@ -135,23 +135,56 @@ struct HeuristicEngine: AIEngine {
             if let owner { return "Sounds like \(owner)'s to handle — kept off your list." }
             return "Filed under \(category) from the wording."
         }()
+        let when = dateExpression(from: lower)
+        let urgent = urgencySignal(for: lower)
         return TaskIntent(
-            title: cleanTitle(line),
+            title: cleanTitle(
+                line, droppingDate: when, droppingWait: blocked, droppingUrgency: urgent,
+                droppingSubject: owner),
             category: category,
-            dateExpression: dateExpression(from: lower),
+            dateExpression: when,
             personReference: owner,
             blockerPhrase: wait,
             confidence: confidence,
             isJudgmentCall: judgment,
             reasoning: reasoning,
-            isUrgent: urgencySignal(for: lower),
+            isUrgent: urgent,
             importance: importanceSignal(for: lower),
             effortMinutes: effortMinutes(from: lower)
         )
     }
 
-    static func cleanTitle(_ line: String) -> String {
+    /// `droppingDate` is the phrase `dateExpression(from:)` lifted out of the same line:
+    /// once it is the due chip, leaving it in the title says the day twice ("Call the
+    /// dentist thursday" under a Thu 24 chip). The model arm already writes titles
+    /// without it ("a short verb-led action"), so this is the deterministic route
+    /// catching up, not a new rule — the two routes should hand over the same title.
+    ///
+    /// `droppingWait` does the same for the dependency clause once it is the blocker:
+    /// "book flights for the trip after passport is done" waits on the passport AND
+    /// said so in its title. The wait goes first — a day inside the clause leaves with
+    /// it, and the chip still reads the whole line.
+    ///
+    /// `droppingSubject` is the owner `ownerName(from:)` read as the line's SUBJECT:
+    /// "Maya needs to pick up her prescription" is Maya's task, and once the name is
+    /// the owner chip the title is the task, not the sentence. The segmenter does not
+    /// strip this shape — it must reach the engine intact so the name can be read.
+    static func cleanTitle(
+        _ line: String, droppingDate expression: String? = nil, droppingWait: Bool = false,
+        droppingUrgency: Bool = false, droppingSubject owner: String? = nil
+    ) -> String {
         var t = line.trimmingCharacters(in: .whitespaces)
+        if let owner {
+            let subject =
+                "^" + NSRegularExpression.escapedPattern(for: owner) + #"\s+(?:needs|has|wants)\s+to\s+"#
+            if let range = t.range(of: subject, options: [.regularExpression, .caseInsensitive]) {
+                t = String(t[range.upperBound...])
+            }
+        }
+        if droppingWait, let head = strippingTrailingWait(from: t) { t = head }
+        if let head = strippingTrailingReason(from: t) { t = head }
+        if let expression, let rest = strippingEdgeDate(expression, from: t) { t = rest }
+        if droppingUrgency, let rest = strippingEdgeUrgency(from: t) { t = rest }
         // A dangling function word at the end is where dictation was cut ("…to brunch
         // at", "…something to my"): drop it from the TITLE only — the extractor has
         // already read the same line for its time phrase, so "at" still raises the
@@ -169,9 +202,106 @@ struct HeuristicEngine: AIEngine {
         return t
     }
 
+    /// The date phrase removed from the line's EDGE only — trailing ("call the dentist
+    /// thursday", "pay rent by friday") or leading ("tomorrow call the vet"), with the
+    /// preposition that hung it there. A phrase in the middle stays: "book the tuesday
+    /// meeting" and "plan the weekend trip" use the day as a modifier, and cutting it
+    /// changes what the task is. A clock time stays too — the chip shows the day, and
+    /// the hour would otherwise vanish from the card. Nil when nothing was cut, and
+    /// never empties a title: a line that was only its date keeps its words.
+    static func strippingEdgeDate(_ expression: String, from line: String) -> String? {
+        let phrase = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phrase.isEmpty,
+            phrase.range(
+                of: IntentResolver.clockTimePattern, options: [.regularExpression, .caseInsensitive])
+                == nil
+        else { return nil }
+        let escaped = NSRegularExpression.escapedPattern(for: phrase)
+        // A day after a TOPIC preposition is what the task is about, not when it is
+        // due: "text Sarah about saturday" keeps its words (2026-09-18 — it had become
+        // "Text Sarah", the topic gone).
+        let topic = #"^(?:.*\s)?(?:about|regarding|re)\s+"# + escaped + #"\s*[.!,]?\s*$"#
+        if line.range(of: topic, options: [.regularExpression, .caseInsensitive]) != nil { return nil }
+        // "on the 3rd of October": the article rides with the preposition.
+        let trailing =
+            #"^(.+?),?\s+(?:(?:on|by|for|before|until|due)\s+)?(?:the\s+)?"# + escaped + #"\s*[.!,]?\s*$"#
+        let leading = #"^(?:(?:on|by)\s+)?"# + escaped + #",?\s+(.+)$"#
+        for pattern in [trailing, leading] {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                let range = Range(match.range(at: 1), in: line)
+            else { continue }
+            let rest = String(line[range]).trimmingCharacters(in: .whitespaces)
+            if !rest.isEmpty { return rest }
+        }
+        return nil
+    }
+
+    /// The line up to its dependency clause — "book flights for the trip after passport
+    /// is done" → "book flights for the trip" — or nil when nothing should be cut. The
+    /// clause must TRAIL at least two words: "look after the kids" and "call after
+    /// lunch" keep their words, because a signal that early is the verb's own
+    /// preposition, not a wait, and a one-word title is worse than a spare clause.
+    /// Cuts at the signal whether or not a blocker was extracted from the clause — a
+    /// pronoun wait ("after it comes through") is still not the task.
+    static func strippingTrailingWait(from line: String) -> String? {
+        // The signal is found on the lowercased line (the same read `isBlocked` and
+        // `blockerPhrase` make) and mapped back by offset; a line whose lowercasing
+        // changes its length is left alone rather than cut at the wrong place.
+        let lower = line.lowercased()
+        guard lower.count == line.count, let (_, range) = dependencySignal(in: lower) else { return nil }
+        let cut = line.index(
+            line.startIndex, offsetBy: lower.distance(from: lower.startIndex, to: range.lowerBound))
+        let head = String(line[..<cut])
+            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ",;:—–-"))
+            .trimmingCharacters(in: .whitespaces)
+        guard head.split(separator: " ").count >= 2 else { return nil }
+        return head
+    }
+
+    /// A trailing JUSTIFICATION comes off the title (2026-09-18): "cancel the gym
+    /// membership, it's like 40 quid a month for nothing" is one task and a reason,
+    /// and the reason belongs in the notes the person can open, not in the row they
+    /// scan. Cut only at a comma followed by a reason opener, with at least two words
+    /// before it, so a bare "because…" mid-sentence and a short title stay whole.
+    static func strippingTrailingReason(from line: String) -> String? {
+        let pattern = #"^(.{2,}?\S)\s*,\s+(?:because|since|as it|it's|its|it is|which|so that|so i)\b.*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+            let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+            let range = Range(match.range(at: 1), in: line)
+        else { return nil }
+        let head = String(line[range]).trimmingCharacters(in: .whitespaces)
+        guard head.split(separator: " ").count >= 2 else { return nil }
+        return head
+    }
+
+    /// The urgency phrase removed from the line's EDGE once it is the Urgent flag —
+    /// "oil change is overdue" → "Oil change", "urgent: call the bank" → "Call the
+    /// bank" (2026-09-18, the onboarding result). Same rule as the day and the wait:
+    /// an extracted fact is not restated in the title. Mid-line stays, and a line that
+    /// is only its urgency keeps its words.
+    static func strippingEdgeUrgency(from line: String) -> String? {
+        let trailing =
+            #"^(.+?),?\s+(?:(?:is|it's|its|it is)\s+)?(?:overdue|urgent|asap|immediately|right away|critical)\s*[.!]?\s*$"#
+        let leading = #"^(?:urgent|asap|important)\s*[:,\-—–]?\s+(.+)$"#
+        for pattern in [trailing, leading] {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                let range = Range(match.range(at: 1), in: line)
+            else { continue }
+            let rest = String(line[range]).trimmingCharacters(in: .whitespaces)
+            if !rest.isEmpty { return rest }
+        }
+        return nil
+    }
+
     private static let danglingTitleTail: Set<String> = [
         "at", "to", "the", "a", "an", "for", "on", "in", "by", "and", "with", "of", "my", "our",
         "your", "from", "about",
+        // "the parking permit renewal is due end of month" → the date leaves and "is"
+        // is left holding nothing (2026-09-18).
+        "is", "are", "was",
     ]
 
     private static let categoryKeywords: [(String, [String])] = [
@@ -268,8 +398,22 @@ struct HeuristicEngine: AIEngine {
     ]
 
     private static func isBlocked(_ lower: String) -> Bool {
-        lower.contains("when i hear back")
-            || blockSignals.contains { signalRange($0, in: lower) != nil }
+        lower.contains("when i hear back") || dependencySignal(in: lower) != nil
+    }
+
+    /// The first dependency signal in the line that is not part of its date phrase.
+    /// "Pay the bill the day after tomorrow" carries "after" inside "day after
+    /// tomorrow" — a WHEN, not a wait — and until 2026-09-18 it filed as blocked on
+    /// "tomorrow", a wait nothing could ever resolve. The date phrase is read first
+    /// and a signal inside it does not count.
+    private static func dependencySignal(in lower: String) -> (signal: String, range: Range<String.Index>)? {
+        let dateRange = dateExpression(from: lower).flatMap { lower.range(of: $0) }
+        for signal in blockSignals {
+            guard let range = signalRange(signal, in: lower) else { continue }
+            if let dateRange, dateRange.contains(range.lowerBound) { continue }
+            return (signal, range)
+        }
+        return nil
     }
 
     private static func signalRange(_ signal: String, in lower: String) -> Range<String.Index>? {
@@ -293,23 +437,20 @@ struct HeuristicEngine: AIEngine {
     /// is the duplicate/child retrieval's job (an `EdgeProposal` between real tasks),
     /// not a lexical extractor's.
     static func blockerPhrase(from lower: String) -> String? {
-        for signal in blockSignals {
-            guard let range = signalRange(signal, in: lower) else { continue }
-            var phrase = String(lower[range.upperBound...])
-                .trimmingCharacters(in: .whitespaces)
-                .trimmingCharacters(in: CharacterSet(charactersIn: ".!?,;:"))
-            for suffix in [
-                " is done", " is finished", " is complete", " gets done", " finishes",
-                " comes back", " arrives", " clears", " is sorted",
-            ] where phrase.hasSuffix(suffix) {
-                phrase = String(phrase.dropLast(suffix.count))
-                break
-            }
-            let trimmed = phrase.trimmingCharacters(in: .whitespaces)
-            guard trimmed.count > 1, namesSomething(trimmed) else { return nil }
-            return trimmed
+        guard let (_, range) = dependencySignal(in: lower) else { return nil }
+        var phrase = String(lower[range.upperBound...])
+            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!?,;:"))
+        for suffix in [
+            " is done", " is finished", " is complete", " gets done", " finishes",
+            " comes back", " arrives", " clears", " is sorted",
+        ] where phrase.hasSuffix(suffix) {
+            phrase = String(phrase.dropLast(suffix.count))
+            break
         }
-        return nil
+        let trimmed = phrase.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count > 1, namesSomething(trimmed) else { return nil }
+        return trimmed
     }
 
     /// Does this phrase name a thing that could ever be waited on? A determiner and a
@@ -367,6 +508,10 @@ struct HeuristicEngine: AIEngine {
             #/\b(?:ask|tell|get|remind)\s+(?<name>[a-z]+)\s+(?:to|about)\b/#,
             #/\bdelegate\b[\w\s]*?\bto\s+(?<name>[a-z]+)\b/#,
             #/\b(?<name>[a-z]+)\s+will\s+(?:handle|do|take|own)\b/#,
+            // "Maya needs to pick up her prescription" (2026-09-18): the person is
+            // named as the subject, the commonest spoken shape for someone else's
+            // task, and it produced a card with no owner and the name in the title.
+            #/^(?<name>[a-z]+)\s+(?:needs|has|wants)\s+to\b/#,
         ]
         for pattern in patterns {
             if let match = try? pattern.firstMatch(in: lower) {
@@ -432,8 +577,16 @@ struct HeuristicEngine: AIEngine {
             #"\b(?:in|within)\s+(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:day|week|month)s?\b"#,
             #"\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:day|week|month)s?\s+from\s+(?:now|today)\b"#,
             #"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?\b"#,
-            #"\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"#,
+            // "the 3rd of October" (2026-09-18): the spoken British/Irish form had no
+            // date at all — the resolver's `parseMonthDay` already reads it once handed
+            // over, so the optional "of" is the whole fix.
+            #"\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"#,
             #"\b\d{4}-\d{2}-\d{2}\b"#,
+            // A bare month behind a preposition ("before the summer holidays in July",
+            // 2026-09-18) — resolved to the first of its next occurrence. Prepositioned
+            // only, so "the july invoice" is a topic, not a date. "may" is excluded as
+            // a bare word: "in may" is rare and "for may" is usually the verb.
+            #"\b(?:in|by|before|until|during)\s+(?:early\s+|mid\s+|late\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b"#,
             // LAST: a clock time ("at 3 PM", "at noon", "9 p.m.") — the resolver
             // reads it as today. Behind every day token above, so "tomorrow at 3 PM"
             // hands over "tomorrow" and the clock never shadows a spoken day.

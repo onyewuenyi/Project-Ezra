@@ -8,6 +8,7 @@
 //  behavior is the one we can pin down without a device.
 //
 
+import Foundation
 import Testing
 @testable import Project_Ezra
 
@@ -288,6 +289,124 @@ struct HeuristicEngineTests {
         #expect(first("Take something to my").title == "Take something")
         // Never empties: a one-word line keeps its word.
         #expect(HeuristicEngine.cleanTitle("at") == "At")
+    }
+
+    @Test("The day lifted into the chip leaves the title's edge; a day used as a modifier stays")
+    func dateLeavesTheTitleEdge() {
+        func intent(_ text: String) -> TaskIntent { HeuristicEngine.intent(from: text) }
+        // Trailing, with and without the preposition that hung it there.
+        #expect(intent("call the dentist thursday").title == "Call the dentist")
+        #expect(intent("call the dentist thursday").dateExpression == "thursday")
+        #expect(intent("pay rent by friday").title == "Pay rent")
+        #expect(intent("pay the bill the day after tomorrow").title == "Pay the bill")
+        // The dangling-tail rule then takes the "in" the day had been holding up.
+        #expect(intent("book the car in next week").title == "Book the car")
+        // Leading.
+        #expect(intent("tomorrow call the vet").title == "Call the vet")
+        #expect(intent("on monday email the school").title == "Email the school")
+        // Mid-line is a modifier, not a when — cutting it changes the task.
+        #expect(intent("book the tuesday meeting room").title == "Book the tuesday meeting room")
+        #expect(intent("plan the weekend trip with mum").title == "Plan the weekend trip with mum")
+        // A clock time stays: the chip shows the day, the title keeps the hour.
+        #expect(intent("pickup shirt at 3 PM").title == "Pickup shirt at 3 PM")
+        // A day after a topic preposition is what the task is ABOUT, and stays.
+        #expect(intent("text sarah about saturday").title == "Text sarah about saturday")
+        // Never empties.
+        #expect(intent("tomorrow").title == "Tomorrow")
+        // The pure function, without an expression, is unchanged.
+        #expect(HeuristicEngine.cleanTitle("call the dentist thursday") == "Call the dentist thursday")
+    }
+
+    @Test("The dependency clause leaves the title once it is the blocker; a verb's own preposition stays")
+    func waitLeavesTheTitle() {
+        func intent(_ text: String) -> TaskIntent { HeuristicEngine.intent(from: text) }
+        let flights = intent("book flights for the trip after passport is done")
+        #expect(flights.title == "Book flights for the trip")
+        #expect(flights.blockerPhrase == "passport")
+        #expect(intent("renew the passport, waiting on photos").title == "Renew the passport")
+        #expect(intent("call mom after lunch").title == "Call mom")
+        // A pronoun wait is not a blocker, but it is still not the task.
+        #expect(intent("book flights after it comes through").title == "Book flights")
+        // Fewer than two words before the signal: the preposition belongs to the verb.
+        #expect(intent("look after the kids").title == "Look after the kids")
+        #expect(intent("call after lunch").title == "Call after lunch")
+        // A day inside the clause leaves with the clause; the chip still reads the line.
+        let dated = intent("book the flights after the passport is done on friday")
+        #expect(dated.title == "Book the flights")
+        #expect(dated.dateExpression == "friday")
+        // "after" inside a date phrase is a WHEN, not a wait: no blocker, whole title.
+        let dayAfter = intent("pay the bill the day after tomorrow")
+        #expect(dayAfter.title == "Pay the bill")
+        #expect(dayAfter.blockerPhrase == nil)
+        #expect(dayAfter.dateExpression == "day after tomorrow")
+    }
+
+    @Test("A named subject is the owner, and leaves the title; a spoken day-of-month is a date")
+    func namedSubjectAndDayOfMonth() {
+        func first(_ text: String) -> TaskIntent {
+            HeuristicEngine.intent(from: Segmentation.items(from: text).first ?? text)
+        }
+        let maya = first("Maya needs to pick up her prescription before the pharmacy closes at 6")
+        #expect(maya.personReference == "Maya")
+        #expect(maya.title == "Pick up her prescription before the pharmacy closes at 6")
+        // "the school needs to" names nobody; the words stay.
+        #expect(first("the school needs to send the forms").title == "The school needs to send the forms")
+
+        let table = first("Book a table for Sam's birthday on the 3rd of October")
+        #expect(table.dateExpression == "3rd of october")
+        #expect(table.title == "Book a table for Sam's birthday")
+        #expect(IntentResolver.resolveDate(expression: table.dateExpression) != nil)
+
+        // The date leaves and the verb it hung on goes with it.
+        let permit = first("the parking permit renewal is due end of month")
+        #expect(permit.title == "The parking permit renewal")
+        #expect(permit.dateExpression == "end of month")
+    }
+
+    @Test("A hedged lead-in and a trailing justification leave the title; a bare month is a date")
+    func hedgeReasonAndBareMonth() {
+        func first(_ text: String) -> TaskIntent {
+            HeuristicEngine.intent(from: Segmentation.items(from: text).first ?? text)
+        }
+        let gym = first("I should really cancel the gym membership, it's like 40 quid a month for nothing")
+        #expect(gym.title == "Cancel the gym membership")
+        #expect(first("book the venue, because the deposit is due").title == "Book the venue")
+        // A comma that is not a reason stays (on the engine directly — the segmenter
+        // splits a comma list before the engine ever sees it).
+        #expect(HeuristicEngine.intent(from: "buy milk, eggs and bread").title == "Buy milk, eggs and bread")
+        #expect(
+            HeuristicEngine.intent(from: "call mom, then book the vet").title == "Call mom, then book the vet"
+        )
+
+        let passports = first("get the kids' passports sorted before the summer holidays in July")
+        #expect(passports.dateExpression == "in july")
+        #expect(passports.title == "Get the kids' passports sorted before the summer holidays")
+        let due = IntentResolver.resolveDate(expression: passports.dateExpression)
+        #expect(due != nil)
+        if let due {
+            let cal = Foundation.Calendar.current
+            let comps = cal.dateComponents([.month, .day], from: due)
+            #expect(comps.month == 7)
+            #expect(comps.day == 1 || cal.component(.month, from: Foundation.Date()) == 7)
+        }
+        // A month as a topic is not a date.
+        #expect(first("file the july invoice").dateExpression == nil)
+    }
+
+    @Test("The urgency phrase leaves the title's edge once it is the flag")
+    func urgencyLeavesTheTitleEdge() {
+        func intent(_ text: String) -> TaskIntent { HeuristicEngine.intent(from: text) }
+        let oil = intent("oil change is overdue")
+        #expect(oil.title == "Oil change")
+        #expect(oil.isUrgent)
+        #expect(intent("renew the car insurance asap").title == "Renew the car insurance")
+        #expect(intent("urgent: call the bank").title == "Call the bank")
+        #expect(intent("call the bank, it's urgent").title == "Call the bank")
+        // Mid-line stays; a line that is only its urgency keeps its words.
+        #expect(intent("sort the overdue library books").title == "Sort the overdue library books")
+        #expect(intent("urgent").title == "Urgent")
+        // Not urgent → untouched, even with an edge word the flag would have taken.
+        #expect(intent("read the critical review").title == "Read the critical review")
     }
 
     // MARK: - End-to-end triage

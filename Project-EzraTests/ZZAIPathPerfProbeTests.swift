@@ -21,7 +21,10 @@ struct ZZAIPathPerfProbeTests {
         let me = UUID()
         var tasks: [TaskItem] = []
         let verbs = ["Renew", "Book", "Call", "Fix", "Pay", "Order", "Cancel", "Email", "Sort", "Plan"]
-        let nouns = ["passport", "the dentist", "the plumber", "the tap", "the water bill", "a gift", "the gym", "Sarah", "the loft", "the trip"]
+        let nouns = [
+            "passport", "the dentist", "the plumber", "the tap", "the water bill", "a gift", "the gym",
+            "Sarah", "the loft", "the trip",
+        ]
         for i in 0..<240 {
             let t = TaskItem(
                 title: "\(verbs[i % 10]) \(nouns[(i / 10) % 10]) \(i)",
@@ -37,8 +40,11 @@ struct ZZAIPathPerfProbeTests {
         let snapshots = tasks.filter { $0.status.isLive }.map {
             OpenTaskSnapshot(id: $0.uuid!, title: $0.title, category: $0.category, updatedAt: $0.updatedAt)
         }
-        let ramble = "call the dentist about thursday then pick up the dry cleaning and email sarah the invoice and book the car in for friday and text mum about sunday"
-        let dump = String(repeating: "renew the passport and then book the flights and also call the vet tomorrow. ", count: 8)
+        let ramble =
+            "call the dentist about thursday then pick up the dry cleaning and email sarah the invoice and book the car in for friday and text mum about sunday"
+        let dump = String(
+            repeating: "renew the passport and then book the flights and also call the vet tomorrow. ",
+            count: 8)
 
         let t1 = ms({ _ = AppBrain.provisionalDrafts(ramble) }, repeats: 20)
         let read = AppBrain.provisionalDrafts(ramble)
@@ -47,9 +53,14 @@ struct ZZAIPathPerfProbeTests {
         let t4 = ms({ _ = ContextRetrieval.candidates(matching: ramble, among: snapshots) }, repeats: 5)
         let t5 = ms({ _ = TaskAdvisorFacts.make(task: tasks[3], among: tasks) }, repeats: 20)
         let t6 = ms({ for t in tasks.prefix(30) { _ = StallDetector.diagnose(t, among: tasks) } }, repeats: 5)
-        let t7 = ms({ _ = DuplicateSweep.candidatePairs(among: snapshots, suppressions: [], vector: { _ in [1, 0, 0] }) }, repeats: 3)
+        let t7 = ms(
+            {
+                _ = DuplicateSweep.candidatePairs(
+                    among: snapshots, suppressions: [], vector: { _ in [1, 0, 0] })
+            }, repeats: 3)
         let t8 = ms({ _ = AppBrain.provisionalDrafts(dump) }, repeats: 10)
-        let t9 = ms({ for t in tasks.prefix(30) { _ = BreakdownEligibility.evaluate(t, among: tasks) } }, repeats: 5)
+        let t9 = ms(
+            { for t in tasks.prefix(30) { _ = BreakdownEligibility.evaluate(t, among: tasks) } }, repeats: 5)
 
         print(String(format: "AIPERF provisionalDrafts(ramble)=%.2fms", t1))
         print(String(format: "AIPERF escalation.reason=%.2fms", t2))
@@ -60,5 +71,47 @@ struct ZZAIPathPerfProbeTests {
         print(String(format: "AIPERF duplicateSweep.candidatePairs(206)=%.2fms", t7))
         print(String(format: "AIPERF provisionalDrafts(600ch dump)=%.2fms", t8))
         print(String(format: "AIPERF breakdownEligibility x30=%.2fms", t9))
+    }
+
+    /// One detail-page render's worth of graph derivations at 240 tasks — the set
+    /// `TaskDetailView.body` reaches through its 41 `among: allTasks` sites on a busy
+    /// (container + blocked + blocking) task. Printed, not asserted: the number decides
+    /// whether a per-render snapshot of the derivations is worth its complexity.
+    @Test("detail page derivations at 240 tasks")
+    func detailPageDerivations() {
+        let me = UUID()
+        var tasks: [TaskItem] = []
+        for i in 0..<240 {
+            let t = TaskItem(title: "Task \(i)", status: i % 7 == 0 ? .done : .todo, ownerID: me)
+            tasks.append(t)
+        }
+        for i in stride(from: 0, to: 240, by: 10) {
+            tasks[i + 1].linkParent(tasks[i].uuid!)
+            tasks[i + 2].linkParent(tasks[i].uuid!)
+            tasks[i + 3].addTaskBlocker(tasks[i + 4].uuid!, among: tasks)
+        }
+        let page = tasks[10]  // a container
+        page.addTaskBlocker(tasks[20].uuid!, among: tasks)
+        tasks[30].addTaskBlocker(page.uuid!, among: tasks)
+
+        let render = ms(
+            {
+                _ = TaskShape.of(page, among: tasks)
+                _ = page.dependents(among: tasks)
+                _ = page.dependents(among: tasks)
+                _ = page.recommendedAction(among: tasks, currentUserID: me)
+                _ = StallDetector.diagnose(page, among: tasks)
+                _ = TaskAdvisorFacts.make(task: page, among: tasks)
+                _ = page.activeBlockers(among: tasks)
+                _ = page.activeBlockerTasks(among: tasks)
+                _ = page.children(among: tasks)
+                _ = page.children(among: tasks)
+                _ = page.openSteps(among: tasks)
+                _ = page.stepProgress(among: tasks)
+                _ = page.nextOpenStep(among: tasks)
+                _ = page.nextOpenStep(among: tasks)
+                _ = page.activeBlockers(among: tasks)
+            }, repeats: 20)
+        print(String(format: "AIPERF detailPage.renderDerivations(240)=%.2fms", render))
     }
 }

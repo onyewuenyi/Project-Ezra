@@ -38,3 +38,58 @@ proves it done, so a ticked box means the thing happened, not that it was starte
 - [ ] **The name check — App Store + trademark — before anything public.** Kinly is
       already a video-conferencing brand. The rename stays undone until this is answered
       either way; the code and copy say Ezra.
+
+## App Store submission — the gates no build failure will ever mention (2026-09-20)
+
+Found by archiving a Release build and reading the result rather than by reasoning about
+it. Each of these is invisible to a green build and to the whole test suite.
+
+- [ ] **Deploy the CloudKit schema to PRODUCTION. This is the one that breaks sync for
+      every user on day one.** A development-signed build talks to the container's
+      *Development* environment, which is the only place the schema has ever existed.
+      TestFlight and the App Store use *Production*, where — until this is done — every
+      record type is unknown, so every push fails and every device stays alone with its
+      own store. Nothing in the app says so: sync degrades silently by design.
+      CloudKit Console ▸ the `iCloud.amanze-studios.Project-Ezra` container ▸ Schema ▸
+      **Deploy Schema Changes** ▸ Production. Re-deploy after EVERY `.xcdatamodel`
+      version that adds a record type or field, because the schema freeze (generation 10)
+      only promises the change is additive — it does not push it.
+      *Done when:* the Production schema lists **all fourteen** record types — the full
+      list is in `docs/app-store-listing.md` §4, kept in step with the model by
+      `CloudKitSchemaListTests` — and a TestFlight build on two phones completes the round
+      trip in the sitting above. **Not four.** This check named only the record types the
+      household share carries until 2026-09-20, and it would have passed with ten missing:
+      every entity in the private store mirrors, not just the shared ones.
+
+- [ ] **An Apple Distribution certificate and an App Store provisioning profile.** This
+      machine has exactly one signing identity, `Apple Development`, so `xcodebuild
+      archive` succeeds and an App Store export cannot. The archive it produces carries
+      `get-task-allow` and `aps-environment: development` — a build that can be installed
+      on a tethered phone and uploaded nowhere. Xcode ▸ Settings ▸ Accounts ▸ Manage
+      Certificates ▸ + ▸ Apple Distribution creates it.
+      *Done when:* `security find-identity -v -p codesigning` lists an Apple Distribution
+      identity, and `xcodebuild -exportArchive` with `method: app-store-connect` succeeds.
+
+- [ ] **Host the privacy policy and the support page, then set `Models/SupportLinks.swift`.**
+      **Both are WRITTEN** — `docs/privacy-policy.md` and `docs/support.md`, drafted from
+      the manifest, `DataBoundary` and `Telemetry` so every claim is one the code already
+      makes. Two things are left in each: fill in `<CONTACT EMAIL>`, and have the policy
+      read by someone qualified if this ships beyond a research preview. **The HTML is
+      generated and ready to host** — `docs/web/privacy.html` and `docs/web/support.html`,
+      rebuilt from the markdown by `python3 scripts/render-pages.py`, which also warns
+      while the contact placeholder is still there. Drop them on anything that serves
+      static files, set both constants, and put the same two URLs in App Store Connect. Guideline 5.1.1(i) requires an app that collects data
+      to link its privacy policy *from inside the app*, not only from the listing, and
+      this app collects three things (`PrivacyInfo.xcprivacy`: product interaction, the
+      anonymous install id, the raw words on an escalated capture). Both URLs are `nil`
+      today, so the app renders no link — deliberately, because a 404 under "Privacy
+      policy" is the first thing a reviewer taps.
+      *Done when:* the Settings diagnostics line reads `links: ready`, and both links open
+      from "What leaves this device".
+
+- [ ] **The App Store Connect privacy answers must match `PrivacyInfo.xcprivacy`.** The
+      nutrition-label questionnaire is answered by hand and is checked against the
+      manifest; a mismatch is a rejection. The manifest declares no tracking, three
+      collected types, all UNLINKED to identity, and one required-reason API
+      (`UserDefaults`, CA92.1). Answer the questionnaire from the manifest, not from
+      memory. *Done when:* the listing's privacy section says the same three things.

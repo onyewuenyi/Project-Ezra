@@ -18,6 +18,29 @@ enum LayoutMetrics {
     /// The minimum interactive tap target (HIG). Every tappable glyph/control reserves
     /// at least this, even when its visual glyph is smaller than the column.
     static let hitTarget: CGFloat = 44
+    /// Lines a related task's title may take on the detail page's rows — steps,
+    /// blockers, dependents, the parent link. Two, not one (2026-09-17): at the
+    /// accessibility text sizes a one-line row cut "Book flights for the trip" to "Book
+    /// flights for th…" while the home list, which wraps freely, showed the whole
+    /// title. A title is one line of intent, but the line is the person's, not the
+    /// layout's; two lines keep the row bounded and the words whole.
+    static let relatedTitleLines = 2
+    /// Lines a LIST row's title may take. One at the reading sizes — the list is a
+    /// dense scan, and a row that grows by a line grows the scroll — but two at the
+    /// accessibility sizes, where one line held "Pay th…" and "Figure out if t…"
+    /// (2026-09-17, accessibility-extra-large): a row whose title cannot be read is
+    /// not dense, it is empty.
+    static func listTitleLines(for size: DynamicTypeSize) -> Int {
+        size.isAccessibilitySize ? 2 : 1
+    }
+    /// The widest a full-screen surface's content column may grow. The app ships to
+    /// iPad and rotates on iPhone (device family 1,2; landscape allowed), and no view
+    /// adapted to width until 2026-09-18: on an iPad Air the list ran edge to edge
+    /// with the due label a screen-width from its title, and the detail's "Mark done"
+    /// was 1300pt wide. Every phone width is below this, so phones are untouched;
+    /// wider surfaces centre a column the eye can scan. Sheets are form sheets on
+    /// iPad already and need nothing.
+    static let readableWidth: CGFloat = 700
     /// The Ramble orb — the object the capture field becomes while the system is
     /// making sense of a ramble, and which becomes the card composition at the reveal.
     ///
@@ -41,6 +64,15 @@ enum LayoutMetrics {
 }
 
 extension View {
+    /// Keep this view in a column no wider than `LayoutMetrics.readableWidth`, on the
+    /// LEADING edge: the navigation title and the toolbar already sit at the edges, and
+    /// a centred column left "My Tasks" a hundred points to the left of its own list on
+    /// an iPad. The caller keeps its own full-bleed background outside the column.
+    func readableWidth() -> some View {
+        frame(maxWidth: LayoutMetrics.readableWidth)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     /// Grow a compact control's tap target to the HIG minimum (`LayoutMetrics.hitTarget`)
     /// WITHOUT changing its visual footprint: the interactive region expands symmetrically
     /// into surrounding whitespace, then negative padding restores the original layout size.

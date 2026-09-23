@@ -16,6 +16,7 @@ struct OnboardingView: View {
     @Environment(\.managedObjectContext) private var context
     @Environment(AppBrain.self) private var brain
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let onComplete: () -> Void
 
@@ -28,6 +29,12 @@ struct OnboardingView: View {
     /// is this one button; bouncing silently back to the editor reads as a broken app,
     /// not as "there was nothing to find".
     @State private var foundNothing = false
+    /// Set when the person gave up on the settling screen and went back to their text.
+    /// A separate flag from `foundNothing` because they are different facts and deserve
+    /// different sentences: one says the read found nothing, the other says nobody waited.
+    @State private var tookTooLong = false
+    /// Reveals the settling screen's way out. See `settlingEscapeSeconds`.
+    @State private var showSettlingEscape = false
     @FocusState private var focused: Bool
     @FocusState private var nameFocused: Bool
     /// Set when `brain.commit`'s own save reports a dropped write — this is the
@@ -93,6 +100,17 @@ struct OnboardingView: View {
     /// blocked on this host, so it was the one redesign that could only be eyeballed
     /// in code. No effect in a normal run.
     private func jumpToResultIfRequested() {
+        #if DEBUG
+        // `-OnboardingIntro` stops on the PASTE screen — the one that asks for everything
+        // on your mind, and the one that now states where those words are read. It had no
+        // seam, so the only way to see it was to type a name and tap Continue, which
+        // Accessibility blocks on this host; its layout at accessibility sizes was
+        // therefore unreviewable, on the screen with a 220-point editor and two buttons
+        // competing for the same room.
+        if ProcessInfo.processInfo.arguments.contains("-OnboardingIntro"), phase == .welcome {
+            phase = .intro
+            return
+        }
         guard ProcessInfo.processInfo.arguments.contains("-OnboardingResult"),
             phase == .welcome
         else { return }
@@ -107,6 +125,7 @@ struct OnboardingView: View {
             guard !drafts.isEmpty else { return }
             withAnimation(Motion.onboardReveal) { phase = .result }
         }
+        #endif
     }
 
     // MARK: - Welcome
@@ -115,15 +134,47 @@ struct OnboardingView: View {
     // household, photos, and everyone else are inferred or added later, so this never
     // competes with the chaos→clarity moment that follows it.
 
+    /// **Scrolls, and both answers stay reachable (2026-09-20).** Same shape as the paste
+    /// screen next door, same two failures: at accessibility-extra-large with the
+    /// keyboard up — which is this screen's RESTING state, because it raises the keyboard
+    /// deliberately — "Skip for now" sat against the top edge of the keyboard, and the
+    /// subtitle silently truncated to one line for want of a `fixedSize`. The landscape
+    /// case is worse still and cannot be rehearsed on this host (no Simulator.app), which
+    /// is the other reason the fixed layout had to go: a column that scrolls and a
+    /// decision that pins is correct at every height without anybody measuring.
     private var welcome: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView { welcomeBody }
+                .scrollBounceBehavior(.basedOnSize)
+            welcomeActions
+        }
+        .padding(Spacing.lg)
+        // **The app's first screen asks one question; the keyboard answers it.**
+        // `nameFocused` existed with only its dismiss half wired — it was set false in
+        // `finishWelcome` and true nowhere — so a single-field form made every new user
+        // tap the field before they could answer it. The composer's rule is that every
+        // keyboard raise is a DELIBERATE decision; this is one. After the entrance fade,
+        // so the field is settled in place before the keyboard slides under it rather
+        // than both moving at once.
+        .task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard phase == .welcome else { return }
+            nameFocused = true
+        }
+    }
+
+    private var welcomeBody: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
-            Spacer(minLength: Spacing.xl)
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 Text("What should I\ncall you?")
                     .heroLargeStyle()
                     .fixedSize(horizontal: false, vertical: true)
                 Text("A first name is plenty. You can add your family whenever you like.")
                     .supportingStyle()
+                    // Without this it clipped to "A first name is plenty. You…" at
+                    // accessibility sizes — the half of the sentence that does the
+                    // reassuring is the half that was cut.
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             TextField("Your name", text: $name)
@@ -143,9 +194,12 @@ struct OnboardingView: View {
                         .strokeBorder(Palette.border, lineWidth: 0.5)
                 }
 
-            Spacer()
+        }
+    }
 
-            VStack(spacing: Spacing.sm) {
+    private var welcomeActions: some View {
+        VStack(spacing: Spacing.sm) {
+            Group {
                 Button {
                     finishWelcome()
                 } label: {
@@ -170,19 +224,7 @@ struct OnboardingView: View {
                     .buttonStyle(.pressableLink)
             }
         }
-        .padding(Spacing.lg)
-        // **The app's first screen asks one question; the keyboard answers it.**
-        // `nameFocused` existed with only its dismiss half wired — it was set false in
-        // `finishWelcome` and true nowhere — so a single-field form made every new user
-        // tap the field before they could answer it. The composer's rule is that every
-        // keyboard raise is a DELIBERATE decision; this is one. After the entrance fade,
-        // so the field is settled in place before the keyboard slides under it rather
-        // than both moving at once.
-        .task {
-            try? await Task.sleep(for: .milliseconds(350))
-            guard phase == .welcome else { return }
-            nameFocused = true
-        }
+        .padding(.top, Spacing.md)
     }
 
     private var hasName: Bool {
@@ -207,9 +249,54 @@ struct OnboardingView: View {
 
     // MARK: - Intro
 
+    /// **Scrolls, and the two buttons never leave the screen (2026-09-20).** This was one
+    /// fixed `VStack` with a `Spacer` at each end and a 220-point editor in the middle.
+    /// At accessibility-extra-large it overflowed both ways at once: the hero title ran up
+    /// under the status bar and the clock, and "Start empty" — the only way past this
+    /// screen for someone with nothing to paste — was off the bottom of the display
+    /// entirely, unreachable on the app's second screen. The fix is the ordinary one:
+    /// the reading column scrolls, the decision stays pinned to the bottom, and the
+    /// editor gives up height at accessibility sizes, where a 220-point box holds barely
+    /// two lines anyway and the keyboard covers most of it.
     private var intro: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView { introBody }
+                .scrollBounceBehavior(.basedOnSize)
+            introActions
+        }
+        .padding(Spacing.lg)
+    }
+
+    private var screenshotLink: some View {
+        PhotosPicker(selection: $screenshotItem, matching: .images) {
+            Label(readingScreenshot ? "Reading…" : "Add a screenshot", systemImage: "photo")
+                .font(.supporting.weight(.medium))
+                .foregroundStyle(Palette.accentFlat)
+        }
+        .buttonStyle(.pressableLink)
+        .disabled(readingScreenshot)
+        .onChange(of: screenshotItem) { _, item in
+            guard let item else { return }
+            Task {
+                await ingestScreenshot(item)
+                screenshotItem = nil
+            }
+        }
+    }
+
+    private var sampleLink: some View {
+        Button("Use a sample list") { text = sample }
+            .font(.supporting.weight(.medium))
+            .foregroundStyle(Palette.accentFlat)
+            .buttonStyle(.pressableLink)
+    }
+
+    /// How tall the paste box should be. At accessibility sizes the screen's scarce
+    /// resource is vertical room for TEXT, not for an empty box.
+    private var editorHeight: CGFloat { dynamicTypeSize.isAccessibilitySize ? 132 : 220 }
+
+    private var introBody: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
-            Spacer(minLength: Spacing.xl)
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 Text("Managing chaos,\neffortlessly")
                     .heroLargeStyle()
@@ -242,7 +329,17 @@ struct OnboardingView: View {
                     .scrollContentBackground(.hidden)
                     .padding(Spacing.md)
             }
-            .frame(height: 220)
+            .frame(height: editorHeight)
+
+            if tookTooLong {
+                Text(
+                    "That was taking longer than it should. Your list is still here — try again, or start empty and add things as they come."
+                )
+                .font(.supporting)
+                .foregroundStyle(Palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .transition(.opacity)
+            }
 
             if foundNothing {
                 Text(
@@ -254,26 +351,17 @@ struct OnboardingView: View {
                 .transition(.opacity)
             }
 
-            HStack(spacing: Spacing.lg) {
-                PhotosPicker(selection: $screenshotItem, matching: .images, photoLibrary: .shared()) {
-                    Label(readingScreenshot ? "Reading…" : "Add a screenshot", systemImage: "photo")
-                        .font(.supporting.weight(.medium))
-                        .foregroundStyle(Palette.accentFlat)
-                }
-                .buttonStyle(.pressableLink)
-                .disabled(readingScreenshot)
-                .onChange(of: screenshotItem) { _, item in
-                    guard let item else { return }
-                    Task {
-                        await ingestScreenshot(item)
-                        screenshotItem = nil
-                    }
-                }
-                Button("Use a sample list") { text = sample }
-                    .font(.supporting.weight(.medium))
-                    .foregroundStyle(Palette.accentFlat)
-                    .buttonStyle(.pressableLink)
+            // Two links, side by side until they cannot be. At accessibility-extra-large
+            // the row squeezed "Add a screenshot" into a three-line column that broke the
+            // word itself ("screensh / ot"); each link gets the full width instead, which
+            // is the same answer `ParkedCapturesRow` and the composer's control row give.
+            let secondaryInputs = ViewThatFits(in: .horizontal) {
+                HStack(spacing: Spacing.lg) { screenshotLink; sampleLink }
+                VStack(alignment: .leading, spacing: Spacing.sm) { screenshotLink; sampleLink }
             }
+            secondaryInputs
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             if screenshotFailed {
                 Text("I couldn't read any text in that image. Try a screenshot of the message itself.")
                     .font(.supporting)
@@ -282,9 +370,32 @@ struct OnboardingView: View {
                     .transition(.opacity)
             }
 
-            Spacer()
+            // **Where these words are read, said here (2026-09-20).** This screen asks
+            // for "everything on your mind" and is the single largest block of raw
+            // personal text the product will ever receive — and it is pasted by someone
+            // who has been using the app for ninety seconds. An unstructured paste is
+            // exactly the shape the router escalates, so on a reachable build this is
+            // also the first thing that leaves the device. Every other capture surface
+            // already states the boundary: the composer carries the posture chip,
+            // Settings carries these sentences in full. Onboarding carried neither.
+            //
+            // One sentence, not a control: `DataBoundary.capture` is already the
+            // product's approved wording, already names no vendor, and already tells the
+            // truth in both directions — on a build with no cloud reachable it says
+            // nothing is sent, so nobody is alarmed about something that is not
+            // happening. A posture PICKER here would be a privacy decision asked at the
+            // worst possible moment, before the person knows what the app does.
+            Text(DataBoundary.captureShort(cloudReachable: CloudModel.isAvailable))
+                .font(.metadata)
+                .foregroundStyle(Palette.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 
-            VStack(spacing: Spacing.sm) {
+    private var introActions: some View {
+        VStack(spacing: Spacing.sm) {
+            Group {
                 Button {
                     Task { await transform() }
                 } label: {
@@ -309,7 +420,7 @@ struct OnboardingView: View {
                     .buttonStyle(.pressableLink)
             }
         }
-        .padding(Spacing.lg)
+        .padding(.top, Spacing.md)
     }
 
     private var canTransform: Bool {
@@ -353,11 +464,60 @@ struct OnboardingView: View {
                 .frame(height: 220)
             Text("Sorting the chaos…")
                 .sectionHeaderStyle()
-            Text(brain.status.description)
-                .metadataStyle()
+            // **The engine readout was HERE, on screen two (fixed 2026-09-20).** It
+            // rendered `brain.status.description` — "Apple Intelligence · on-device", or
+            // on an ineligible phone "Rules engine · device not eligible" — to every new
+            // user who did not skip. That is the same string Settings removed for
+            // breaking the rule that outranks every other line of copy in this product:
+            // the customer never hears "AI" or a vendor name. Worse here than there,
+            // because it is the opening sentence of the relationship, it names a
+            // capability the person has no way to act on, and on the phones that need
+            // the most grace it says the device is not good enough. Which engine
+            // answered is a developer's question; it is answered in the DEBUG
+            // diagnostics card. Nothing replaces it — the wait already has a heading and
+            // the settling field, and a second line here would only be filling space.
+            #if DEBUG
+                Text(brain.status.description)
+                    .metadataStyle()
+            #endif
+
+            // **A way out of the longest wait in the product (2026-09-20).** This screen
+            // had no back edge at all, and the budget behind it is the full 30 seconds
+            // for an escalated first paste (`ModelDeadline.captureSeconds`). Airplane
+            // mode fails fast and is fine; a captive Wi-Fi or a stalled tunnel — the
+            // documented bad case — is half a minute of no-exit spinner on the second
+            // screen a person ever sees, with their whole mental list inside it. The
+            // escape appears late enough that a normal read never shows it, returns to
+            // the editor with every word intact, and says which of the two things
+            // happened. It does not cancel the read; a late result simply finds the
+            // phase moved and lands nowhere, the same guard the microphone uses.
+            if showSettlingEscape {
+                Button("This is taking a while — go back") {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        phase = .intro
+                        tookTooLong = true
+                    }
+                }
+                .font(.ctaCompact.weight(.regular))
+                .foregroundStyle(Palette.secondaryText)
+                .buttonStyle(.pressableLink)
+                .transition(.opacity)
+            }
         }
         .padding(Spacing.xl)
+        .task(id: phase) {
+            guard phase == .settling else { return }
+            showSettlingEscape = false
+            try? await Task.sleep(for: .seconds(Self.settlingEscapeSeconds))
+            guard phase == .settling else { return }
+            withAnimation(Motion.fade) { showSettlingEscape = true }
+        }
     }
+
+    /// How long the settling screen waits before offering a way back. Long enough that a
+    /// deterministic read (2 ms) and an ordinary escalated one never reach it, short
+    /// enough that nobody sits through the 30-second budget with no exit.
+    private static let settlingEscapeSeconds = 9.0
 
     // MARK: - Result
 
@@ -529,6 +689,7 @@ struct OnboardingView: View {
     private func transform() async {
         focused = false
         foundNothing = false
+        tookTooLong = false
         withAnimation(.easeInOut(duration: 0.3)) { phase = .settling }
         // **The router decides, not a default.** This is a new user's very first brain
         // dump, and it used to take `triage`'s `.cloud` default — so it transmitted
@@ -545,6 +706,10 @@ struct OnboardingView: View {
         // is most likely to go looking at afterwards was the one Activity could say
         // nothing about. `escalationReason` is stamped the way the composer stamps it,
         // because the router's evidence is the point of the receipt.
+        // The person stopped waiting and went back to their text. Their words are on
+        // screen and theirs to edit; revealing a result over the top of that now would
+        // take the screen back off them.
+        guard phase == .settling else { return }
         onboardingReceipt = run.telemetry
         onboardingReceipt?.escalationReason = decision.escalation?.rawValue
         // Nothing actionable found: return to the editor with the text intact rather

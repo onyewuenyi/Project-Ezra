@@ -74,7 +74,7 @@ struct GroupingSweepTests {
         let proposal = GroupProposal(
             id: UUID(), title: "Lagos trip", memberIDs: [passport.uuid!, flights.uuid!],
             memberTitles: [passport.title, flights.title], confidence: 0.8)
-        #expect(GroupingSweep.apply(proposal, currentUserID: nil, in: context) != nil)
+        #expect(!GroupingSweep.apply(proposal, currentUserID: nil, in: context).isEmpty)
         #expect(GroupingSweep.chainClusters(in: TaskItem.fetchAll(in: context), suppressions: []).isEmpty)
     }
 
@@ -111,8 +111,10 @@ struct GroupingSweepTests {
         let proposal = GroupProposal(
             id: UUID(), title: "Lagos trip", memberIDs: [flights.uuid!, pack.uuid!],
             memberTitles: [flights.title, pack.title], confidence: 0.8)
-        let umbrella = try #require(GroupingSweep.apply(proposal, currentUserID: nil, in: context))
+        let written = GroupingSweep.apply(proposal, currentUserID: nil, in: context)
+        #expect(written.count == 1)
         let all = TaskItem.fetchAll(in: context)
+        let umbrella = try #require(all.first { $0.title == "Lagos trip" })
         #expect(umbrella.title == "Lagos trip")
         #expect(umbrella.category == "Travel")
         #expect(flights.parentTaskID == umbrella.uuid)
@@ -129,7 +131,7 @@ struct GroupingSweepTests {
         #expect(!TaskItem.fetchAll(in: context).contains { $0.title == "Lagos trip" })
         // Fewer than two live loose members: nothing is written.
         flights.complete()
-        #expect(GroupingSweep.apply(proposal, currentUserID: nil, in: context) == nil)
+        #expect(GroupingSweep.apply(proposal, currentUserID: nil, in: context).isEmpty)
     }
 
     @Test("Reject suppresses every member pair, and the prefilter honours it")
@@ -154,5 +156,56 @@ struct GroupingSweepTests {
         let lifted = SuppressionStore.load(in: context, existingTaskIDs: Set(ids))
         #expect(lifted.filter { $0.kind == .siblingGroup }.isEmpty)
         #expect(GroupingSweep.clusters(among: snaps, suppressions: lifted).count == 1)
+    }
+
+    @Test("A loose task beside an existing outcome is an attach candidate, judged as one, added with its own undo")
+    func attachToExistingOutcome() throws {
+        let context = TestStore.makeContext()
+        let trip = TaskItem(title: "Lagos trip", category: "Travel", in: context)
+        let flights = TaskItem(title: "Book flights to Lagos", category: "Travel", in: context)
+        flights.linkParent(trip.uuid!)
+        let pack = TaskItem(title: "Pack for Lagos", category: "Travel", in: context)
+        _ = TaskItem(title: "Pay the phone bill", category: "Finance", in: context)
+        let all = TaskItem.fetchAll(in: context)
+        let snapshots = all.map { task in
+            OpenTaskSnapshot(
+                id: task.uuid!, title: task.title, category: task.category,
+                parentTitle: task.parentTaskID == nil ? nil : trip.title)
+        }
+        let clusters = GroupingSweep.attachClusters(in: all, snapshots: snapshots, suppressions: [])
+        #expect(clusters.count == 1)
+        #expect(clusters[0].umbrella?.id == trip.uuid)
+        #expect(clusters[0].members.map(\.id) == [pack.uuid!])
+        #expect(clusters[0].steps.map(\.id) == [flights.uuid!])
+        // Attach questions come after chains and before loose clusters, each task once.
+        let ordered = GroupingSweep.candidates(in: all, snapshots: snapshots, suppressions: [], includingAttach: true)
+        #expect(ordered.count == 1)
+        #expect(ordered[0].umbrella != nil)
+        // OFF by default (measured FALSE ACCEPT > 0): the sweep asks no attach question.
+        #expect(!GroupingSweep.attachIsEnabled)
+        #expect(GroupingSweep.candidates(in: all, snapshots: snapshots, suppressions: []).isEmpty)
+        // The validator: one grounded member is enough; the title is the outcome's own.
+        let judgment = GroupJudgment(
+            belongsTogether: true, confidence: 0.8, outcomeTitle: "ignored", memberTitles: ["pack for lagos"])
+        let proposal = try #require(
+            GroupingSweep.validated(judgment, shown: clusters[0].members, umbrella: clusters[0].umbrella))
+        #expect(proposal.isAttach && proposal.title == "Lagos trip" && proposal.memberIDs == [pack.uuid!])
+        // Accept: one "linked"/"parent" entry per member; undo removes exactly that link.
+        let entries = GroupingSweep.apply(proposal, currentUserID: nil, in: context)
+        #expect(entries.count == 1 && entries[0].action == "linked" && entries[0].fieldChanged == "parent")
+        #expect(pack.parentTaskID == trip.uuid)
+        ChangeLogUndo.revert(entries[0], in: context)
+        #expect(pack.parentTaskID == nil)
+        // Reject: a directional parent suppression the prefilter honours, undone whole.
+        GroupingSweep.reject(proposal, in: context)
+        var loaded = SuppressionStore.load(in: context, existingTaskIDs: Set(all.compactMap(\.uuid)))
+        #expect(loaded.contains { $0.suppressesPair(kind: .parentLink, pack.uuid!, trip.uuid!) })
+        #expect(GroupingSweep.attachClusters(in: all, snapshots: snapshots, suppressions: loaded).isEmpty)
+        let vetoes = (try? context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry")))?
+            .filter { $0.action == GroupingSweep.rejectedAction } ?? []
+        #expect(vetoes.count == 1 && vetoes[0].oldValue == trip.uuid!.uuidString)
+        ChangeLogUndo.revert(vetoes[0], in: context)
+        loaded = SuppressionStore.load(in: context, existingTaskIDs: Set(all.compactMap(\.uuid)))
+        #expect(!loaded.contains { $0.kind == .parentLink })
     }
 }

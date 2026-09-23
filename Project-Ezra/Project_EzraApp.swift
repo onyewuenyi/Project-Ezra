@@ -16,6 +16,8 @@ struct Project_EzraApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     /// One AppBrain for the whole app: owns engine selection + processing state.
     @State private var brain = AppBrain()
+    /// Bumped by a destructive clear; rebuilds the interface against the emptied store.
+    @State private var generation = DataGeneration.shared
     /// The single daily nudge. Constructed at launch because it must be the
     /// notification-centre delegate before any tap can arrive.
     @Environment(\.scenePhase) private var scenePhase
@@ -112,19 +114,38 @@ struct Project_EzraApp: App {
         UserDefaults.standard.set(digest, forKey: digestKey)
 
         let container = PersistenceStack.makeContainer()
-        container.loadPersistentStores { _, error in
-            if let error {
-                // Container-open failure on an incompatible shape change: self-heal by
-                // resetting the store and retrying once. Backed by a safety copy and
-                // reported — this is the path that used to lose data in total silence.
-                let record = PersistenceStack.destroyStore(
-                    reason: .loadFailure(error.localizedDescription))
-                if record.destroyedData { StoreResetLog.write(record) }
-                container.loadPersistentStores { _, retryError in
-                    if let retryError {
-                        fatalError("Could not load the store even after reset: \(retryError)")
-                    }
+        // **Per STORE, because there are two of them (2026-09-20).** This handler runs
+        // once for every store description, and the self-heal underneath it used to
+        // destroy every store file in the container and then reload the whole container.
+        // So a shared mirror that would not open — the one of the two that depends on
+        // CloudKit's mood, another person's account and a schema deployed in a console —
+        // took the private store with it, and the private store is every task the person
+        // has ever captured. A repair for one store must not be a wipe of the other.
+        //
+        // The failure is also survivable in one direction only. Without the private store
+        // there is no app; without the shared mirror there is an app that cannot accept
+        // an invitation, which is a degrade the rest of the code already handles
+        // (`sharedStore(in:)` returning nil means "nothing can be accepted"). So the
+        // private store keeps its `fatalError` and the shared one keeps quiet.
+        container.loadPersistentStores { description, error in
+            guard let error else { return }
+            let isPrivate = description.url == PersistenceStack.storeURL
+            let record = PersistenceStack.destroyStore(
+                reason: .loadFailure(error.localizedDescription),
+                only: description.url?.lastPathComponent)
+            if record.destroyedData { StoreResetLog.write(record) }
+            // Re-add THIS description only. Reloading the container would run every
+            // description again, including ones that opened perfectly well a moment ago.
+            container.persistentStoreCoordinator.addPersistentStore(with: description) {
+                _, retryError in
+                guard let retryError else { return }
+                if isPrivate {
+                    fatalError("Could not load the store even after reset: \(retryError)")
                 }
+                // A shared mirror that will not open after a reset: the household half
+                // is off for this launch, the person's own work is untouched, and
+                // `SyncHealth` is where that shows up rather than in a crash.
+                SyncHealth.shared.recordSetupFailure(retryError)
             }
         }
         container.viewContext.automaticallyMergesChangesFromParent = true
@@ -132,6 +153,11 @@ struct Project_EzraApp: App {
         // Which store a new object lands in — private or the shared household — decided
         // once, at save, for every creation site at once.
         storeAffinityObserver = HouseholdStoreAffinity.install(on: container.viewContext)
+        // Whether the second copy of the user's data is actually being made. Watches the
+        // same event stream `HouseholdSharing` does, but keeps the FAILURES — which
+        // nothing did until 2026-09-20, so a container that had never once exported a
+        // record looked identical to one with nothing to send (`SyncHealth`).
+        SyncHealth.shared.observe(container)
         // The invite flow's owner-side (make a link) and invitee-side (accept, link identity).
         HouseholdSharing.shared.configure(container: container, context: container.viewContext)
         return container
@@ -173,6 +199,13 @@ struct Project_EzraApp: App {
 
     private var appContent: some View {
         ContentView()
+            // The one thing that empties every `@FetchRequest` at once. A destructive
+            // clear deletes in the STORE and tells the live context nothing (telling it
+            // is what crashed the app — `DataGeneration` has the mechanism), so the
+            // interface has to be rebuilt rather than refreshed. Bumped only by a clear
+            // the user asked for; in every other second of the app's life this is a
+            // constant and costs nothing.
+            .id(generation.value)
             .environment(brain)
             .environment(\.managedObjectContext, container.viewContext)
             .preferredColorScheme(.dark)  // dark-first reads premium; matches the "quiet" thesis
@@ -202,14 +235,55 @@ struct Project_EzraApp: App {
                 let pending = await center.pendingNotificationRequests().map(\.identifier)
                 center.removePendingNotificationRequests(
                     withIdentifiers: pending.filter { $0 != WeeklyDigest.identifier })
+                #if DEBUG
+                initializeCloudKitSchemaIfRequested()
+                #endif
             }
     }
+
+    #if DEBUG
+    /// `-InitializeCloudKitSchema` pushes the CURRENT model up as CloudKit record
+    /// types, in the container's DEVELOPMENT environment.
+    ///
+    /// **The half of the schema gate that is not a button (2026-09-20).** Deploying
+    /// to Production copies whatever Development holds — so if Development was last
+    /// initialised before model v4 added the household edges, `Invitation.memberID`
+    /// and `FamilyMember.uuid`, then pressing Deploy Schema Changes ships a schema
+    /// that does not match the app, and every sync involving those fields fails in
+    /// production with an error nobody can reproduce locally. Core Data creates
+    /// record types lazily from whatever it happens to save, so "it worked on my
+    /// phone" proves only that the fields you exercised exist.
+    ///
+    /// This makes the Development environment complete and current by construction,
+    /// which is the precondition the console step assumes and never checks. Run it
+    /// once after every new `.xcdatamodel` version, then deploy. It is idempotent,
+    /// additive, and Apple's documented use is exactly this.
+    ///
+    /// DEBUG only and argument-gated twice over, because the API is explicitly not
+    /// for a production environment — and a distribution build has no way to reach
+    /// it anyway, which is the point.
+    private func initializeCloudKitSchemaIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("-InitializeCloudKitSchema"),
+            let cloud = container as? NSPersistentCloudKitContainer
+        else { return }
+        do {
+            try cloud.initializeCloudKitSchema(options: [])
+            print("CLOUDKIT-SCHEMA ok — development environment now matches the model.")
+            print("CLOUDKIT-SCHEMA next: CloudKit Console ▸ Schema ▸ Deploy Schema Changes ▸ Production.")
+        } catch {
+            print("CLOUDKIT-SCHEMA FAILED — \(error)")
+            print("CLOUDKIT-SCHEMA a signed-in iCloud account on this device is required.")
+        }
+    }
+    #endif
 
     /// Recompose the Sunday digest from the store as it stands now. Cheap (one fetch of
     /// the working set) and idempotent, so it runs on every foreground.
     private func refreshDigest() {
         let context = container.viewContext
-        let caretakers = Household.existing(in: context).map(HouseholdActivation.caretakerIDs).map(\.count) ?? 1
-        WeeklyDigestScheduler.shared.refresh(tasks: TaskItem.fetchAll(in: context), caretakerCount: caretakers)
+        let caretakers =
+            Household.existing(in: context).map(HouseholdActivation.caretakerIDs).map(\.count) ?? 1
+        WeeklyDigestScheduler.shared.refresh(
+            tasks: TaskItem.fetchAll(in: context), caretakerCount: caretakers)
     }
 }

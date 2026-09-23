@@ -24,7 +24,11 @@ final class SpeechCaptureService {
         case preparing  // asset download / session warm-up (one-time, shown as a pulse)
         case listening
         case denied
-        case unavailable(String)
+        /// Voice cannot run right now. `retryable` separates "this phone will never do
+        /// it" from "this attempt did not work" — a first-use model download that fails
+        /// because the person is on a train is the second kind, and used to be presented
+        /// as the first (see `sentence(for:)`).
+        case unavailable(String, retryable: Bool)
     }
 
     private(set) var state: State = .idle
@@ -80,21 +84,50 @@ final class SpeechCaptureService {
         }
     }
 
+    /// Bumped by every `stop()`. An in-flight `start()` carries the value it began with
+    /// and abandons itself the moment the two disagree.
+    ///
+    /// **Why a token and not a cancelled `Task` (2026-09-20).** `start()` suspends twice
+    /// — on the permission prompt, and inside `beginTranscribing` on the first-run speech
+    /// model, which can DOWNLOAD — and `stop()` did nothing about either. So a stop that
+    /// landed during warm-up tore down an engine that was not running yet, and the
+    /// suspended `start()` then resumed, installed the tap, activated the session and set
+    /// `.listening` on top of it. The result is the one state this app must never reach:
+    /// a live microphone with no orb, no listening surface and nothing on screen saying
+    /// so, on a sheet the person had already left. "Getting the mic ready…" appears at
+    /// two seconds and invites exactly that tap. Cancellation alone would not fix it,
+    /// because neither `AVAudioApplication.requestRecordPermission` nor the model
+    /// download honours it — the only reliable answer is to let the work finish and then
+    /// refuse its result.
+    private var startToken = 0
+
     func start() async {
         guard !isActive else { return }
         finalizedText = ""
         volatileText = ""
         audioLevel.reset()
+        let token = startToken
 
         // `.preparing` BEFORE the permission await: on first run the system prompt
         // suspends this function mid-await, and a surface keyed on the state would
         // otherwise say "Listening" over a mic that is not running yet.
         state = .preparing
         let granted = await requestMicPermission()
+        // A stop landed while the prompt was up. Say nothing and touch no state: the
+        // surface has already settled somewhere else, and `.denied` here would put an
+        // explanation under a control the person is no longer looking at.
+        guard token == startToken else { return }
         guard granted else { state = .denied; return }
 
         do {
             try await beginTranscribing()
+            // The expensive await is the one that matters: the model can take tens of
+            // seconds on first use, and the tap is live by the time we get here. If the
+            // person left in the meantime, give the microphone straight back.
+            guard token == startToken else {
+                stop()
+                return
+            }
             state = .listening
         } catch {
             teardownAudio()
@@ -104,9 +137,7 @@ final class SpeechCaptureService {
             #if DEBUG
             print("SpeechCapture: \(setupStage) failed — \(error)")
             #endif
-            let message =
-                (error as? LocalizedError)?.errorDescription ?? "Voice capture isn't available here."
-            state = .unavailable(message)
+            state = .unavailable(Self.sentence(for: error), retryable: Self.isRetryable(error))
         }
     }
 
@@ -114,7 +145,50 @@ final class SpeechCaptureService {
     /// diagnosis only, never user-facing.
     private var setupStage = "start"
 
+    /// What the person reads when voice will not start. **Always one of ours (2026-09-20).**
+    ///
+    /// This used to be `(error as? LocalizedError)?.errorDescription`, and `NSError`
+    /// conforms to `LocalizedError` — so the canvas rendered whatever AVFoundation or
+    /// Speech happened to say, verbatim, under the composer. On a real device that reads
+    /// "The operation couldn't be completed. (com.apple.coreaudio.avfaudio error
+    /// 561145187.)". A framework's sentence on a customer's screen is the same rule break
+    /// as a vendor name: it names our internals, it cannot be acted on, and it is the
+    /// opposite of the calm this surface is for. The error still reaches the DEBUG log,
+    /// where a diagnosis belongs.
+    static func sentence(for error: Error) -> String {
+        switch error as? SpeechCaptureError {
+        case .localeUnsupported?, .unsupported?:
+            return (error as? SpeechCaptureError)?.errorDescription ?? Self.genericSentence
+        case nil:
+            return isRetryable(error)
+                ? "Couldn't get the microphone ready. Check your connection and try again."
+                : Self.genericSentence
+        }
+    }
+
+    private static let genericSentence = "Voice capture isn't available here."
+
+    /// Whether trying again could plausibly work. The two `SpeechCaptureError` cases are
+    /// facts about the device and the person's language, so they are not; everything else
+    /// is a condition — a first-use model download on a bad connection, an audio session
+    /// another app was holding — and used to be presented as permanent, greying out Speak
+    /// for the rest of the sheet with no way back except closing and reopening it.
+    static func isRetryable(_ error: Error) -> Bool {
+        error as? SpeechCaptureError == nil
+    }
+
+    /// Try the microphone again after a retryable failure, from the same sheet.
+    func retry() async {
+        guard case .unavailable(_, retryable: true) = state else { return }
+        state = .idle
+        await start()
+    }
+
     func stop() {
+        // Invalidate any `start()` still suspended on the permission prompt or the
+        // model download. Without this the mic comes back up after the person asked
+        // for it to go away — see `startToken`.
+        startToken += 1
         teardownAudio()
         inputBuilder?.finish()
         inputBuilder = nil
@@ -138,7 +212,14 @@ final class SpeechCaptureService {
     // MARK: - Transcription setup
 
     private func beginTranscribing() async throws {
-        let locale = Locale.current
+        setupStage = "locale"
+        let supported = await SpeechTranscriber.supportedLocales
+        let installed = await SpeechTranscriber.installedLocales
+        guard
+            let locale = Self.resolveLocale(
+                preferred: Locale.current, supported: supported, installed: installed)
+        else { throw SpeechCaptureError.localeUnsupported }
+
         setupStage = "transcriber"
         let transcriber = SpeechTranscriber(
             locale: locale,
@@ -231,12 +312,41 @@ final class SpeechCaptureService {
 
     // MARK: - Assets & permission
 
+    /// Which supported locale should actually transcribe for someone whose device is set
+    /// to `preferred`. Nil only when the person's LANGUAGE is not supported at all.
+    ///
+    /// **Why a fallback exists (2026-09-20).** This matched the full BCP-47 identifier
+    /// exactly, and Apple ships regional English but not all of it — `en-US`, `en-GB`,
+    /// `en-IN` and friends, but not `en-NG`, `en-PH`, `en-KE`. An English speaker in Lagos
+    /// therefore got the flagship surface of a voice-first app switched off permanently,
+    /// under a sentence — "Voice capture isn't available for your language yet" — that was
+    /// not even true: their language is supported, their REGION is not. A regional variant
+    /// is an accent model, not a different language, so falling back to a sibling gives a
+    /// slightly worse transcript instead of no transcript, which is the right trade every
+    /// time.
+    ///
+    /// Order: the exact match, then a sibling already INSTALLED (no download, and whatever
+    /// the phone already has is what it was set up with), then any sibling, picked by
+    /// sorted identifier so the choice is deterministic rather than dictionary order.
+    /// Pure, so `SpeechLocaleTests` can exercise the shapes no simulator offers.
+    static func resolveLocale(
+        preferred: Locale, supported: [Locale], installed: [Locale]
+    ) -> Locale? {
+        let target = preferred.identifier(.bcp47)
+        if let exact = supported.first(where: { $0.identifier(.bcp47) == target }) { return exact }
+
+        guard let language = preferred.language.languageCode?.identifier else { return nil }
+        let siblings = supported.filter { $0.language.languageCode?.identifier == language }
+        guard !siblings.isEmpty else { return nil }
+
+        let installedIDs = Set(installed.map { $0.identifier(.bcp47) })
+        let ready = siblings.filter { installedIDs.contains($0.identifier(.bcp47)) }
+        let pool = ready.isEmpty ? siblings : ready
+        return pool.min { $0.identifier(.bcp47) < $1.identifier(.bcp47) }
+    }
+
     private func ensureModel(for transcriber: SpeechTranscriber, locale: Locale) async throws {
         let target = locale.identifier(.bcp47)
-        let supported = await SpeechTranscriber.supportedLocales
-        guard supported.contains(where: { $0.identifier(.bcp47) == target }) else {
-            throw SpeechCaptureError.localeUnsupported
-        }
         let installed = await SpeechTranscriber.installedLocales
         if installed.contains(where: { $0.identifier(.bcp47) == target }) { return }
         // First-use download — happens while the composer shows the `.preparing` pulse.

@@ -81,9 +81,17 @@ struct TaskAdvisorReading: Sendable {
     )
     let action: String
 
+    /// The upper bounds are enforced at the DECODER, like `action`'s vocabulary: a
+    /// fifth option or a sixth step is structurally impossible rather than generated,
+    /// spent from the 500-token answer budget, and then clamped away by the validator.
+    /// The LOWER bounds stay in prose on purpose — a decoder minimum would force two
+    /// options onto every `advise` and `nothing` reading, which is the opposite of
+    /// sharper silence. `sanitizedOptions`/`BreakdownStep.sanitized` still clamp: the
+    /// validator does not trust the guide any more than it trusts the prompt.
     @Guide(
         description:
-            "The distinct options in play when action is decide, 2 to 4, drawn only from the task and its context. Empty otherwise."
+            "The distinct options in play when action is decide, 2 to 4, drawn only from the task and its context. Empty otherwise.",
+        .maximumCount(4)
     )
     let options: [AdvisorOption]
 
@@ -101,7 +109,8 @@ struct TaskAdvisorReading: Sendable {
 
     @Guide(
         description:
-            "The concrete steps when action is createSteps, 2 to 5, each independently doable with effortMinutes one of 15, 30, 60, or 120. Empty otherwise."
+            "The concrete steps when action is createSteps, 2 to 5, each independently doable with effortMinutes one of 15, 30, 60, or 120. Empty otherwise.",
+        .maximumCount(5)
     )
     let steps: [AdvisorStep]
 }
@@ -120,7 +129,9 @@ struct AdvisorStep: Sendable {
     @Guide(description: "A short imperative title for this step, at most 8 words.")
     let title: String
 
-    @Guide(description: "Rough minutes for this step — one of 15, 30, 60, or 120.")
+    /// Bounded at the decoder to the band the sanitizer snaps into; the snap to one of
+    /// the four values stays app-side (an integer guide has no `anyOf`).
+    @Guide(description: "Rough minutes for this step — one of 15, 30, 60, or 120.", .range(15...120))
     let effortMinutes: Int
 }
 

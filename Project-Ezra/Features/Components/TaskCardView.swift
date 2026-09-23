@@ -259,19 +259,13 @@ struct TaskCardView: View {
         }
     }
 
+    /// The ONE due vocabulary (`DueLabel`), at the detail's density. The card kept its
+    /// own until 2026-09-18 — "Thu 1" for a date nine months out, a weekday-and-day
+    /// form that only means something inside a fortnight — which is exactly the drift
+    /// `DueLabel` was written to end. Now: "Today" · "Tomorrow" · "Friday" · "Thu, Jul 1".
     private func dueText(_ date: Date) -> String {
-        let cal = Calendar.current
-        // An overdue date says so plainly — honesty over a decoratively tinted weekday.
-        if isOverdue(date) {
-            let days =
-                cal.dateComponents(
-                    [.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())
-                ).day ?? 1
-            return "\(days)d overdue"
-        }
-        if cal.isDateInToday(date) { return "Today" }
-        if cal.isDateInTomorrow(date) { return "Tomorrow" }
-        return date.formatted(.dateTime.weekday(.abbreviated).day())
+        DueLabel.make(due: date, style: .full)?.text
+            ?? date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
     }
 
     private func isOverdue(_ date: Date) -> Bool {

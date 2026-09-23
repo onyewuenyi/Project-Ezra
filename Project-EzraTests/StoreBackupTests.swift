@@ -66,6 +66,61 @@ struct StoreBackupTests {
         }
     }
 
+    /// **One store's repair must not be the other store's wipe (2026-09-20).**
+    ///
+    /// There are two stores in one container — the private one, holding every task the
+    /// person has ever captured, and the CloudKit shared mirror. `loadPersistentStores`
+    /// runs its handler once per store, and the launch self-heal reacted to either
+    /// failure by destroying BOTH store files. The mirror is the one that depends on
+    /// CloudKit's mood, another person's account and a schema deployed by hand in a web
+    /// console; the private store is the one that cannot be recovered. A shared-store
+    /// hiccup on someone's commute was a full wipe of their own work.
+    @Test("Healing one store leaves the other one standing")
+    func aNarrowedResetSparesTheOtherStore() throws {
+        cleanUp()
+        defer { cleanUp() }
+        let dir = location.storeURL.deletingLastPathComponent()
+        try writeFakeStore(marker: "everything-i-ever-captured")
+        let sharedURL = dir.appendingPathComponent(PersistenceStack.sharedStoreFileName)
+        try Data("the-mirror".utf8).write(to: sharedURL)
+
+        let record = PersistenceStack.destroyStore(
+            reason: .loadFailure("shared store would not open"), now: now, at: location,
+            only: PersistenceStack.sharedStoreFileName)
+
+        #expect(!FileManager.default.fileExists(atPath: sharedURL.path), "the mirror went")
+        #expect(
+            FileManager.default.fileExists(atPath: location.storeURL.path),
+            "the private store — every task the person owns — must still be there")
+        #expect(record.destroyedData, "something WAS destroyed, so the receipt says so")
+
+        // The safety copy is still taken over BOTH stores: a wider net is never the
+        // wrong call on a path that deletes files.
+        let name = try #require(record.backupName)
+        let folder = try #require(PersistenceStack.backupURL(named: name, at: location))
+        let copied = folder.appendingPathComponent(location.fileName)
+        #expect(String(decoding: try Data(contentsOf: copied), as: UTF8.self) == "everything-i-ever-captured")
+    }
+
+    /// The narrowed reset must still be honest when there was nothing to remove — a
+    /// receipt claiming a wipe that did not happen is the failure `destroyedData` exists
+    /// to prevent, and narrowing it is a new way to get that wrong.
+    @Test("Healing a store that was never there reports no destruction")
+    func aNarrowedResetOnNothingIsSilent() throws {
+        cleanUp()
+        defer { cleanUp() }
+        let dir = location.storeURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try writeFakeStore(marker: "private-only")
+
+        let record = PersistenceStack.destroyStore(
+            reason: .loadFailure("no mirror yet"), now: now, at: location,
+            only: PersistenceStack.sharedStoreFileName)
+
+        #expect(!record.destroyedData, "the mirror never existed, so nothing was destroyed")
+        #expect(FileManager.default.fileExists(atPath: location.storeURL.path))
+    }
+
     @Test("A first launch — nothing on disk — reports no destruction and stays silent")
     func firstLaunchIsNotAReset() {
         cleanUp()

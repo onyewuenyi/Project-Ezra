@@ -894,7 +894,8 @@ final class AppBrain {
         // by the system (that is a separate, later change), so it is a `.human` entry with
         // its own undo arm. Appended AFTER the resolvers, whose zips pair `creating` with
         // `created` one to one.
-        if let umbrella = group(created, as: groupTitle, creatorID: creatorID, capture: capture, in: context) {
+        if let umbrella = group(created, as: groupTitle, creatorID: creatorID, capture: capture, in: context)
+        {
             created.append(umbrella)
             capture.parsedTaskIDs = created.compactMap(\.uuid) + mergeTargets.compactMap(\.uuid)
         }
@@ -904,6 +905,9 @@ final class AppBrain {
         // save here means the drafts are gone on next launch even though the
         // composer already showed "N tasks added".
         let saved = context.saveChanges()
+        // A capture is when a group forms; the grouping sweep looks shortly after one
+        // (debounced), so the row can ask while the thought is still warm.
+        if saved, !created.isEmpty { GroupingSweep.runSoonAfterCommit(in: context) }
         if !created.isEmpty, metrics.recordFirstPayoffIfNeeded(),
             let elapsed = metrics.timeToFirstPayoff
         {
@@ -979,7 +983,7 @@ final class AppBrain {
         let noun = drafts.count == 1 ? "task" : "tasks"
         let entry = ChangeLogEntry(
             summary: "Captured \(drafts.count) \(noun)",
-            detail: provenance.summaryLine,
+            detail: provenance.bylineLine,
             action: ChangeLogEntry.capturedAction,
             // The capture id rides `oldValue` — the existing convention for an entry that
             // points at a Capture rather than a task (`"prunedCapture"`, `BrainSweeps`).
