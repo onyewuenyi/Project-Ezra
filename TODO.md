@@ -108,6 +108,13 @@ it. Each of these is invisible to a green build and to the whole test suite.
       identity, and `xcodebuild -exportArchive` with `method: app-store-connect` succeeds.
 
 - [ ] **Host the privacy policy and the support page, then set `Models/SupportLinks.swift`.**
+      **Hosting is wired (2026-10-01):** the repo is public, GitHub Pages is on, and
+      `.github/workflows/pages.yml` publishes `docs/web` alone to
+      `https://onyewuenyi.github.io/Project-Ezra/privacy.html` and `…/support.html` on
+      every push to `main` that touches it — and REFUSES while either page still says
+      `<CONTACT EMAIL>`. So the whole step is now: put the address in both markdown
+      sources, `python3 scripts/render-pages.py`, merge, confirm both URLs load, then set
+      the two constants and the same URLs in App Store Connect.
       **Both are WRITTEN** — `docs/privacy-policy.md` and `docs/support.md`, drafted from
       the manifest, `DataBoundary` and `Telemetry` so every claim is one the code already
       makes. Two things are left in each: fill in `<CONTACT EMAIL>`, and have the policy
