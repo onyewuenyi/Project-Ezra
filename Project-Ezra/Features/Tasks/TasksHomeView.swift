@@ -32,7 +32,7 @@ struct TasksHomeView: View {
 
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     /// Activity is the shell's screen, not this one's — it is reachable from the Brief
     /// too, so it has exactly one mount point and neither surface owns it.
     @Environment(\.openActivity) private var openActivity

@@ -247,7 +247,7 @@ struct ChatCitedTaskRow: View {
     @Environment(\.managedObjectContext) private var context
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
 
     private var me: UUID? { profilesResults.first?.linkedMemberID }
     /// The hero's completion beat: the glyph fills, the row dims, the hand feels it,

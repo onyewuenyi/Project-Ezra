@@ -43,7 +43,7 @@ struct HouseholdChatView: View {
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
     private var allTasks: [TaskItem] { Array(allTasksResults) }
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
 
     @State private var store = HouseholdChatStore.shared
     @State private var draft = ""

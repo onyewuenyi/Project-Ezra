@@ -152,12 +152,19 @@ enum DataReset {
         // data is never read again.
         parked.append(contentsOf: context.registeredObjects)
 
+        // **This phone's own store only (2026-09-30).** The shared mirror holds a household
+        // someone ELSE owns, and a batch delete there is exported like any other — "Clear
+        // all tasks" on a participant's phone emptied the whole household's plan for
+        // everyone in it. The owner's household lives in the private store, so on the
+        // owner's phone nothing changes.
+        let stores = clearableStores(context.persistentStoreCoordinator?.persistentStores ?? [])
         for name in entityNames(for: scope, in: context) {
-            if batchDeleted(name, in: context) { continue }
+            if batchDeleted(name, in: context, stores: stores) { continue }
             // A store that cannot batch-delete — an in-memory one, which is what a
             // SwiftUI preview runs on. Nothing is observing it there, so the
             // object-by-object loop is both safe and the only option.
             let request = NSFetchRequest<NSManagedObject>(entityName: name)
+            request.affectedStores = stores
             (try? context.fetch(request))?.forEach(context.delete)
         }
 
@@ -229,11 +236,21 @@ enum DataReset {
     /// The ids the request is asked for are deliberately never used. Asking for them is
     /// what makes the deletion reportable — and the whole point of this path is that the
     /// result is NOT reported to the live context.
-    private static func batchDeleted(_ name: String, in context: NSManagedObjectContext) -> Bool {
+    private static func batchDeleted(
+        _ name: String, in context: NSManagedObjectContext, stores: [NSPersistentStore]?
+    ) -> Bool {
         let fetch = NSFetchRequest<NSFetchRequestResult>(entityName: name)
+        fetch.affectedStores = stores
         let request = NSBatchDeleteRequest(fetchRequest: fetch)
         request.resultType = .resultTypeObjectIDs
         return (try? context.execute(request)) != nil
+    }
+
+    /// The stores a clear may touch: every one but the shared mirror. Nil — "all of
+    /// them", Core Data's own default — when there is no shared store to protect.
+    static func clearableStores(_ all: [NSPersistentStore]) -> [NSPersistentStore]? {
+        let own = all.filter { !PersistenceStack.isShared($0) }
+        return own.count == all.count ? nil : own
     }
 
     private static func entityNames(for scope: Scope, in context: NSManagedObjectContext) -> [String] {

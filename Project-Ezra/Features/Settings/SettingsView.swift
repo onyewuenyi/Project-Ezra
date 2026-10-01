@@ -18,7 +18,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppBrain.self) private var brain
 
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \ChangeLogEntry.timestamp, ascending: false)])
@@ -643,10 +643,20 @@ struct SettingsView: View {
     }
 
     private func clearMessage(_ scope: DataReset.Scope) -> String {
+        // On a phone that JOINED a household, the clear stops at this phone's own data
+        // (`DataReset.clearableStores`), and the sentence has to say so — "every task" read
+        // as the whole household's plan, which belongs to whoever shared it.
+        let joined = Household.existing(in: context).map { !HouseholdSharing.canShare($0) } ?? false
         switch scope {
+        case .work where joined:
+            return
+                "Every task, capture and activity entry on this phone is deleted. The household you joined keeps its tasks. A copy of your data is saved first."
         case .work:
             return
                 "Every task, capture and activity entry is deleted. This can't be undone from inside the app — a copy of your data is saved first."
+        case .everything where joined:
+            return
+                "Everything on this phone goes: tasks, captures, history, your profile and your settings. The household you joined keeps its tasks, and you'll be asked who you are in it again. A copy of your data is saved first."
         case .everything:
             return
                 "Everything goes: tasks, captures, history, your profile, your household and your settings. Setup runs again the next time you open the app. A copy of your data is saved first."

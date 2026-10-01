@@ -312,7 +312,7 @@ struct TaskMoreMenu: View {
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     @State private var actionPulse = 0
 
     /// Someone else's live work: the primary CTA is deliberately absent for these,

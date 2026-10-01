@@ -175,6 +175,14 @@ file. See *Keeping this file current* at the bottom.
   for good, every model change is a new version that is a superset of the last, every
   attribute optional or defaulted, every relationship inverse-paired. A generation bump, an
   in-place model edit or a removed attribute is a finding of the highest severity.
+- **The participant's phone is its own place (2026-09-30).** On the phone that JOINED: the
+  working household is the shared one even when its own roster is larger; a relaunch keeps
+  the link (no second "You"); a kill between accept and import still links on the next
+  import; "Which one are you?" never appears with no one to choose; "Clear all tasks" says
+  the joined household keeps its tasks and leaves them; the roster shows only the joined
+  household's members and offers no Invite. A participant phone that does any of the
+  opposite is a finding. Known and open: tasks captured before joining stay under the
+  pre-join member.
 - **The device sitting this file cannot replace:** two signed-in phones, invite from one,
   accept on the other, see the assigned tasks arrive owned; complete one on each side and
   watch the trail on both. The simulator has no iCloud account and proves none of it.
@@ -489,6 +497,11 @@ the whole suite and to a green build. Re-walk this section on a device, with
   the App Store use Production, and the schema has only ever existed in the first. Sync
   degrades silently by design, so an undeployed schema looks exactly like a quiet app.
   Re-check after every model version. Owner step in `TODO.md` (2026-09-20).
+- **The exported signature carries sync.** `scripts/submit.sh` reads the entitlements of
+  the EXPORTED app: `aps-environment` production (CloudKit's silent pushes), the iCloud
+  container, no `get-task-allow`. A green archive says none of this (2026-09-30).
+- **Internal TestFlight needs no privacy URL; external does.** `scripts/submit.sh
+  --internal` skips that one gate and says so; external testing and the App Store do not.
 - **Run `scripts/submit.sh`.** It is this section, executed: it stops at the first
   human-only blocker, audits the archived bundle for the manifest, the encryption key and
   the seams, exports with `method: app-store-connect` and validates. A gate you have to

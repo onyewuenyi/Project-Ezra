@@ -156,4 +156,113 @@ struct HouseholdSharingTests {
         row.memberID = maya.uuid
         #expect(home.pendingInvitation(for: maya.uuid) == row)
     }
+
+    // MARK: - The participant's phone (2026-09-30)
+
+    @Test("A household someone shared with this phone wins over a larger one of its own")
+    func sharedHouseholdWinsOutright() throws {
+        let mine = household(members: 4, createdAt: Date(timeIntervalSince1970: 1))
+        let joined = household(members: 2)
+        let chosen = try #require(Household.preferred(among: [mine, joined], isShared: { $0 == joined }))
+        #expect(chosen == joined, "joining IS choosing — the roster count must not undo it")
+    }
+
+    @Test("With nothing shared, the larger roster still wins, then the older")
+    func largestRosterWithoutAShare() throws {
+        let small = household(members: 1, createdAt: Date(timeIntervalSince1970: 1))
+        let large = household(members: 3)
+        let older = household(members: 3, createdAt: Date(timeIntervalSince1970: 2))
+        let chosen = try #require(
+            Household.preferred(among: [small, large, older], isShared: { _ in false }))
+        #expect(chosen == older)
+    }
+
+    @Test("Only the shared mirror's file counts as shared, and an unsaved object is never shared")
+    func sharedIsReadFromTheStoreFile() throws {
+        #expect(!PersistenceStack.isShared(nil))
+        let coordinator = NSPersistentStoreCoordinator(managedObjectModel: PersistenceStack.model)
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        let privateStore = try coordinator.addPersistentStore(
+            type: .inMemory, at: dir.appendingPathComponent(PersistenceStack.storeFileName))
+        let sharedStore = try coordinator.addPersistentStore(
+            type: .inMemory, at: dir.appendingPathComponent(PersistenceStack.sharedStoreFileName))
+        #expect(!PersistenceStack.isShared(privateStore))
+        #expect(PersistenceStack.isShared(sharedStore))
+
+        // The clear's scope: everything but the mirror — and "all of them" when there is
+        // no mirror to protect, so a phone that never joined anything is unchanged.
+        #expect(DataReset.clearableStores([privateStore, sharedStore]) == [privateStore])
+        #expect(DataReset.clearableStores([privateStore]) == nil)
+    }
+
+    @Test("A link is honoured in ANY household — launch never mints a second 'you' over it")
+    func bootstrapKeepsACrossHouseholdLink() throws {
+        let profile = UserProfile.current(in: context)
+        let original = profile.linkedMemberID
+        defer { profile.linkedMemberID = original }
+
+        // A one-member household that is NOT the working one: before the fix, launch
+        // looked only in the working household, missed this member and overwrote the link.
+        let elsewhere = household(members: 2)
+        let me = try #require(HouseholdSharing.linkCandidates(in: elsewhere).first)
+        profile.linkedMemberID = me.uuid
+        let resolved = UserProfile.bootstrapIdentity(in: context)
+        #expect(resolved == me)
+        #expect(profile.linkedMemberID == me.uuid)
+    }
+
+    @Test("Awaiting a link is derived from the stores, so a kill between accept and import loses nothing")
+    func needsLinkIsDerived() throws {
+        let joined = household(members: 2)
+        let member = try #require(HouseholdSharing.linkCandidates(in: joined).first)
+        let stranger = household(members: 1).activeMembers[0]
+        #expect(HouseholdSharing.needsLink(linkedMemberID: nil, in: joined))
+        #expect(HouseholdSharing.needsLink(linkedMemberID: stranger.uuid, in: joined))
+        #expect(!HouseholdSharing.needsLink(linkedMemberID: member.uuid, in: joined))
+    }
+
+    @Test("Ezra asks 'which one are you?' only when there is someone to choose")
+    func noCandidatesNoQuestion() {
+        #expect(!HouseholdSharing.shouldAsk(candidates: []))
+        let home = household(members: 2)
+        #expect(HouseholdSharing.shouldAsk(candidates: HouseholdSharing.linkCandidates(in: home)))
+    }
+
+    @Test("A household outside the shared mirror can hand out links")
+    func ownersPhoneCanShare() {
+        // The scratch store is not the shared mirror, so every fixture here is the
+        // owner's case; the participant's is `sharedIsReadFromTheStoreFile`'s file rule.
+        #expect(HouseholdSharing.canShare(household(members: 2)))
+    }
+
+    @Test("Every profile read uses one order, so the model and every screen name the same 'you'")
+    func profileOrderIsOneOrder() throws {
+        let order = UserProfile.chosenOrder
+        #expect(order.first?.key == "createdAt")
+        #expect(order.first?.ascending == true)
+        let request = NSFetchRequest<UserProfile>(entityName: "UserProfile")
+        request.sortDescriptors = order
+        let all = try context.fetch(request)
+        let current = UserProfile.current(in: context)
+        #expect(all.first == current)
+    }
+
+    @Test("No view reads 'you' from an unsorted profile fetch")
+    func everyProfileFetchIsOrdered() {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Project-Ezra")
+        let files =
+            FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+        var offenders: [String] = []
+        for url in files {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            for line in text.split(separator: "\n")
+            where line.contains("FetchedResults<UserProfile>") && !line.contains("UserProfile.chosenOrder") {
+                offenders.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        #expect(offenders.isEmpty, "\(offenders)")
+    }
 }

@@ -35,7 +35,7 @@ struct ActivityView: View {
         predicate: ChangeLogEntry.activityVisiblePredicate)
     private var entriesResults: FetchedResults<ChangeLogEntry>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
 
     /// The last time the user looked at Activity — entries newer than this read as
     /// unread (the accent dot). Written on disappear.

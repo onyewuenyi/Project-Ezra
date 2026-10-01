@@ -38,6 +38,7 @@ import CloudKit
 import CoreData
 import Foundation
 import Observation
+import OSLog
 
 @Observable final class SyncHealth {
 
@@ -127,6 +128,9 @@ import Observation
             stage.reading = Self.reading(for: event.error)
             stage.errorLabel = Self.label(for: event.error)
             stage.failureCount += 1
+            Self.log.error(
+                "sync \(Self.stageName(event.type), privacy: .public) failed: \(stage.reading.label, privacy: .public) · \(stage.errorLabel ?? "no error", privacy: .public)"
+            )
         }
         self[event.type] = stage
     }
@@ -139,6 +143,25 @@ import Observation
         setup.reading = Self.reading(for: error)
         setup.errorLabel = Self.label(for: error)
         setup.failureCount += 1
+        Self.log.error(
+            "sync setup failed: \(self.setup.reading.label, privacy: .public) · \(self.setup.errorLabel ?? "no error", privacy: .public)"
+        )
+    }
+
+    /// The meter's one voice outside DEBUG: Console.app, never the screen. The card that
+    /// reads this state is DEBUG-only (a broken-sync banner on a customer's screen is a
+    /// thing to manage, principle 10), which left a TestFlight build with no way to tell
+    /// a missing Production schema from a quiet household. Stable labels only — the same
+    /// `CKError.<code>` the card prints, never a record or a message.
+    private static let log = Logger(subsystem: "com.projectezra.app", category: "sync")
+
+    private static func stageName(_ type: NSPersistentCloudKitContainer.EventType) -> String {
+        switch type {
+        case .setup: return "setup"
+        case .import: return "import"
+        case .export: return "export"
+        @unknown default: return "unknown"
+        }
     }
 
     private subscript(type: NSPersistentCloudKitContainer.EventType) -> Stage {

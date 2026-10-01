@@ -19,7 +19,7 @@ import SwiftUI
 struct GroupProposalRow: View {
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     @State private var proposals = GroupProposals.shared
     @State private var asking: GroupProposal?
     @Binding var notice: UndoNotice?

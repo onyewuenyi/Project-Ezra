@@ -61,7 +61,7 @@ struct ComposerView: View {
     /// The learning loop's inputs: past corrections (+ tasks, for keyword context).
     @FetchRequest(sortDescriptors: []) private var correctionsResults: FetchedResults<Correction>
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
-    @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profiles: FetchedResults<UserProfile>
     private var corrections: [Correction] { Array(correctionsResults) }
     private var allTasks: [TaskItem] { Array(allTasksResults) }
 

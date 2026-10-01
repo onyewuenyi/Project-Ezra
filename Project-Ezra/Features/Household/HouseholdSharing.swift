@@ -78,7 +78,7 @@ enum HouseholdSharingError: LocalizedError {
 
 /// What the arriving phone shows when it cannot tell which member the person is.
 struct PendingIdentityLink: Identifiable {
-    let id = UUID()
+    var id = UUID()
     let household: Household
     /// Members the person could be — adults who are not the owner and not yet claimed.
     let candidates: [FamilyMember]
@@ -96,9 +96,11 @@ final class HouseholdSharing {
     private var context: NSManagedObjectContext?
     private var importObserver: NSObjectProtocol?
 
-    /// Set while an accepted share's household has not yet been imported; the import
-    /// observer and every foreground retry the link until it lands.
-    private(set) var awaitingSharedHousehold = false
+    // "Awaiting a link" is DERIVED, never held (2026-09-30): a shared household exists on
+    // this phone and the profile's member is not in it. A flag set at accept lived in
+    // memory only, so a phone killed between the accept and the household's arrival —
+    // a large household takes a while — never linked at all, and the person sat in the
+    // household as nobody. The stores remember what the flag forgot.
     /// Drives the "which one are you?" sheet.
     var pendingLink: PendingIdentityLink?
     /// The last failure, for the UI to print in the person's words.
@@ -158,6 +160,7 @@ final class HouseholdSharing {
                 }()
             invitation.shareURL = url.absoluteString
             context.saveChanges()
+            lastError = nil
             Telemetry.log(.invite(stage: .linkCreated))
             // The household is about to be shared: the one moment the digest asks.
             await WeeklyDigestScheduler.shared.requestPermissionIfNeeded()
@@ -184,7 +187,7 @@ final class HouseholdSharing {
         }
         do {
             _ = try await container.acceptShareInvitations(from: [metadata], into: sharedStore)
-            awaitingSharedHousehold = true
+            lastError = nil
             Telemetry.log(.invite(stage: .accepted))
             retryPendingLink()
         } catch {
@@ -199,19 +202,29 @@ final class HouseholdSharing {
     /// Try to resolve who this phone is inside the shared household. Safe to call often:
     /// it does nothing until a shared household exists, and nothing once linked.
     func retryPendingLink() {
-        guard awaitingSharedHousehold, let container, let context,
+        guard let container, let context,
             let sharedStore = PersistenceStack.sharedStore(in: container),
             let household = Self.sharedHousehold(in: context, store: sharedStore)
         else { return }
         let profile = UserProfile.current(in: context)
+        guard Self.needsLink(linkedMemberID: profile.linkedMemberID, in: household) else {
+            pendingLink = nil
+            return
+        }
         let invitations = household.pendingInvitations
         let candidates = Self.linkCandidates(in: household)
         if let target = Self.autoLinkTarget(candidates: candidates, invitations: invitations) {
             linkIdentity(profile: profile, to: target.member, invitation: target.invitation)
-        } else {
+        } else if Self.shouldAsk(candidates: candidates) {
+            // Kept, not rebuilt: a fresh id on every import re-presented the sheet under
+            // the person's thumb. Same id, the latest roster.
             pendingLink = PendingIdentityLink(
+                id: pendingLink?.id ?? UUID(),
                 household: household, candidates: candidates, invitations: invitations)
         }
+        // No candidates yet: the household's record can land before its members and its
+        // invitation do. Asking now would offer only "someone else" and mint a duplicate
+        // of the member the owner already made — so wait for the next import.
     }
 
     /// The person chose a member (or asked for a new one). Called by the chooser sheet.
@@ -238,7 +251,6 @@ final class HouseholdSharing {
         profile.syncIdentity(to: member)
         invitation?.accept()
         context.saveChanges()
-        awaitingSharedHousehold = false
         pendingLink = nil
         Telemetry.log(.invite(stage: .identityLinked))
         // Joined a shared household: the one moment the digest asks on this side.
@@ -252,6 +264,24 @@ final class HouseholdSharing {
         let request = NSFetchRequest<Household>(entityName: "Household")
         request.affectedStores = [store]
         return (try? context.fetch(request))?.min { $0.createdAt < $1.createdAt }
+    }
+
+    /// Whether this phone still has to say who it is in `household`: true until the
+    /// profile's member is one of that household's live members.
+    static func needsLink(linkedMemberID: UUID?, in household: Household) -> Bool {
+        guard let id = linkedMemberID else { return true }
+        return !household.activeMembers.contains { $0.uuid == id }
+    }
+
+    /// Ask "which one are you?" only when there is someone to choose.
+    static func shouldAsk(candidates: [FamilyMember]) -> Bool { !candidates.isEmpty }
+
+    /// Whether this phone may hand out links to `household`. Only the owner's phone can:
+    /// the household lives in its PRIVATE store. A participant holds it in the shared
+    /// mirror, where the share's permissions are not theirs to change — the attempt
+    /// failed with a raw CloudKit error.
+    static func canShare(_ household: Household) -> Bool {
+        !PersistenceStack.isShared(household.objectID.persistentStore)
     }
 
     /// Who the arriving person could be: live adult members who are not the owner.

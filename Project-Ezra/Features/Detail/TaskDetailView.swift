@@ -51,7 +51,7 @@ struct TaskDetailView: View {
     private var allTasks: [TaskItem] { Array(allTasksResults) }
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
     private var familyMembers: [FamilyMember] { Array(familyMembersResults) }
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     private var profiles: [UserProfile] { Array(profilesResults) }
     /// This task's own change-log history — the Activity feed (predicate built in init).
     @FetchRequest private var activityResults: FetchedResults<ChangeLogEntry>

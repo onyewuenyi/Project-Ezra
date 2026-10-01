@@ -18,7 +18,7 @@ struct TaskSearchView: View {
     @FetchRequest(sortDescriptors: [NSSortDescriptor(keyPath: \TaskItem.createdAt, ascending: false)])
     private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
 
     @State private var searchText = ""
     /// Raised on arrival. This sheet's ONLY purpose is typing, and unlike Ask — which

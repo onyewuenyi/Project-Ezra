@@ -41,7 +41,7 @@ struct TaskAdvisorChatView: View {
     /// — the same idiom every detail surface uses.
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
     private var allTasks: [TaskItem] { Array(allTasksResults) }
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     private var currentUserID: UUID? { profilesResults.first?.linkedMemberID }
 
     @State private var store = TaskAdvisorChatStore.shared

@@ -32,7 +32,7 @@ struct ActivityDetailView: View {
 
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
 
     @State private var expanded: Set<UUID> = []
     @State private var undoPulse = 0
