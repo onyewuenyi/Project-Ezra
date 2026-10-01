@@ -106,6 +106,37 @@ enum TelemetryInviteStage: String, CaseIterable, Sendable {
     case accepted, acceptFailed = "accept_failed", identityLinked = "identity_linked"
 }
 
+/// Which chat a question was typed into. Ask is the home since 2026-09-23, so "Ask
+/// opened" would fire on every launch and say nothing; a QUESTION is the signal.
+enum TelemetryAskScope: String, CaseIterable, Sendable {
+    case household, task
+}
+
+/// Which rung answered a question: the deterministic floor (instant, with rows) or the
+/// on-device model. The pair is what decides whether the home earns its place — a home
+/// people ask on, against one they only pass through on the way to the list.
+enum TelemetryAskRoute: String, CaseIterable, Sendable {
+    case floor, model
+}
+
+/// What a person did with a line the home offered back as a to-do (2026-09-23).
+enum TelemetryCaptureOfferOutcome: String, CaseIterable, Sendable {
+    case added, askedAnyway = "asked_anyway"
+}
+
+/// Which count on the home's glance strip opened the list (2026-09-23) — the strip
+/// deep-links into the Tasks sheet filtered, so the kind is the whole payload.
+enum TelemetryGlanceKind: String, CaseIterable, Sendable {
+    case overdue, dueToday = "due_today", inProgress = "in_progress", waiting, decisions
+    case member, done
+}
+
+/// The verb a person tapped on a home row (2026-09-23): the recommended action, run
+/// from the answer instead of the swipe. "Decide" opens the page rather than acting.
+enum TelemetryRowVerb: String, CaseIterable, Sendable {
+    case start, resume, markDone = "mark_done", unblock, claim, decide
+}
+
 /// Why a weekly digest did NOT go out. Silence is a decision and gets a reason.
 enum TelemetryDigestSkip: String, CaseIterable, Sendable {
     case nothingToSay = "nothing_to_say", optedOut = "opted_out", noPermission = "no_permission"
@@ -128,6 +159,29 @@ enum TelemetryEvent: Sendable {
     case firstPayoff(elapsed: DurationBucket)
     /// A task reached `.done`.
     case taskCompleted
+    /// A person typed or tapped a question into a chat, and which rung answered it.
+    case askAsked(scope: TelemetryAskScope, route: TelemetryAskRoute)
+    /// The Tasks list was opened from the Ask home — the swap's other half, so the two
+    /// verbs can be compared per session.
+    case tasksOpened
+    /// A glance-strip count opened the list, filtered (2026-09-23).
+    case glanceOpened(kind: TelemetryGlanceKind)
+    /// How long the Tasks sheet stayed up before Done or a swipe — the modal-depth
+    /// meter: a sheet that is open for minutes at a time is a home in exile.
+    case tasksSheetDwell(elapsed: DurationBucket)
+    /// A row on the home performed its verb in place (2026-09-23).
+    case homeRowActed(verb: TelemetryRowVerb)
+    /// The Today return, tapped on a thread (2026-09-25): how often the home is come
+    /// back to after a question, against how often it is left behind.
+    case homeReturned
+    /// A capture landed during this look and rank did not seat it in the answer's rows
+    /// (2026-09-25): how many sit under "Just added".
+    case captureLandedBelow(count: CountBucket)
+    /// The home seated a "since you last looked" line, and how much it had to say —
+    /// whether the shared half of the home ever fires, without a word of what it said.
+    case catchUpSeated(changes: CountBucket)
+    /// The home held a to-do-shaped line back from the model and the person chose a door.
+    case captureOffer(outcome: TelemetryCaptureOfferOutcome)
     /// The Advisor spoke, and what happened next.
     case advisorOffered(move: AdvisorMove)
     case advisorActed(move: AdvisorMove)
@@ -151,6 +205,15 @@ enum TelemetryEvent: Sendable {
         case .captureCommitted: return "capture_committed"
         case .firstPayoff: return "first_payoff"
         case .taskCompleted: return "task_completed"
+        case .askAsked: return "ask_asked"
+        case .tasksOpened: return "tasks_opened"
+        case .glanceOpened: return "glance_opened"
+        case .tasksSheetDwell: return "tasks_sheet_dwell"
+        case .homeRowActed: return "home_row_acted"
+        case .homeReturned: return "home_returned"
+        case .captureLandedBelow: return "capture_landed_below"
+        case .catchUpSeated: return "catch_up_seated"
+        case .captureOffer: return "capture_offer"
         case .advisorOffered: return "advisor_offered"
         case .advisorActed: return "advisor_acted"
         case .advisorDismissed: return "advisor_dismissed"
@@ -178,12 +241,29 @@ enum TelemetryEvent: Sendable {
             ]
         case .firstPayoff(let elapsed):
             return ["elapsed": elapsed.rawValue]
-        case .taskCompleted, .householdActivated, .digestScheduled, .digestOpened:
+        case .taskCompleted, .tasksOpened, .homeReturned, .householdActivated, .digestScheduled,
+            .digestOpened:
             return [:]
+        case .askAsked(let scope, let route):
+            return ["scope": scope.rawValue, "route": route.rawValue]
+        case .catchUpSeated(let changes):
+            return ["changes": changes.rawValue]
+        case .captureLandedBelow(let count):
+            return ["count": count.rawValue]
+        case .glanceOpened(let kind):
+            return ["kind": kind.rawValue]
+        case .tasksSheetDwell(let elapsed):
+            return ["elapsed": elapsed.rawValue]
+        case .homeRowActed(let verb):
+            return ["verb": verb.rawValue]
+        case .captureOffer(let outcome):
+            return ["outcome": outcome.rawValue]
         case .advisorOffered(let move), .advisorActed(let move), .advisorDismissed(let move):
             return ["move": move.rawValue]
         case .modelCall(let feature, let served, let latency):
-            return ["feature": feature.rawValue, "served": served ? "yes" : "no", "latency": latency.rawValue]
+            return [
+                "feature": feature.rawValue, "served": served ? "yes" : "no", "latency": latency.rawValue,
+            ]
         case .invite(let stage):
             return ["stage": stage.rawValue]
         case .digestSkipped(let reason):
@@ -202,6 +282,16 @@ enum TelemetryEvent: Sendable {
             .captureCommitted(created: .twoToThree, merged: .zero, corrected: true),
             .firstPayoff(elapsed: .oneToFiveMinutes),
             .taskCompleted,
+            .askAsked(scope: .household, route: .floor),
+            .askAsked(scope: .task, route: .model),
+            .tasksOpened,
+            .glanceOpened(kind: .overdue),
+            .tasksSheetDwell(elapsed: .fiveToFifteenSeconds),
+            .homeRowActed(verb: .start),
+            .homeReturned,
+            .captureLandedBelow(count: .one),
+            .catchUpSeated(changes: .one),
+            .captureOffer(outcome: .added),
             .advisorOffered(move: .advise),
             .advisorActed(move: .createSteps),
             .advisorDismissed(move: .decide),

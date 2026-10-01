@@ -13,6 +13,18 @@ struct FlowLayout: Layout {
     var spacing: CGFloat = Spacing.xs
     var lineSpacing: CGFloat = Spacing.xs
 
+    /// A subview's size: its ideal, unless the ideal is wider than the row — then it is
+    /// offered the row's width and wraps inside it. Measured `.unspecified` alone, a
+    /// starter chip longer than the screen ("What's waiting on something?" at
+    /// accessibility-extra-large) ran off the trailing edge, because a `Text` only wraps
+    /// when something proposes a width (found on the Ask home's first accessibility
+    /// pass, 2026-09-23). Chips that fit are measured exactly as before.
+    private func fittedSize(of sub: LayoutSubview, in maxWidth: CGFloat) -> CGSize {
+        let ideal = sub.sizeThatFits(.unspecified)
+        guard maxWidth.isFinite, ideal.width > maxWidth else { return ideal }
+        return sub.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
+    }
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
         var x: CGFloat = 0
@@ -20,7 +32,7 @@ struct FlowLayout: Layout {
         var rowHeight: CGFloat = 0
         var maxRowWidth: CGFloat = 0
         for sub in subviews {
-            let s = sub.sizeThatFits(.unspecified)
+            let s = fittedSize(of: sub, in: maxWidth)
             if x > 0 && x + s.width > maxWidth {
                 maxRowWidth = max(maxRowWidth, x - spacing)
                 y += rowHeight + lineSpacing
@@ -42,7 +54,7 @@ struct FlowLayout: Layout {
         var y = bounds.minY
         var rowHeight: CGFloat = 0
         for sub in subviews {
-            let s = sub.sizeThatFits(.unspecified)
+            let s = fittedSize(of: sub, in: bounds.width)
             if x > bounds.minX && x + s.width > bounds.maxX {
                 x = bounds.minX
                 y += rowHeight + lineSpacing

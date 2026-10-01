@@ -311,6 +311,9 @@ enum SampleFlowFixtures {
         // the raw status setter (not `setStatus`) so no fixture writes a change-log entry.
         waterBill.status = .doing
         expenseReport.status = .doing
+        // Started three days ago and not touched since: the home's stall clause
+        // ("Started, untouched 3 days") is measurable on the simulator (2026-09-23).
+        expenseReport.lastHumanTouchAt = now.addingTimeInterval(-3 * day)
 
         // Human activity for the Activity feed: a completion by Maya, an assignment, and a
         // decision — each a reversible `.human` change-log entry carrying an `actorID`.

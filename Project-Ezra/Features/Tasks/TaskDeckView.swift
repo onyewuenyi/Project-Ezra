@@ -290,7 +290,7 @@ struct TaskDeckView: View {
     /// present exactly when `recommendedAction` is — absent on someone else's task, so
     /// "not yours to advance" holds in the household's shared scope whether the row is
     /// loose or in a deck.
-    private func card(_ task: TaskItem) -> some View {
+    private func row(_ task: TaskItem, subtitle: String?) -> some View {
         let advanceable = task.recommendedAction(among: allTasks, currentUserID: currentUserID) != nil
         return TaskRow(
             task: task,
@@ -301,16 +301,31 @@ struct TaskDeckView: View {
             ownerDisplayName: ownerDisplayName(task),
             ownerPhotoData: ownerPhotoData(task),
             interactive: advanceable,
-            // In a deck with a waiting member EVERY card reserves the second line: the
-            // horizontal scroll view takes its height from the first card it lays out,
-            // and a taller card paged to later was clipped — `fixedSize` gave the card
-            // its height, not the scroll view. Uniform from the first layout is the
-            // only shape that neither clips nor hops. Decks with no waits stay one line.
-            subtitle: blockerSummary(task) ?? (waitingCount > 0 ? " " : nil),
+            // The card decides the reserved height (see `card`); the row shows only
+            // what it has to say.
+            subtitle: subtitle,
             onComplete: { onComplete(task) },
             onCancel: onCancel.map { cb in { cb(task) } },
             onOpen: { onOpen(task) }
         )
+    }
+
+    private func card(_ task: TaskItem) -> some View {
+        let summary = blockerSummary(task)
+        // In a deck with a waiting member EVERY card keeps the two-line height: the
+        // horizontal scroll view takes its height from the first card it lays out, and a
+        // taller card paged to later was clipped. The reserved line used to be a blank
+        // subtitle, which pushed a one-line title to the TOP of its card with the glyph
+        // centred beside it (2026-09-26). Now the height comes from an invisible twin and
+        // the real row centres inside it.
+        return ZStack {
+            if summary == nil, waitingCount > 0 {
+                row(task, subtitle: " ")
+                    .hidden()
+                    .accessibilityHidden(true)
+            }
+            row(task, subtitle: summary)
+        }
         .padding(.horizontal, Spacing.md)
         .background {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)

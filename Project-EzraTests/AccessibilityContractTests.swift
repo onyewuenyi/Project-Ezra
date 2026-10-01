@@ -107,6 +107,32 @@ struct AccessibilityContractTests {
         #expect(lines.contains { $0.contains(".accessibilityAddTraits(isSelected ? [.isSelected] : [])") })
     }
 
+    /// The calm home's new controls (2026-09-25): the Today return is labelled for what
+    /// it does, the two kickers are headers so VoiceOver can jump between sections, and
+    /// the hero's verb says what a tap does.
+    @Test("The home's Today return, kickers and hero verb are spoken for what they are")
+    func homeControlsAreSpoken() throws {
+        let home = try code("Features/Chat/HouseholdChatView.swift")
+        #expect(home.contains { $0.contains(".accessibilityLabel(\"Back to today\")") })
+        #expect(home.contains { $0.contains("Text(\"Just added\")") })
+        let components = try code("Features/Chat/ChatComponents.swift")
+        #expect(components.contains { $0.contains("Text(\"Then, in order\")") })
+        #expect(components.filter { $0.contains(".accessibilityAddTraits(.isHeader)") }.count >= 1)
+        #expect(home.filter { $0.contains(".accessibilityAddTraits(.isHeader)") }.count >= 1)
+        #expect(components.contains { $0.contains("\"Runs this now\"") })
+    }
+
+    /// The openers seat at every launch and re-seat whenever the household moves; a
+    /// landing that fired for them buzzed and announced on every open (2026-09-23).
+    @Test("A reply only lands — haptic and announcement — after a person asked")
+    func replyLandingNeedsAQuestion() throws {
+        let lines = try code("Features/Chat/ChatComponents.swift")
+        #expect(
+            lines.contains {
+                $0.contains("guard let asked = messages.lastIndex(where: { $0.role == .user })")
+            })
+    }
+
     /// The detail pager gives its horizontal swipe named actions; the deck is the same
     /// interaction and gave none.
     @Test("Both horizontal pagers can be paged without the gesture")

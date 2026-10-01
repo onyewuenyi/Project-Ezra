@@ -190,7 +190,9 @@ struct ConfirmCreationCard: View, Equatable {
                 // unexplained status and the other destroyed the card — neither said what
                 // it was. The delete control is the only glyph in this row.
                 TextField("Task", text: titleBinding, axis: .vertical)
-                    .font(presentation == .hero ? .sectionHeader : .taskTitle)
+                    // The drafts are what the person came for (2026-09-25, the importance
+                    // audit): a step above a list row, and the lone hero a step above that.
+                    .font(presentation == .hero ? .navTitle : .sectionHeader)
                     .foregroundStyle(Palette.primaryText)
                     // A title is a NAME. If the model hasn't produced one, the card should
                     // not silently become a transcript viewer — cap it and let the field

@@ -104,13 +104,17 @@ struct ActorAvatar: View {
 
     var body: some View {
         if isAI {
+            // Neutral tile, accent glyph (2026-09-25, the importance audit): a gradient
+            // tile on every AI row made the feed's loudest element its most repeated
+            // one, louder than the Undo each row exists to offer. The gradient is for
+            // high-signal sites only.
             RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                .fill(Palette.accentGradient)
+                .fill(Palette.elevatedSurface)
                 .frame(width: size, height: size)
                 .overlay {
                     Image(systemName: "sparkles")
                         .font(.system(size: size * 0.44, weight: .semibold))
-                        .foregroundStyle(Palette.onAccent)
+                        .foregroundStyle(Palette.accentFlat)
                 }
         } else if let actorID, actorID == currentUserID {
             AvatarView(profile: profile, size: size)
@@ -123,6 +127,7 @@ struct ActorAvatar: View {
 }
 
 struct ActivityRow<Trailing: View>: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let entry: ChangeLogEntry
     var members: [FamilyMember] = []
     var currentUserID: UUID? = nil
@@ -138,8 +143,13 @@ struct ActivityRow<Trailing: View>: View {
                     .font(.supporting)
                     .foregroundStyle(entry.undone ? Palette.mutedText : Palette.primaryText)
                     .strikethrough(entry.undone)
+                // The why and the when are secondary to what happened (2026-09-26): at
+                // accessibility sizes this line ran to four lines under every row, so each
+                // entry filled half the screen. Two lines, then it truncates; the entry's
+                // detail page has the whole sentence.
                 Text(byline)
                     .metadataStyle()
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : nil)
             }
 
             Spacer(minLength: 0)

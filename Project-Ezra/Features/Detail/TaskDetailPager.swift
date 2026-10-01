@@ -30,6 +30,12 @@ extension EnvironmentValues {
 }
 
 struct TaskDetailPager: View {
+    /// The page counter's size: a metadata-sized number that grows with Dynamic Type
+    /// up to a ceiling (2026-09-26). The app's font tokens scale from the system trait,
+    /// so `.dynamicTypeSize(...)` could not cap them; a scaled metric can.
+    @ScaledMetric(relativeTo: .caption) private var counterSize: CGFloat = 12
+    private static let counterCeiling: CGFloat = 17
+
     /// The task the user tapped — always the first page shown, and the fallback if the
     /// page list ever empties out from under us.
     let opened: TaskItem
@@ -105,8 +111,13 @@ struct TaskDetailPager: View {
                     }
                     if livePages.count > 1, let index = currentIndex {
                         ToolbarItem(placement: .principal) {
+                            // A position, not content: capped so it never grows past the
+                            // page's own kicker (2026-09-26 — at accessibility sizes "2 of
+                            // 25" rendered near the title's size, in the toolbar). VoiceOver
+                            // still reads it whole.
                             Text("\(index + 1) of \(livePages.count)")
-                                .metadataStyle()
+                                .font(.system(size: min(counterSize, Self.counterCeiling)))
+                                .foregroundStyle(Palette.mutedText)
                                 .monospacedDigit()
                                 .accessibilityLabel("Task \(index + 1) of \(livePages.count)")
                         }
@@ -389,7 +400,8 @@ struct TaskMoreMenu: View {
     static func shareText(title: String, dueDate: Date?, notes: String?) -> String {
         var lines = [title.trimmingCharacters(in: .whitespacesAndNewlines)]
         if let dueDate {
-            lines.append("Due " + dueDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+            lines.append(
+                "Due " + dueDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
         }
         if let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
             lines.append("")

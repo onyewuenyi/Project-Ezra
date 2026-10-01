@@ -87,6 +87,12 @@ protocol InquiryScope: Sendable {
     /// Advisor's deterministic reading, the household's day answer. Nil when there is
     /// nothing factual to open with. Default: nil.
     func opener() -> InquiryAnswer?
+    /// Every unasked line the conversation opens with — a REQUIREMENT, not only an
+    /// extension default, or the generic store dispatches to the default and a scope's
+    /// override never runs (the household's catch-up line was built and never seated
+    /// for exactly that reason, 2026-09-23).
+    func openers() -> [InquiryAnswer]
+    var openerFingerprint: Int { get }
 
     /// The most lines a list-shaped reply may run to (the prose clamp is shared).
     static var maxLines: Int { get }
@@ -117,12 +123,23 @@ extension InquiryScope {
     func context(for question: String) -> InquiryContext { .none }
     var sessionDiscriminator: String { "" }
     func opener() -> InquiryAnswer? { nil }
+    /// Every unasked line the conversation opens with, in order. The default is the
+    /// one opener; the household adds its catch-up line (2026-09-23).
+    func openers() -> [InquiryAnswer] { opener().map { [$0] } ?? [] }
+    /// Identity of the OPENERS — what decides whether `open` re-seats them. Defaults to
+    /// the session fingerprint; a scope whose openers read more than its stable facts
+    /// (the household's catch-up line) folds that in HERE, never in `fingerprint`,
+    /// which is the session cache key and the model's instructions.
+    var openerFingerprint: Int { fingerprint }
 }
 
 /// What a floor or model answer carries back: the text and the tasks it is about.
-struct InquiryAnswer: Equatable, Sendable {
+struct InquiryAnswer: Equatable, Hashable, Sendable {
     let text: String
     let citedTaskIDs: [UUID]
+    /// One clause per cited task saying why it is in this answer (the day answer's
+    /// rows, 2026-09-23). Empty for answers whose sentence is the whole reason.
+    var reasons: [UUID: String] = [:]
 }
 
 /// Something a reply may cite: a task the scope showed the model, by title.
@@ -551,6 +568,10 @@ final class InquiryStore<Scope: InquiryScope> {
         var messages: [ChatMessage] = []
         /// The fingerprint the LAST turn was sent over. Nil until the first ask.
         var fingerprint: Int?
+        /// The openers' fingerprint the thread was last seated on (see `open`). Kept
+        /// apart from `fingerprint` so re-seating the openers never reads as a moved
+        /// session to the first real turn.
+        var openerFingerprint: Int?
         /// In-flight replies, keyed by the advisor message they will fill.
         var work: [UUID: Task<Void, Never>] = [:]
         /// Which rung answered the last question.
@@ -613,7 +634,9 @@ final class InquiryStore<Scope: InquiryScope> {
             ledger.record(.facts, for: .chat, now: now)
             conversation.lastRoute = .floor
             conversation.messages.append(
-                ChatMessage(role: .advisor, text: floor.text, citedTaskIDs: floor.citedTaskIDs))
+                ChatMessage(
+                    role: .advisor, text: floor.text, citedTaskIDs: floor.citedTaskIDs, reasons: floor.reasons
+                ))
             conversations[scope.key] = conversation
             return
         }
@@ -632,14 +655,28 @@ final class InquiryStore<Scope: InquiryScope> {
     func open(scope: Scope, now: Date = Date()) {
         var conversation = conversations[scope.key] ?? Conversation()
         guard !conversation.messages.contains(where: { $0.role == .user }) else { return }
-        guard conversation.fingerprint != scope.fingerprint else { return }
+        guard conversation.openerFingerprint != scope.openerFingerprint else { return }
+        // **A re-seated opener keeps its identity (2026-09-25).** The home's answer
+        // re-seats whenever the household moves — a task completed from its own hero
+        // row, a capture landing — and a fresh id each time made SwiftUI replace the
+        // whole block (fade out, fade in) instead of animating the rows: the done row
+        // leaving, the next rising into the hero slot, the count rolling. Same slot,
+        // same id; the text and the rows are what change.
+        let previous = conversation.messages
         conversation.messages.removeAll()
         conversation.fingerprint = scope.fingerprint
-        if let opener = scope.opener() {
+        conversation.openerFingerprint = scope.openerFingerprint
+        let openers = scope.openers()
+        if !openers.isEmpty {
             ledger.record(.facts, for: .chat, now: now)
             conversation.lastRoute = .floor
-            conversation.messages.append(
-                ChatMessage(role: .advisor, text: opener.text, citedTaskIDs: opener.citedTaskIDs))
+            for (index, opener) in openers.enumerated() {
+                let keptID = previous.indices.contains(index) ? previous[index].id : UUID()
+                conversation.messages.append(
+                    ChatMessage(
+                        id: keptID, role: .advisor, text: opener.text, citedTaskIDs: opener.citedTaskIDs,
+                        reasons: opener.reasons))
+            }
         }
         conversations[scope.key] = conversation
     }

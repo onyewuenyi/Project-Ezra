@@ -150,10 +150,14 @@ struct SettingsView: View {
 
     // MARK: - Profile (name + photo — the roster's youRow idiom)
 
+    /// A row, not a hero (2026-09-25, the importance audit): the person's own name is
+    /// the least-changed thing in Settings, and an 88pt photo over a 28pt name made it
+    /// the page's largest object, pushing the digest and privacy sections below the
+    /// fold. Same editors, row weight.
     private var profileCard: some View {
-        VStack(spacing: Spacing.md) {
+        HStack(spacing: Spacing.md) {
             PhotosPicker(selection: $photoItem, matching: .images) {
-                AvatarView(profile: profile, size: 88)
+                AvatarView(profile: profile, size: 52)
             }
             .buttonStyle(.pressableIcon)
             .accessibilityLabel("Your photo")
@@ -177,16 +181,16 @@ struct SettingsView: View {
                 // whose whole value must be readable to be recognised as yours.
                 TextField("Your name", text: bindingName(profile), axis: .vertical)
                     .lineLimit(1...2)
-                    .font(.screenTitle)
+                    .font(.sectionHeader)
                     .foregroundStyle(Palette.primaryText)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
                     .textInputAutocapitalization(.words)
                     .submitLabel(.done)
                     .onSubmit { syncYou() }
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Spacing.md)
         .background(
             Palette.primarySurface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
         )

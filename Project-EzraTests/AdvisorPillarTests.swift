@@ -271,7 +271,8 @@ struct DayAnswerTests {
         let opener = HouseholdInquiryScope(facts: facts).opener()
         #expect(opener != nil)
         #expect(opener?.citedTaskIDs.isEmpty == false)
-        #expect(opener?.text == HouseholdChatFloor.answer(question: "what deserves me today", facts: facts)?.text)
+        #expect(
+            opener?.text == HouseholdChatFloor.answer(question: "what deserves me today", facts: facts)?.text)
 
         // Nothing open — no rows to cover, so the sheet lands ready to type.
         let empty = HouseholdChatFacts(now: facts.now, members: facts.members, open: [], done: [])
@@ -286,14 +287,20 @@ struct DayAnswerTests {
         #expect(!HouseholdChatPrompt.starterQuestions(for: empty).contains("What deserves me today?"))
     }
 
-    @Test("Rank order, when present, decides the day answer")
+    @Test("Rank order, when present, decides the day answer within its band")
     func rankDecides() {
         var facts = HouseholdChatEval.fixture()
-        let unblocked = facts.open.filter { !$0.isBlocked }
-        guard unblocked.count >= 2 else { return }
-        facts.rankOrder = [unblocked.last!.id, unblocked.first!.id]
-        let answer = facts.dayAnswer(for: nil)
-        #expect(answer.first?.id == unblocked.last!.id)
+        // Rank is the only ORDER: two plain rows (no time pressure, no decision) seat in
+        // rank order, reversed here to prove it is rank and not the facts' own order.
+        let plain = facts.open.filter { !$0.isBlocked && !$0.isTimePressed && !$0.needsDecision }
+        guard plain.count >= 2 else { return }
+        facts.rankOrder = [plain.last!.id, plain.first!.id]
+        #expect(facts.dayAnswer(for: nil).map(\.id) == [plain.last!.id, plain.first!.id])
+        // But the answer SEATS time pressure ahead of rank (2026-09-23): an overdue row
+        // ranked last still leads.
+        let overdue = facts.open.first { !$0.isBlocked && $0.isOverdue }!
+        facts.rankOrder = [plain.last!.id, overdue.id]
+        #expect(facts.dayAnswer(for: nil).first?.id == overdue.id)
     }
 
     /// The opener is the first sentence the Ask sheet ever shows, and it read
@@ -306,7 +313,7 @@ struct DayAnswerTests {
         let facts = HouseholdChatEval.fixture()
         let mine = HouseholdChatFloor.answer(question: "What deserves me today?", facts: facts)
         #expect(mine?.text.contains("for you") == false)
-        #expect(mine?.text.hasSuffix("deserve you first — in order.") == true)
+        #expect(mine?.text.hasSuffix("deserve you first.") == true)
 
         // Scoping the day answer to someone else reaches it through the phrasings that
         // don't spell "me" — "what deserves Maya today" carries "today" and lands on
@@ -315,10 +322,11 @@ struct DayAnswerTests {
         #expect(HouseholdChatFloor.shape(of: "What matters most for Maya?", facts: facts) == .today)
         let hers = HouseholdChatFloor.answer(question: "What matters most for Maya?", facts: facts)
         #expect(hers?.text.contains("deserve you first") == false)
-        #expect(hers?.text.contains("Maya first — in order.") == true)
-        #expect(hers?.citedTaskIDs.allSatisfy { id in
-            facts.open.first { $0.id == id }?.ownerID == maya.id
-        } == true)
+        #expect(hers?.text.contains("Maya first.") == true)
+        #expect(
+            hers?.citedTaskIDs.allSatisfy { id in
+                facts.open.first { $0.id == id }?.ownerID == maya.id
+            } == true)
 
         // One row is singular, and still names the subject exactly once.
         let yours = facts.members.first(where: \.isYou)
@@ -326,7 +334,7 @@ struct DayAnswerTests {
             let single = HouseholdChatFacts(
                 now: facts.now, members: facts.members, open: [one], done: facts.done)
             let answer = HouseholdChatFloor.answer(question: "What deserves me today?", facts: single)
-            #expect(answer?.text == "One thing deserves you first — in order.")
+            #expect(answer?.text == "One thing deserves you first.")
         }
     }
 }

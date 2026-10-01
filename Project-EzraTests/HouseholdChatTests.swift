@@ -252,6 +252,19 @@ struct HouseholdChatFloorTests {
         }
         let solo = HouseholdChatFacts(now: facts.now, members: [facts.members[0]], open: [], done: [])
         #expect(!HouseholdChatPrompt.starterQuestions(for: solo).contains("Who has the most on their plate?"))
+        // SEATED — under the day answer on the home (2026-09-23): its own question is
+        // not offered, the counts the strip opens are not offered, and what remains are
+        // the judgment chips: the time you have, the waits, the rot.
+        let seated = HouseholdChatPrompt.starterQuestions(for: facts, seated: true)
+        #expect(!seated.contains("What deserves me today?"))
+        #expect(!seated.contains("What's overdue?"))
+        #expect(!seated.contains("What's due today?"))
+        // The other caretaker's day question keeps its lead; the quick chip follows.
+        #expect(seated.first?.hasPrefix("What deserves ") == true)
+        #expect(seated.contains(DayAnswer.quickChip))
+        #expect(seated.contains("What could I do while I wait?"))
+        #expect(seated.count == 3)
+        #expect(HouseholdChatFloor.shape(of: DayAnswer.quickChip, facts: facts) == .quick)
     }
 
     @Test("Facts are built from the live store with owners resolved and 'You' for the asker")
@@ -420,21 +433,32 @@ struct HouseholdChatFollowUpTests {
         #expect(!model.contains("What's overdue?"))
     }
 
-    @Test("The glance lists only non-zero counts, in triage order, each a floor question")
+    @Test("The glance lists only non-zero counts, in triage order, each opening the list on its subset")
     func summary() {
         let items = HouseholdChatPrompt.summary(for: facts)
+        // The other caretakers' loads sit between the decisions and "done" (2026-09-23),
+        // by name, only when non-zero, two at most. No "N open": a total is not a glance.
+        let loads = facts.members.filter { !$0.isYou }
+            .map { ($0.name, facts.openTasks(of: $0).count) }.filter { $0.1 > 0 }
+            .sorted { $0.1 > $1.1 }.prefix(2)
+            .map { "\($0.0) \($0.1)" }
         #expect(
             items.map(\.label) == [
-                "2 overdue", "2 due today", "1 in progress", "3 waiting", "2 decisions", "14 open",
-                "3 done this week",
-            ])
+                "2 overdue", "2 due today", "1 in progress", "3 waiting", "2 decisions",
+            ] + loads + ["3 done this week"])
+        #expect(!loads.isEmpty, "the fixture has another caretaker with work; the strip should name them")
+        // Every count is a deep-link, never a question: a tab and a status or an
+        // attention, so the sheet opens already narrowed to exactly what was counted.
         for item in items {
-            #expect(
-                HouseholdChatFloor.shape(of: item.question, facts: facts) != nil,
-                "\(item.question) is not a floor question")
+            #expect(item.preset.tab == .everyone, "\(item.label) should open the whole household's list")
+            #expect(item.preset.status != nil || item.preset.attention != nil, "\(item.label) opens nothing")
+            #expect(!item.opens.isEmpty)
         }
+        #expect(items[0].preset.attention == .overdue)
+        #expect(items[2].preset.status == .doing)
+        #expect(items.last?.preset.status == .done)
         let quiet = HouseholdChatFacts(now: facts.now, members: facts.members, open: [], done: [])
-        #expect(HouseholdChatPrompt.summary(for: quiet).map(\.label) == ["0 open"])
+        #expect(HouseholdChatPrompt.summary(for: quiet).isEmpty)
     }
 
     @Test("A divider precedes a new sitting, not every line")

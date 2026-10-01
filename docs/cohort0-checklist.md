@@ -200,6 +200,30 @@ file. See *Keeping this file current* at the bottom.
   steps, or a done member still in the deck is a finding. The deck's cards carry NO
   lifecycle swipes (horizontal is navigation there) — the glyph is the completion target
   and must route through the undo-aware complete/cancel seams like every other row.
+- **The home is Ask, oriented, with the list one tap away (2026-09-23).** A seeded launch
+  must open on the day answer's rows under the glance strip — a blank chat with three
+  chips over a store that has open tasks is a finding (that arm is for an EMPTY store).
+  The header's `checklist` button presents My Tasks as a sheet with its large title and
+  Done; the orb sits in the home's bar at the trailing edge and rides the keyboard
+  without covering Send; over the list the 62pt orb sits bottom-trailing as before, and
+  the composer, Activity and Settings all present OVER the list. Both "…" menus reach
+  Activity, Manage Household and Settings. On a shared household with someone else's
+  acts on the trail, the home opens with "Since you last looked, …" under the day
+  answer, and it is gone on the next foreground; a solo household never shows it, and
+  its day-answer rows carry no "You" caption (every row is yours) — a "You" under each
+  row on a solo install is a finding. The chips name the other caretaker with the
+  fullest plate ("What deserves Maya today?") and the glance strip lists their loads.
+  The home's title is the product's name with the date as its subtitle; the glance
+  strip wraps and shows at most six counts, none clipped; the list button reads
+  "Tasks". A count cut at the edge, a bare glyph for the list, or a date line spent
+  inside the thread is a finding (design pass, 2026-09-23).
+  A to-do typed into the home's question box ("call the dentist tomorrow") is offered
+  back with Add it as a task / Ask it anyway, never answered as conversation; a
+  question through the same path answers as before (`-SendAsk`, 2026-09-23).
+  Both destructive Settings buttons are reached from INSIDE the Tasks sheet now
+  (`-OpenTasks -ClearAllTasks -DismissAfterClear`, plain-launch guard in the loop): the
+  process must survive and the rebuilt HOME must show behind the closed sheets — the
+  first measurement after the swap trapped on a thread index (2026-09-23).
 - **Every surface survives accessibility text sizes.** Set the simulator with
   `xcrun simctl ui <udid> content_size accessibility-extra-large` (reset to `medium`
   after) and walk the home, the detail, the capture canvas and reveal, Activity, Ask,
@@ -217,6 +241,68 @@ file. See *Keeping this file current* at the bottom.
   700pt column (`LayoutMetrics.readableWidth`, 2026-09-18) — a due label a screen-width
   from its title or a 1300pt CTA is a finding. Sheets are form sheets there and need
   nothing. iPhone landscape is unverified on this host.
+- **The day answer is composed (2026-09-23).** On a seeded launch every row under
+  "N things deserve you first" carries a second line saying why it is there — a row
+  reading only "You" or nothing is a finding; the overdue bill leads and the four
+  decisions read as ONE row ("Oldest of 4 decisions waiting · N days") with Decide;
+  after 18:00 the lead reads "still deserve you" and an empty evening reads "Nothing
+  more needs you tonight."; "and N more in Tasks" closes the rows; the parked-capture
+  and "Group as …?" rows sit on the HOME above the answer and are absent from the
+  Tasks sheet; each strip count opens the sheet on Everyone with the matching filter
+  capsule named (`-TasksPreset overdue` shows it) — a count that asks a question is a
+  finding; the chips under the answer include "I've got 15 minutes" when anything
+  fits and never "What deserves me today?"; each row's trailing verb runs the same
+  action as its leading swipe and shows the Undo pill, and at accessibility-extra-large
+  the verb is a glyph and the title keeps its width; long-press on a row offers "Hand
+  to <name>". The empty home (fresh install, `hasOnboarded` set) reads "Tell me
+  everything on your mind." over one gradient Start talking button.
+- **The calm home (2026-09-23).** A seeded launch shows, in this order and nothing
+  else: title and date; one lead sentence at supporting weight ("4 things deserve you
+  first." / "… still deserve you." after 18:00); ONE hero row with a larger title, its
+  reason and the page's only verb; "Then, in order"; three quiet rows with reasons and
+  chevrons and no verbs; "and N more in Tasks"; Ezra's questions (parked capture, group
+  proposal) if any; one muted news sentence with no rows; then the bar with one line of
+  two suggestions under the field (one at accessibility sizes). A glance strip on the
+  home, a fifth row, a verb on a quiet row, a news card, or a chip section in the
+  thread is a finding. The Tasks sheet shows the counts under its header and a count
+  sets the filter capsule in place. A capture committed from the sheet's orb must close
+  the sheet and land on the home with the new task folded into the answer (the merge
+  pill, if any, over the home).
+- **The home's motion and returns (2026-09-25).** `-PressHomeVerb` must show, in order:
+  the hero's glyph filled and the row dimmed for a beat, then the row gone, the next
+  row risen into the hero slot, "and N more" rolled down by one, the undo pill ABOVE the
+  bar (never over the suggestions). A bare launch must settle: rows one beat apart,
+  then the link and news. `-OpenCapture "…" -AutoCreate` from the home must end on the
+  home with the new task under "Just added" (washed for a beat) unless rank seated it in
+  the rows; a landing that only changes the count is a finding. After any question a
+  leading "Today" button must appear and return the home with a settle. Long-press on
+  the hero must offer "Why this first?" above the hand-offs, and the answer is the
+  floor's own sentence ("… is first because it's the oldest of 3 decisions waiting and
+  10 days now. After it, …") with the two tasks as rows — a model answer here ("You do
+  not know why …") is a finding. The bar must sit at the bottom from the first painted
+  frame (no slide, no labels at the window origin); suggestions hide while a draft is
+  being typed. Quiet rows carry no
+  container; the hero is the page's only card and its only blue.
+- **Size follows importance (2026-09-25).** On the seeded home the brand is an inline
+  title with the date under it; the hero's title is the largest text on the screen and
+  its verb reads as a button; the ask field is visibly taller than a list row and its
+  text is body size; each suggestion is a full-width line at 15pt in primary text. A
+  large "Ezra" title, a 13pt verb, or a suggestion smaller than a row's reason is a
+  finding.
+- **Importance on the detail, the list and the reveal (2026-09-25).** On a detail page a
+  set due date is the first chip, and empty chips ("No due date", "Not urgent", "No
+  estimate") come after every set one. The Tasks sheet's counts are overdue, waiting and
+  decisions only, aligned under the scopes. On the reveal each draft title is larger than
+  the echo of what was said, and the echo is grey until tapped. Activity's AI rows carry a neutral tile, never the
+  gradient; the task chat opens with no empty band above the thread while its reading
+  loads; Settings shows the profile as one row with the digest visible below it.
+- **The deeper pass (2026-09-26).** On iPad the home's hero and rows are visible on
+  every launch path, including under a presented sheet; after Create the sheet leaves
+  showing the reveal, never "Nothing actionable in that"; the task chat opens with the
+  keyboard down while its reading loads; a one-line deck card centres its title; the
+  detail's page counter stays small at accessibility sizes; the onboarding result's
+  task titles are larger than its area labels; "Show me" is visibly disabled while
+  empty. Judge a first run only after `defaults delete`-ing any simulator-level flag.
 - **An empty reveal has no primary button.** "Nothing actionable in that" shows the
   hint and "Keep it as one task" only (2026-09-18) — a gradient "Create 0 tasks" is a
   finding. A filler-only line ("hmm ok so") reaches that reveal instantly, never the

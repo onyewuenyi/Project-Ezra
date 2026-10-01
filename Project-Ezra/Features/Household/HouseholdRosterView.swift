@@ -44,6 +44,7 @@ struct HouseholdRosterView: View {
 }
 
 private struct HouseholdRosterContent: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject var household: Household
     @ObservedObject var profile: UserProfile
 
@@ -129,7 +130,10 @@ private struct HouseholdRosterContent: View {
                 household.photoUpdatedAt = Date()
                 context.saveChanges()
             } label: {
-                AvatarView(household: household, size: 88)
+                // Smaller at accessibility sizes (2026-09-26): 88pt over a two-line
+                // name at that size took the whole first screen, and the members —
+                // the page's working content — started below the fold.
+                AvatarView(household: household, size: dynamicTypeSize.isAccessibilitySize ? 56 : 88)
             }
             .accessibilityLabel("Family photo")
 
@@ -139,7 +143,7 @@ private struct HouseholdRosterContent: View {
             // Settings profile name follows.
             TextField("Family name (optional)", text: $household.name.orEmpty, axis: .vertical)
                 .lineLimit(1...2)
-                .font(.screenTitle)
+                .font(dynamicTypeSize.isAccessibilitySize ? .sectionHeader : .screenTitle)
                 .foregroundStyle(Palette.primaryText)
                 .multilineTextAlignment(.center)
                 .textInputAutocapitalization(.words)

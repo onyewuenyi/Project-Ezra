@@ -112,6 +112,13 @@ struct TaskSearchView: View {
                 // After the sheet's presentation settles, so the field is in place before
                 // the keyboard slides under it rather than both moving at once.
                 try? await Task.sleep(for: .milliseconds(350))
+                #if DEBUG
+                // `-OpenSearch "query"` (see `TasksHomeView`) prefills the field.
+                if let seed = UserDefaults.standard.string(forKey: "debug.searchSeed") {
+                    UserDefaults.standard.removeObject(forKey: "debug.searchSeed")
+                    searchText = seed
+                }
+                #endif
                 searchFocused = true
             }
             .toolbar {

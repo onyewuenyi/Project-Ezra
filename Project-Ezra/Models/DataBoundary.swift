@@ -81,6 +81,10 @@ struct DataBoundary: Equatable {
     /// "anywhere" on purpose (2026-09-20): this screen is shown without the sync
     /// sentence beside it, and on a signed-in phone the person's own copy does go to
     /// their own iCloud. Claim the thing that is true. See `neverSentence`.
+    /// The capture sentence for the moment it is read — the empty home's, which cannot
+    /// name the cloud seam itself (the household chat is grep-pinned on-device).
+    static var captureShortNow: String { captureShort(cloudReachable: CloudModel.isAvailable) }
+
     static func captureShort(cloudReachable: Bool) -> String {
         cloudReachable
             ? "Read on your device first. A long brain dump may go to the cloud for a deeper read."
