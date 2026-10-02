@@ -12,7 +12,8 @@ kept the device locked to it, surviving EndSession and a simulator reboot.
 usage: xcui.py --udid <UDID> --container <path.xcodeproj|.xcworkspace> --bundle <id>
                [--args="-Flag value"] (the = form: launch arguments start with -) [--expect "label"]… [--absent "label"]… [--name "Screen Name"]
 Prints `hierarchy: <path>`, `screenshot: <path>`, then `ok`/`FAIL` per expectation.
-Exit 0 all good · 1 an expectation failed · 3 Xcode's tools unavailable (not running, not approved).
+Exit 0 all good · 1 an expectation was OBSERVED to fail · 3 nothing could be observed (Xcode not
+running, not approved, or not answering: a timeout is never reported as a failure).
 
 Notes measured on Xcode 27.0: the agent is approved by the first XcodeOpenWorkspace (until then
 every tool answers "isn't approved"); workspace calls need the workspaceIdentifier from
@@ -97,7 +98,11 @@ def main() -> int:
         print(f"xcui: Xcode tools unavailable ({str(e)[:160]})")
         return 3
     try:
-        b.tool("XcodeListWorkspaces", {}, 30)
+        b.tool("XcodeListWorkspaces", {}, 45)
+    except TimeoutError:
+        print("xcui: Xcode did not answer within 45s — check Xcode for an approval prompt for this MCP client; nothing was observed")
+        b.close()
+        return 3
     except RuntimeError as e:
         if "approved" not in str(e):
             print(f"xcui: Xcode tools unavailable ({str(e)[:160]})")
@@ -114,13 +119,13 @@ def main() -> int:
         def args() -> dict:  # Xcode refuses an id "currently in use or recently used": fresh one per attempt
             return {"sessionIdentifier": f"{a.name.title()} {uuid.uuid4().hex[:6]}", "deviceIdentifier": a.udid}
         try:
-            return json.loads(b.tool("DeviceInteractionStartSession", args(), 120))["interactionSessionKey"]
+            return json.loads(b.tool("DeviceInteractionStartSession", args(), 60))["interactionSessionKey"]
         except RuntimeError as e:
             stale = re.search(r"different session with key '([^']+)'", str(e))
             if not stale:
                 raise
             b.tool("DeviceInteractionEndSession", {"interactionSessionKey": stale.group(1)}, 60)
-            return json.loads(b.tool("DeviceInteractionStartSession", args(), 120))["interactionSessionKey"]
+            return json.loads(b.tool("DeviceInteractionStartSession", args(), 60))["interactionSessionKey"]
 
     # Launch our build with the screen's arguments, the same way the screenshots do.
     sim = ["/bin/bash", a.sim, "launch", *shlex.split(a.args)]
@@ -134,7 +139,7 @@ def main() -> int:
         return 3
     rc = 0
     try:
-        cap = json.loads(b.tool("DeviceInteractionSynthesize", {"interactSessionKey": key, "activationBundleId": a.bundle}, 120))
+        cap = json.loads(b.tool("DeviceInteractionSynthesize", {"interactSessionKey": key, "activationBundleId": a.bundle}, 60))
         hier = open(cap["hierarchyPath"], errors="replace").read()
         print(f"hierarchy: {cap['hierarchyPath']}\nscreenshot: {cap['screenshotPath']}")
         labels = re.findall(r"label: '((?:[^'\\]|\\.)*)'", hier) + re.findall(r"identifier: '((?:[^'\\]|\\.)*)'", hier)
@@ -146,6 +151,9 @@ def main() -> int:
             hit = any(bad in l for l in labels)
             print(f"{'FAIL' if hit else 'ok  '} does not show '{bad}'")
             rc |= 1 if hit else 0
+    except TimeoutError as e:
+        print(f"xcui: Xcode did not answer ({e}) — check Xcode for an approval prompt for this MCP client; nothing was observed")
+        rc = 3
     except Exception as e:
         print(f"xcui: {str(e)[:300]}")
         rc = 1

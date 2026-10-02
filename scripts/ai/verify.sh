@@ -7,11 +7,12 @@
 #   4 seams    no launch-argument read outside #if DEBUG (Release safety)
 #   5 reach    every app file/screen the change can affect (blast radius), to choose what to look at
 #   6 visual   each screen in .claude/ios-screens.txt at default, dark and AX5 (captured here, JUDGED by eye/agent)
-# usage: verify.sh [--no-visual] [--no-tests] [screen names…]
+#   7 release  (with --release) the Release build audited for submission blockers (release.sh)
+# usage: verify.sh [--no-visual] [--no-tests] [--release] [screen names…]
 source "$(dirname "$0")/lib.sh"
 cd "$AI_ROOT"
-novisual=0; notests=0; names=()
-for a in "$@"; do case $a in --no-visual) novisual=1;; --no-tests) notests=1;; *) names+=("$a");; esac; done
+novisual=0; notests=0; release=0; names=()
+for a in "$@"; do case $a in --no-visual) novisual=1;; --no-tests) notests=1;; --release) release=1;; *) names+=("$a");; esac; done
 rep="$BUILD_DIR/verify"; rm -rf "$rep"; mkdir -p "$rep"
 rows=(); fail=0
 gate() {  # gate <n> <name> <command…>; output to $rep/<name>.txt, last line is the summary
@@ -32,6 +33,7 @@ gate 5 reach reach
 if [[ $novisual == 1 || ! -f .claude/ios-screens.txt ]]; then
   why=$([[ $novisual == 1 ]] && echo "--no-visual" || echo "no .claude/ios-screens.txt"); rows+=("| 6 | visual | SKIPPED | | $why |"); echo "6  visual  SKIPPED ($why)"
 else gate 6 visual "$AI_DIR/visual.sh" ${names[@]+"${names[@]}"}; fi
+if [[ $release == 1 ]]; then gate 7 release "$AI_DIR/release.sh"; fi
 {
   echo "## Verification ($(git rev-parse --short HEAD 2>/dev/null) + working tree, $(date '+%Y-%m-%d %H:%M'))"
   echo; echo "| # | Gate | Result | Time | Summary |"; echo "|---|---|---|---|---|"

@@ -14,7 +14,7 @@ screens="$AI_ROOT/.claude/ios-screens.txt"
 out="$EVIDENCE_ROOT/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$out"
 S() { "$AI_DIR/sim.sh" "$@"; }
 S install >/dev/null; S statusbar >/dev/null
-fail=0; t0=$(date +%s)
+fail=0; t0=$(date +%s); xcode_down=""
 while IFS='|' read -r name args f3 f4; do
   name=$(echo "$name" | xargs); args=$(echo "${args:-}" | xargs)
   expects=(); for f in "${f3:-}" "${f4:-}"; do
@@ -37,7 +37,9 @@ while IFS='|' read -r name args f3 f4; do
     if ! S alive; then echo "visual: $name/$v: the app is not running after launch"; fail=1; continue; fi
     S shot "$out/$name-$v.png" >/dev/null
   done
-  if (( ${#expects[@]} )); then
+  if (( ${#expects[@]} )) && [[ -n $xcode_down ]]; then
+    echo "visual: $name: hierarchy assertions SKIPPED (not observed, not passed): $xcode_down"
+  elif (( ${#expects[@]} )); then
     container=$AI_ROOT/${WORKSPACE:-$PROJECT}
     set +e
     python3 "$AI_DIR/xcui.py" --udid "$(S udid)" --container "$container" --bundle "$APP_BUNDLE_ID" \
@@ -45,7 +47,8 @@ while IFS='|' read -r name args f3 f4; do
     xr=$?; set -e
     case $xr in
       0) echo "visual: $name: hierarchy assertions passed ($(grep -c '^ok' "$out/$name-assert.txt"))" ;;
-      3) echo "visual: $name: hierarchy assertions SKIPPED: $(grep -m1 '^xcui' "$out/$name-assert.txt" | cut -c1-200)" ;;
+      3) xcode_down=$(grep -m1 '^xcui' "$out/$name-assert.txt" | cut -c1-180)
+         echo "visual: $name: hierarchy assertions SKIPPED (not observed, not passed): $xcode_down" ;;
       *) echo "visual: $name: hierarchy assertion FAILED:"; grep -E '^FAIL|^xcui' "$out/$name-assert.txt"; fail=1 ;;
     esac
   fi

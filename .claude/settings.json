@@ -80,7 +80,6 @@
       "Bash(git push:*)",
       "Bash(rm -rf:*)",
       "Edit(**/*.pbxproj)",
-      "Write(**/*.pbxproj)",
       "mcp__xcode__UpdateTargetBuildSetting",
       "mcp__xcode__AddEntitlement",
       "mcp__xcode__AddInfoPlist",
