@@ -276,3 +276,57 @@ Recorded here (the product spec's §11 carries the phase order). **The cloud run
 - **Two ways onto `main`, by who is committing.** The owner's local sessions commit directly to `main` and push — one developer, no review to wait for. Cloud/background Claude sessions (the code-review, dead-code and design-audit routines) cannot be watched while they work, so they get a `claude/<name>` branch and open a PR; the owner reads the diff and merges it on GitHub — with no CI, the PR IS the review, and it is the only place a bad autonomous commit can be caught before it is on `main`. The cost is divergence: a merge on GitHub puts a merge commit on `origin/main` that local `main` never sees, and a local session that keeps committing widens the gap silently (2026-09-17: 21 unpushed local commits over 2 remote ones before anyone noticed; the same session found 9 dangling `claude/*` branches, 5 of them already merged). So **every local session starts with `git fetch && git status`**, and a diverged `main` is reconciled with `git rebase origin/main` — the local commits replay over the merged PR and history stays linear; a merge commit from the local side would make `main` read like two teams. A merged `claude/*` branch is deleted on the remote; an OPEN PR's branch is left alone, because the design-audit routine opens docs-only PRs that wait for the owner's read, and deleting the branch would close the PR.
 - **`docs/cohort0-checklist.md` is the Cohort 0 Readiness Audit's ground truth — update it in the same change that changes a flow.** The routine reads that file instead of carrying its own list, so a new surface, a new model rung, a new persistence writer or a retired feature each move a check; a checklist that lags the code produces a clean report about an app that no longer exists. A finding ruled "won't fix" moves to its *Known and accepted* section with the reason. The audit may PROPOSE additions in an issue body; it never edits the file.
 - No CI yet. `.gitignore` covers build artifacts / `xcuserdata` / `.claude/settings.local.json`.
+
+## Moved from CLAUDE.md (2026-10-02)
+
+Verbatim text from the pre-2026-10-02 CLAUDE.md that had no other copy, kept so the lean CLAUDE.md lost nothing.
+
+
+### 
+
+Rules for working in this repository. **This file keeps the rules; `docs/decisions.md` keeps the full text every rule was compressed from (verbatim, same headings — grep a rule's bold lead there for its history), and the topical docs keep the why.** A rule that changes here changes there too.
+
+### What this is
+
+**Project Ezra** ("Managing Chaos, Effortlessly") — an AI-managed household task system for iOS. SwiftUI + Core Data, single app target. **The product spec is not in this repo:** *Ezra Product Shape v8* (https://claude.ai/code/artifact/aa4e89a0-a1ff-4ed2-b0f8-c6e227ed7014) is the source of truth for what the product is and what the MVP cuts; where any file here disagrees with it, the artifact wins. **Kinly** is the launch positioning layered over v8 (`docs/kinly-launch-plan.md`) — not a rename (the name stays Ezra until the App Store/trademark check) and not a new spec.
+The repo keeps architecture and craft: `docs/README.md` (the map) · `docs/task-model.md` (the four axes) · `docs/primitives.md` (the durable core + the bloat-watch test) · `docs/capture.md` · `docs/advisor.md` · `docs/surfaces.md` · `docs/platform-notes.md` · `docs/decisions.md` · `docs/cohort0-checklist.md` · `prev-docs/design-system-managing-chaos.md` · `prev-docs/product-guardrails.md` · `prev-docs/household-architecture.md`.
+
+### Posture — research preview, on purpose
+
+Single-developer R&D build, deliberately on the newest software (iOS 27 GA from 2026-09-17 — Xcode 27.0, macOS 27.0, Foundation Models year-two APIs, Firebase's public-preview `GeminiLanguageModel`; it was betas and a branch pin before that). Do not gate a capability on evidence that does not exist yet — turn it on, then measure (evals *tune* what runs, never grant permission). No "wait for GA" caveats. Do not soften a capability without being asked. Two things this never relaxes: **safe defaults for data** (the deterministic tail always exists, `validated(against:)` rejects untrusted model output, corrections never leave the device) and **the guardrails** (`prev-docs/product-guardrails.md`).
+
+### Toolchain — non-negotiable
+
+- **Xcode 27 (iOS 27 SDK)**, deployment target iOS 27.0. `xcodebuild -version` must read 27.x; else `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` (GA lives at `Xcode.app` since 2026-09-17; the beta path is gone). macOS 27.0 on this host. Apple silicon only. **The simulator runs the REAL on-device model** when the host's Apple Intelligence is on — measured 2026-09-17 on the iOS 27.0 (24A434) runtime: `-FMDiagnostics` served six arms, 0 failures, candidate arm preFirstToken p50 816ms.
+- Swift language mode 5.0, `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — types are main-actor isolated by default.
+- **firebase-ios-sdk is a tagged VERSION, `12.19.2` up to next major** (2026-09-17) — 12.19.0 shipped `GeminiLanguageModel` as a public-preview product that `FirebaseAILogic` pulls in under `compiler(>=6.4) && canImport(FoundationModels)`; `GeminiProvider` calls `firebaseAI(…).geminiLanguageModel(name:)` and imports nothing new. The `wwdc26-preview` BRANCH pin it replaced was broken by the GA SDK (Xcode 27.0 27A266a's FoundationModels replaced `Transcript.Segment.custom` with `.attachment`, and the preview's `Transcript.CustomSegment` conformances stopped compiling) — **a preview branch pinned against a moving SDK breaks from either side; prefer a tag the moment one carries the API.** The GA bridge advertises `toolCalling · reasoning · guidedGeneration` (no `.vision`). Do not move to 13.x without reading the changelog: 13 removes the `FirebaseAI` wrapper (we import `FirebaseAILogic`, so that one is fine).
+
+### Build, run, test
+
+## Build, run, test
+# Tests (Swift Testing). -parallel-testing-enabled NO is REQUIRED: fixtures share one
+# in-memory context (PersistenceStack.scratch / TestStore) with thread affinity.
+**Two scripts carry the submission (2026-09-20):** `scripts/submit.sh` archives, audits the built bundle, exports with `method: app-store-connect` and validates — stopping at the first thing only a human can fix (no Apple Distribution certificate, no privacy-policy URL) and saying what to do about it, because `xcodebuild archive` succeeding proves nothing about submission. `--internal` (2026-09-30) skips ONLY the privacy-URL gate, for internal TestFlight; every run audits the EXPORTED signature (`aps-environment` production, the iCloud container, no `get-task-allow`) and prints the version and build — bump `CURRENT_PROJECT_VERSION` before every upload after the first. `scripts/screenshots.sh` drives the DEBUG seams to produce the required 6.9" iPhone and 13" iPad sets from one seeded store, with a per-shot wait and a 9:41 status bar. Both pick the simulator by NAME AND RUNTIME — the machine carries several, and a name-only match grabbed an iOS 26.3 device whose install then failed on the deployment target.
+Prefer `/run-sim` for install + launch + screenshot. A clean build is sufficient to call a change done. Tests live in `Project-EzraTests/` (`@testable import Project_Ezra`) and cover the pure AI/ranking logic — add cases there when you touch it. **Known flake (2):** `CaptureHedgeTests.totalBudgetIsSpentOnce` asserts a 0.6s budget and FAILS when the machine is loaded — a simulator driving screenshots beside the run is enough; rerun with the sim idle before believing it. **Known flake:** every case green but the run ends `TEST FAILED` via `Restarting after unexpected exit` with zero Core Data exceptions — the Xcode 27 beta sim's accessibility-bundle conflict; re-run. A run with `✘` cases or an `NSInvalidArgumentException` is real.
+
+### Project layout & Xcode gotcha
+
+- `Project-Ezra/` is a **PBXFileSystemSynchronizedRootGroup**: create or delete `.swift` files and they compile; **never hand-edit `project.pbxproj` for files** (build settings and SPM packages only — the Firebase and Statsig entries are hand-authored and the pattern to copy).
+- Feature-organised: `Design/` · `Models/` (Core Data models, `PersistenceStack`, pure ranking) · `AI/` (engines, seams, evals) · `Features/<Screen>/` · `Features/Components/` · `Intents/`. The task model is `Models/TaskItem.swift`; models are built with the `in:` context inits.
+- Three seams to know before reinventing one: **`AI/SerialGate.swift`** (one-at-a-time execution; the stored task wraps the WORK, not the wait; `peakActive` for tests), **`AI/CaptureProvenance.swift`** (per-capture receipt as a JSON file sidecar via `Models/Sidecar.swift` — *a diagnostic must never be able to cost the user their data*; every diagnostic follows), **`AI/DeterministicReading.swift`** (rung 0's Advisor reading).
+- **Swift-format** runs on every edited `.swift` via a PostToolUse hook (`.swift-format`: 4-space, 110 col). Don't hand-align.
+
+### Platform & design references
+
+Target the iOS 27 SDK; consult the HIG, Foundation Models docs and release notes — never memory. **`docs/platform-notes.md`** holds the verified specifics: a capability being AVAILABLE does not mean a profile modifier is USABLE; `availability == .available` does not mean a model will ANSWER (prove a served call); device-verify every `@Generable` change; the guided-generation tool-calling bug. Deeper references: `.claude/skills/ios-dev/references/`.
+
+### Deferred (deliberately)
+
+## Deferred (deliberately)
+Agentic capture (`OpenSetQueryTool` pulling candidates), the confirm-waiting daily surface, the stale-undated moment, image capture V2 (live camera, image-in-prompt), widgets/watch, Split/Merge UI, location/calendar triggers, the continuous capture session (built, `CaptureConversation`, ships only when its per-turn numbers beat the pool on device), Nudge/Comment and household presence on `.doing`, the FM primitives arm (ships only by a human over the GA `-FMPrimitives` report), a per-household AI cap (needs metered usage). **Auto-starting from a glance is rejected, not deferred.**
+
+### Workflow
+
+- **Two ways onto `main`, by who is committing.** The owner's local sessions commit directly to `main` and push. Cloud/background Claude sessions work on a `claude/<name>` branch and open a PR; the owner merges it on GitHub (no CI, so the PR is the review). **Every local session starts with `git fetch && git status`** — a merged PR lands as a merge commit on `origin/main`, so local `main` diverges silently (2026-09-17: 21 unpushed local commits over 2 remote ones). Reconcile with `git rebase origin/main`, never a merge commit from the local side. A merged `claude/*` branch is deleted; an OPEN PR's branch is left alone — it may be a docs-only audit awaiting the owner's read.
+- **`docs/cohort0-checklist.md` is the audit's ground truth — update it in the same change that changes a flow.**
+- When a rule here changes, change its long-form paragraph in `docs/decisions.md` too.

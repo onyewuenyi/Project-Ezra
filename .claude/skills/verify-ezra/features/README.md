@@ -1,6 +1,6 @@
 # Feature map
 
-One file per user-facing feature. Each says how a user reaches it, which seams drive it, and what end state proves it. The full seam table lives in the repo's `CLAUDE.md` (**Verification launch arguments**); the rules each surface must satisfy live in `CLAUDE.md` › *Rules — surfaces* and `docs/surfaces.md`. The flow ground truth is `docs/cohort0-checklist.md`.
+One file per user-facing feature. Each says how a user reaches it, which seams drive it, and what end state proves it. The full seam table lives in `../seams.md`; the rules each surface must satisfy live in `.claude/rules/surfaces.md` and `docs/surfaces.md`. The flow ground truth is `docs/cohort0-checklist.md`.
 
 | Feature | File | Primary seam | Last proved |
 |---|---|---|---|
