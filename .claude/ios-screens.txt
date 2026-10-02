@@ -1,0 +1,4 @@
+# Ezra screens: name | launch arguments | expect: accessibility labels | absent: labels (BASE_LAUNCH_ARGS seeds first)
+home | | expect: Your tasks; Mark done
+tasks | -OpenTasks | expect: My Tasks
+settings | -OpenSettings | expect: Settings

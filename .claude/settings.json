@@ -7,7 +7,31 @@
           {
             "type": "command",
             "command": "jq -r '.tool_response.filePath // .tool_input.file_path' | { read -r f; case \"$f\" in *.swift) xcrun swift-format --in-place \"$f\" ;; esac; } 2>/dev/null || true",
-            "statusMessage": "Formatting Swift…"
+            "statusMessage": "Formatting Swift\u2026"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-check.py\"",
+            "timeout": 300,
+            "statusMessage": "Checking the build\u2026"
           }
         ]
       }
@@ -15,5 +39,62 @@
   },
   "enabledPlugins": {
     "claude-md-management@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(scripts/ai/*)",
+      "Bash(bash scripts/ai/*)",
+      "Bash(xcodebuild:*)",
+      "Bash(xcrun simctl:*)",
+      "Bash(xcrun xcresulttool:*)",
+      "Bash(xcrun swift-format:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__xcode__BuildProject",
+      "mcp__xcode__GetBuildLog",
+      "mcp__xcode__GetConsoleOutput",
+      "mcp__xcode__GetTestList",
+      "mcp__xcode__RunAllTests",
+      "mcp__xcode__RunSomeTests",
+      "mcp__xcode__RenderPreview",
+      "mcp__xcode__DocumentationSearch",
+      "mcp__xcode__XcodeListWorkspaces",
+      "mcp__xcode__XcodeOpenWorkspace",
+      "mcp__xcode__XcodeListSchemes",
+      "mcp__xcode__XcodeListTargets",
+      "mcp__xcode__XcodeListRunDestinations",
+      "mcp__xcode__XcodeRead",
+      "mcp__xcode__XcodeGlob",
+      "mcp__xcode__XcodeGrep",
+      "mcp__xcode__XcodeLS",
+      "mcp__xcode__XcodeRefreshCodeIssuesInFile",
+      "mcp__xcode__DeviceInteractionStartWorkspaceSession",
+      "mcp__xcode__DeviceInteractionInstallAndRun",
+      "mcp__xcode__DeviceInteractionSynthesize",
+      "mcp__xcode__DeviceInteractionEndSession"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(rm -rf:*)",
+      "Edit(**/*.pbxproj)",
+      "Write(**/*.pbxproj)",
+      "mcp__xcode__UpdateTargetBuildSetting",
+      "mcp__xcode__AddEntitlement",
+      "mcp__xcode__AddInfoPlist",
+      "mcp__xcode__XcodeRM",
+      "mcp__xcode__XcodeNewTarget"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/*.p12)",
+      "Read(./**/*.mobileprovision)"
+    ]
+  },
+  "worktree": {
+    "baseRef": "head"
   }
 }
