@@ -48,8 +48,19 @@ def default_branch() -> str:
     return ref.rsplit("/", 1)[-1] if ref else "main"
 
 
+# A heredoc fed to cat or tee is text being written to a file, not commands: a test script that
+# pushes to a scratch remote's main must not read as a push. A heredoc fed to anything else (bash,
+# sh, python) may run, so it stays.
+WRITTEN = re.compile(r"\b(cat|tee)\b[^\n]*<<-?\s*(['\"]?)(\w+)\2[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$)", re.S)
+
+
+def without_written_text(cmd: str) -> str:
+    return WRITTEN.sub(lambda m: m.group(0).split("\n", 1)[0], cmd)
+
+
 def pushes_default(cmd: str) -> str | None:
     """The default branch's name when this command pushes to it, else None."""
+    cmd = without_written_text(cmd)
     if not re.search(r"\bgit\b[^;&|]*\bpush\b", cmd):
         return None
     base = default_branch()

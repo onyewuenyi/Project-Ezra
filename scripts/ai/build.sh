@@ -13,6 +13,7 @@ first_baseline=0
 # it recompiles, so it would record (almost) nothing and later flag old warnings as new.
 action=build; [[ -n $update ]] && { action="clean build"; say "recording the warning baseline from a clean build (one-off, slower)"; }
 udid=$(ensure_sim)
+wait_dd
 mkdir -p "$BUILD_DIR"; rm -rf "$BUILD_DIR/build.xcresult"
 read -r -a container <<< "$(xc_container)"
 set +e

@@ -31,7 +31,7 @@ disable-model-invocation: true
    - **What I did:** one line per PR, with evidence (gate results, the report path).
    - **Done:** merged or abandoned since last time.
    - The healthy count.
-   Then `python3 scripts/ai/prs.py --mark-seen`.
+   Then `python3 scripts/ai/prs.py --mark-seen`, and `scripts/ai/worktree.sh prune` when something was done (merged or closed PRs give back their worktree, simulator and DerivedData; one with uncommitted or unpushed work is kept and named).
 4. **Once per weekday** (first pass of the day): `python3 scripts/ai/friction.py --quiet --since 1d`; Mondays add `--waste`. Add its output as one line only if it proposes something (`/friction` to act on it).
 
 ## Pacing under /loop
