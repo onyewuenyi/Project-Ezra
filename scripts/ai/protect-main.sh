@@ -3,16 +3,16 @@
 #
 # The cloud gate (.claude/hooks/cloud-gate.py) is a best-effort rule inside Claude Code; GitHub's
 # proxy for cloud sessions does not limit which branches a push can update. This adds a repository
-# ruleset on the DEFAULT branch, enforced by GitHub for everyone, including any agent:
-#   always:          no force push, no deletion
-#   --require-pr:    every change arrives through a pull request (direct pushes refused, the
-#                    owner's too: use it when local sessions open PRs rather than push to main)
+# ruleset on the DEFAULT branch, enforced by GitHub for everyone, including any agent and the owner:
+#   no force push, no deletion, and every change arrives through a pull request (scripts/ai/pr.sh
+#   opens one; review count 0, so a solo owner merges their own)
+#   --allow-direct-push: drop the pull-request rule (keeps no-force and no-delete)
 # Idempotent: updates the kit's ruleset in place. --dry-run prints the request and changes nothing.
 # Rulesets need a public repo, or GitHub Pro/Team for a private one; the script says so if not.
 set -euo pipefail
-require_pr=0; dry=0
-for a in "$@"; do case $a in --require-pr) require_pr=1 ;; --dry-run) dry=1 ;;
-  *) echo "usage: $0 [--require-pr] [--dry-run]"; exit 2 ;; esac; done
+require_pr=1; dry=0
+for a in "$@"; do case $a in --allow-direct-push) require_pr=0 ;; --require-pr) require_pr=1 ;; --dry-run) dry=1 ;;
+  *) echo "usage: $0 [--allow-direct-push] [--dry-run]"; exit 2 ;; esac; done
 command -v gh >/dev/null || { echo "protect-main: needs the GitHub CLI (brew install gh; gh auth login)"; exit 1; }
 repo=$(gh repo view --json nameWithOwner,defaultBranchRef -q '.nameWithOwner + " " + .defaultBranchRef.name') \
   || { echo "protect-main: this checkout has no GitHub remote gh can see"; exit 1; }

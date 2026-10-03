@@ -11,6 +11,8 @@ source "$(dirname "$0")/lib.sh"
 cd "$AI_ROOT"
 screens="$AI_ROOT/.claude/ios-screens.txt"
 [[ -f $screens ]] || die "no .claude/ios-screens.txt (lines: name | launch arguments)"
+# A screen whose seam the app no longer reads would be captured as the wrong screen: stop first.
+python3 "$AI_DIR/screens-drift.py" || die "fix .claude/ios-screens.txt first (/map refresh)"
 out="$EVIDENCE_ROOT/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$out"
 S() { "$AI_DIR/sim.sh" "$@"; }
 S install >/dev/null; S statusbar >/dev/null
