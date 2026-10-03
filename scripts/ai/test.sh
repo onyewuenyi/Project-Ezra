@@ -10,7 +10,7 @@ read -r -a container <<< "$(xc_container)"
 read -r -a extra <<< "$TEST_FLAGS"
 set +e
 xcodebuild test "${container[@]}" -scheme "$SCHEME" -destination "id=$udid" \
-  -derivedDataPath "$DD" -resultBundlePath "$BUILD_DIR/tests.xcresult" ${extra[@]+"${extra[@]}"} "$@" > "$BUILD_DIR/test.log" 2>&1
+  -derivedDataPath "$DD" -resultBundlePath "$BUILD_DIR/tests.xcresult" ${extra[@]+"${extra[@]}"} "$@" < /dev/null > "$BUILD_DIR/test.log" 2>&1
 rc=$?
 set -e
 cd "$AI_ROOT"
