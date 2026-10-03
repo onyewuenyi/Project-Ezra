@@ -105,8 +105,10 @@ enum EmbeddingStore {
     /// the same world. Returns whether an embedding is available afterwards.
     @discardableResult
     nonisolated static func settle(attempts: Int = 3) -> Bool {
-        for _ in 0..<attempts where sentenceEmbedding == nil { continue }
-        return sentenceEmbedding != nil
+        // At most `attempts` lookups. The old loop asked once more in its `return`, so a phone or
+        // fresh simulator with no embedding asset made 4 lookups against a budget of 3.
+        for _ in 0..<attempts where sentenceEmbedding != nil { return true }
+        return false
     }
 
     /// The DEBUG diagnostics line. The degrade this store performs is graceful by design,
