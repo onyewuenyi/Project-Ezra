@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ezra — Help</title>
+<style>
+  :root { color-scheme: light dark; --ink: #16181d; --muted: #5b6270; --bg: #fff; --rule: #e3e6ec; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ecf2; --muted: #9aa3b2; --bg: #121419; --rule: #262a33; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 48px 20px 96px; background: var(--bg); color: var(--ink);
+         font: 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 42rem; margin: 0 auto; }
+  h1 { font-size: 2rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 .5rem; }
+  h2 { font-size: 1.15rem; margin: 2.5rem 0 .75rem; padding-top: 1.25rem;
+       border-top: 1px solid var(--rule); letter-spacing: -0.01em; }
+  em { color: var(--muted); font-style: normal; }
+  ul { padding-left: 1.15rem; } li { margin: .5rem 0; }
+  a { color: inherit; text-decoration-color: var(--muted); text-underline-offset: 3px; }
+  code { font-size: .92em; }
+</style>
+</head>
+<body><main>
+<h1>Ezra — Help</h1>
+<p><strong>Ezra turns what you say into a household&#x27;s tasks.</strong> Say or paste what is on your mind and it comes back as a short list you can act on.</p>
+<h2>Getting in touch</h2>
+<p><code>&lt;CONTACT EMAIL&gt;</code> — it reaches a person. Ezra is a research preview built by one developer, so a reply may take a day or two. If you are reporting something that went wrong, the most useful things to include are what you were doing, what you expected, and what happened instead.</p>
+<h2>Common questions</h2>
+<p><strong>Voice capture is not working.</strong> Ezra listens the moment the capture sheet opens, and it needs two things: permission to use the microphone, and Apple&#x27;s on-device speech model for your language. If you said no to the microphone, the capture screen shows a link straight to the relevant Settings page. If the language model is still downloading the first time you use it, you will see &quot;Getting the mic ready…&quot; — that one download can be slow on a cellular connection, and you can type instead at any time without losing what you have already said. If your language is genuinely not supported yet, Ezra says so and typing still works.</p>
+<p><strong>Ezra split one task into two, or ran two into one.</strong> Every reading is shown to you before anything is created, and it is yours to edit: change the text and the tasks change with it, or remove a card you do not want. Nothing reaches your list until you tap Create. Corrections you make are how it learns, and they stay on your device.</p>
+<p><strong>It did not understand a long brain dump.</strong> Long, unpunctuated dumps are the hardest case. Splitting a very long one into two captures usually reads better than one enormous paragraph. If you have switched capture to <strong>On device</strong> in the capture screen, everything is read locally, which is more private and handles long dumps less well — that trade is yours to make and you can change it any time.</p>
+<p><strong>Sharing with my partner is not working.</strong> Household sharing goes through your own iCloud account, so both phones need to be signed in to iCloud with iCloud Drive on. Send the invitation from Tasks ▸ … ▸ Manage household, and open the link on the other phone. If something is wrong, Ezra says which thing in plain words rather than showing an error code.</p>
+<p><strong>I cleared something by accident.</strong> Before any clear, Ezra saves a copy of your data on your device, and Settings offers to share that copy right after. There is no in-app restore — it needs the app closed — so if you need one, get in touch and keep the copy safe in the meantime.</p>
+<p><strong>How do I get my data out, or delete it?</strong> Settings has both. <em>Export</em> gives you a readable file of everything Ezra holds. <em>Clear all tasks</em> empties your work and keeps your profile. <em>Reset everything</em> returns the app to a fresh install. Deleting the app removes everything on the device.</p>
+<p><strong>What leaves my device?</strong> Settings ▸ <em>What leaves this device</em> answers this for your install specifically, in plain words, and changes to match what is actually happening. The full version is the <a href="privacy-policy.md">privacy policy</a>.</p>
+<h2>Known limits of this preview</h2>
+<ul>
+<li>It is built for the newest iOS, so it needs iOS 27 or later.</li>
+<li>Some readings are better on devices that can run Apple Intelligence; on the rest, Ezra falls back to a deterministic reading and still works.</li>
+<li>Household sharing is one household at a time.</li>
+<li>There is no web or Android version.</li>
+</ul>
+</main></body>
+</html>

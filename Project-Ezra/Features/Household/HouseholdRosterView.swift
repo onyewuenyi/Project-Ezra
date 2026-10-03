@@ -20,7 +20,7 @@ import SwiftUI
 struct HouseholdRosterView: View {
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: []) private var householdsResults: FetchedResults<Household>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     private var households: [Household] { Array(householdsResults) }
     private var profiles: [UserProfile] { Array(profilesResults) }
 
@@ -28,7 +28,13 @@ struct HouseholdRosterView: View {
         // Both singletons are created on open, so the editor always has something to
         // bind to (a fresh install has neither until now).
         Group {
-            if let household = households.first, let profile = profiles.first {
+            // The same choice `Household.existing` makes — a household someone shared with
+            // this phone first — never fetch order, which on a participant's phone could
+            // open the roster of the household they had left behind.
+            if let household = Household.preferred(
+                among: households, isShared: { PersistenceStack.isShared($0.objectID.persistentStore) }),
+                let profile = profiles.first
+            {
                 HouseholdRosterContent(household: household, profile: profile)
             } else {
                 Color.clear
@@ -44,6 +50,7 @@ struct HouseholdRosterView: View {
 }
 
 private struct HouseholdRosterContent: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject var household: Household
     @ObservedObject var profile: UserProfile
 
@@ -59,6 +66,10 @@ private struct HouseholdRosterContent: View {
     /// own `youRow`) — soft-deleted people stay in the store for attribution.
     private var members: [FamilyMember] {
         allMembers
+            // This household's people only — a participant's phone also holds the roster
+            // of its own pre-join household. A member with no household at all predates
+            // the edge and belongs to the owner's phone.
+            .filter { $0.household == household || ($0.household == nil && HouseholdSharing.canShare(household)) }
             .filter { !$0.isRemoved && $0.uuid != profile.linkedMemberID }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -80,6 +91,9 @@ private struct HouseholdRosterContent: View {
         ScrollView {
             VStack(spacing: Spacing.lg) {
                 header
+                if let joinError = HouseholdSharing.shared.lastError {
+                    joinErrorLine(joinError)
+                }
                 peopleCard
             }
             .padding(Spacing.lg)
@@ -104,9 +118,12 @@ private struct HouseholdRosterContent: View {
     /// Whether this member can be handed a phone: an adult who is not the owner. Children
     /// and pets are planned FOR, not invited. Only once sync is live — before that a link
     /// would promise another person will see something nothing can deliver.
+    ///
+    /// And only on the OWNER's phone (`HouseholdSharing.canShare`): a participant cannot
+    /// change a share that is not theirs, and offering it ended in a raw CloudKit error.
     private func canInvite(_ member: FamilyMember) -> Bool {
-        HouseholdSync.isLive && member.role != .owner && member.relationship != .child
-            && member.relationship != .pet
+        HouseholdSync.isLive && HouseholdSharing.canShare(household) && member.role != .owner
+            && member.relationship != .child && member.relationship != .pet
     }
 
     /// The roster row's one word about the invite: nothing until a link was made, then
@@ -120,6 +137,23 @@ private struct HouseholdRosterContent: View {
         }
     }
 
+    /// A link that failed to open on THIS phone, in the product's words
+    /// (`HouseholdSharingError.naming`). Without it a failed accept looked exactly like a
+    /// tap that did nothing, on the one phone whose person has no one to ask.
+    private func joinErrorLine(_ message: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.glyphCaption(.semibold))
+                .foregroundStyle(Palette.mutedText)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.supporting)
+                .foregroundStyle(Palette.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
     // MARK: - Header — the household as a place, not a form
 
     private var header: some View {
@@ -129,12 +163,20 @@ private struct HouseholdRosterContent: View {
                 household.photoUpdatedAt = Date()
                 context.saveChanges()
             } label: {
-                AvatarView(household: household, size: 88)
+                // Smaller at accessibility sizes (2026-09-26): 88pt over a two-line
+                // name at that size took the whole first screen, and the members —
+                // the page's working content — started below the fold.
+                AvatarView(household: household, size: dynamicTypeSize.isAccessibilitySize ? 56 : 88)
             }
             .accessibilityLabel("Family photo")
 
-            TextField("Family name (optional)", text: $household.name.orEmpty)
-                .font(.screenTitle)
+            // Wraps rather than truncates: at the accessibility sizes the family name
+            // read "The Onyewuen…" (2026-09-18) — a household's own name is the one
+            // string on this screen that has to be readable whole, the same rule the
+            // Settings profile name follows.
+            TextField("Family name (optional)", text: $household.name.orEmpty, axis: .vertical)
+                .lineLimit(1...2)
+                .font(dynamicTypeSize.isAccessibilitySize ? .sectionHeader : .screenTitle)
                 .foregroundStyle(Palette.primaryText)
                 .multilineTextAlignment(.center)
                 .textInputAutocapitalization(.words)
@@ -179,7 +221,12 @@ private struct HouseholdRosterContent: View {
             .accessibilityLabel("Your photo")
 
             VStack(alignment: .leading, spacing: 2) {
-                TextField("Your name", text: $profile.displayName.orEmpty)
+                // Wraps at the accessibility sizes — a person's own name in the roster
+                // read "Charles Onyewu…" (2026-09-18); the roster exists to say who is
+                // in the household, so a name it cannot show whole is the one thing it
+                // may not truncate.
+                TextField("Your name", text: $profile.displayName.orEmpty, axis: .vertical)
+                    .lineLimit(1...2)
                     .font(.supporting.weight(.medium))
                     .foregroundStyle(Palette.primaryText)
                     .textInputAutocapitalization(.words)
@@ -206,8 +253,10 @@ private struct HouseholdRosterContent: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 TextField(
-                    "Name", text: Binding(get: { member.name }, set: { member.name = $0 })
+                    "Name", text: Binding(get: { member.name }, set: { member.name = $0 }),
+                    axis: .vertical
                 )
+                .lineLimit(1...2)
                 .font(.supporting.weight(.medium))
                 .foregroundStyle(Palette.primaryText)
                 .textInputAutocapitalization(.words)
@@ -234,10 +283,27 @@ private struct HouseholdRosterContent: View {
             }
             Spacer(minLength: 0)
 
+            // The household's whole point is the second phone, and until 2026-09-18 the
+            // only way to reach it was opening each member's "…" — beside "Remove from
+            // household" — so nothing on this screen said sharing was possible, and an
+            // invitable adult looked exactly like a child who cannot be. Inline on the
+            // rows that CAN be invited and have not been, secondary (`accentFlat`, never
+            // the gradient) and never a second control: once a link exists the caption
+            // carries the state ("Invited · waiting" / "Joined") and the resend stays in
+            // the menu where a repeat action belongs.
+            if canInvite(member), household.invitationState(for: member.uuid) == nil {
+                Button("Invite") { inviting = member }
+                    .font(.controlLabel)
+                    .foregroundStyle(Palette.accentFlat)
+                    .buttonStyle(.pressableLink)
+                    .accessibilityLabel("Invite \(member.name) to share this household")
+            }
+
             Menu {
                 if canInvite(member) {
                     Button(
-                        household.invitationState(for: member.uuid) == .pending ? "Send the link again" : "Invite to share this household",
+                        household.invitationState(for: member.uuid) == .pending
+                            ? "Send the link again" : "Invite to share this household",
                         systemImage: "person.badge.plus"
                     ) { inviting = member }
                 }
@@ -310,7 +376,7 @@ private struct PhotoPickerButton<Label: View>: View {
     @State private var item: PhotosPickerItem?
 
     var body: some View {
-        PhotosPicker(selection: $item, matching: .images, photoLibrary: .shared()) {
+        PhotosPicker(selection: $item, matching: .images) {
             label
         }
         .buttonStyle(.pressableIcon)

@@ -87,6 +87,62 @@ struct CapturePostureTests {
             }
         }
     }
+
+    /// **The promise that holds everywhere is about US, not about the device.** It read
+    /// "Your corrections and your history never leave this device" until 2026-09-20, and
+    /// that was false: the private store mirrors every entity to the person's own iCloud
+    /// (`NSPersistentCloudKitContainerOptions`, `.private` scope, no exclusions). What it
+    /// was really describing is the `CKShare` — those entities carry no `household` edge,
+    /// so they never reach anyone invited. A privacy sentence that is wrong in the
+    /// person's favour is still wrong, and this one sits on the screen where the app asks
+    /// to be believed.
+    @Test("What never leaves claims the two things that are actually true")
+    func theNeverSentenceIsAccurate() {
+        let never = DataBoundary.neverSentence
+        #expect(never.localizedCaseInsensitiveContains("never reach us"))
+        #expect(never.localizedCaseInsensitiveContains("invite"))
+        #expect(
+            !never.localizedCaseInsensitiveContains("never leave this device"),
+            "they do leave it — to the person's own iCloud")
+        // And the sync sentence is where that copy is accounted for, in a place a person
+        // already understands.
+        #expect(DataBoundary.syncSentence.localizedCaseInsensitiveContains("your own iCloud"))
+        for sentence in [never, DataBoundary.syncSentence] {
+            for vendor in ["CloudKit", "Core Data", "Gemini", "Firebase", "Google", "AI"] {
+                #expect(!sentence.contains(vendor), "\(sentence) names \(vendor)")
+            }
+        }
+    }
+
+    /// The short form onboarding uses. It exists because the paragraph does not fit under
+    /// a 220-point editor at accessibility sizes — but a shorter promise that is a
+    /// WEAKER promise would be worse than no line at all, so it is pinned against the
+    /// long one in both directions.
+    @Test("The short capture line makes the same promise as the paragraph")
+    func theShortBoundaryAgreesWithTheLongOne() {
+        let quiet = DataBoundary.captureShort(cloudReachable: false)
+        // The whole point of the unreachable arm: the words are not sent to be read, so
+        // say so plainly rather than warning about a transmission that cannot happen.
+        // **Scoped to "understood", not "anywhere" (2026-09-20)** — this line appears
+        // without the sync sentence beside it, and on a signed-in phone the person's own
+        // copy does reach their own iCloud. An over-broad promise is still a wrong one.
+        #expect(quiet.localizedCaseInsensitiveContains("not sent"))
+        #expect(quiet.localizedCaseInsensitiveContains("understood"))
+        #expect(!quiet.localizedCaseInsensitiveContains("cloud"))
+
+        let open = DataBoundary.captureShort(cloudReachable: true)
+        // The common case first, the exception named — the same order as the paragraph.
+        #expect(open.localizedCaseInsensitiveContains("on your device"))
+        #expect(open.localizedCaseInsensitiveContains("cloud"))
+        #expect(open.localizedCaseInsensitiveContains("may"), "an exception, never a default")
+
+        for line in [quiet, open] {
+            #expect(line.count < 100, "it has to fit where the paragraph did not")
+            for vendor in ["Gemini", "Firebase", "Google", "Apple", "AI", "model"] {
+                #expect(!line.contains(vendor), "\(line) names \(vendor)")
+            }
+        }
+    }
 }
 
 @Suite("F-04 · parked captures are findable")

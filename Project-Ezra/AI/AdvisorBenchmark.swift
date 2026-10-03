@@ -231,17 +231,36 @@ enum AdvisorBenchmark {
     /// prints the report. Non-destructive (scratch context, nothing commits), DEBUG-only,
     /// and safe to re-run.
     static func runIfRequested() async {
-        guard ProcessInfo.processInfo.arguments.contains("-AdvisorBenchmark") else { return }
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-AdvisorBenchmark") else { return }
+        if args.contains("-EvalToFile") {
+            Instrument.teeStdoutToDocuments("advisorbenchmark-report.txt")
+        }
         print("=== ADVISOR JUDGMENT BENCHMARK ===")
-        print("ceiling rung available: \(CloudModel.isAvailable)")
-        if !CloudModel.isAvailable {
+        print(
+            Instrument.runStamp(
+                model: AppBrain.availabilityLabel(),
+                configuration: String(describing: CapabilityProfiles.taskAdvisor)
+                    + "|repeats=\(AdvisorDiagnostics.repeats)"))
+        // The ceiling is the cloud rung by design, so this is the one eval whose point IS
+        // a cloud spend — but only when asked. Without `-WithCloud` the provider slot
+        // holds the throwing stub for the run and the ceiling reads as unmeasured; the
+        // `providerCalls` delta is the receipt either way.
+        let cloudDecision = LaunchSeams.cloudArmDecision(arguments: args, providerAvailable: CloudModel.isAvailable)
+        let originalProvider = CloudModel.provider
+        if cloudDecision != .run { CloudModel.provider = LaunchSeams.EvalQuotaGuard.self }
+        defer { CloudModel.provider = originalProvider }
+        let cloudBefore = IntelligenceLedger.shared.cloudCallsToday()
+        print("ceiling rung: \(cloudDecision == .run ? "cloud (-WithCloud)" : "UNMEASURED — provider guarded; pass -WithCloud to spend")")
+        if cloudDecision != .run {
             print(
-                "no cloud provider installed — the ceiling cannot be measured on this host, "
-                    + "and a benchmark without a ceiling is not a benchmark. Reporting anyway "
-                    + "so the shape is reviewable.")
+                "a benchmark without a ceiling is not a benchmark: cheaper rungs cannot EARN "
+                    + "cases against nothing. Reporting anyway so the shape is reviewable.")
         }
         let verdicts = await run()
         print(report(verdicts))
+        let providerCalls = IntelligenceLedger.shared.cloudCallsToday() - cloudBefore
+        print("RUN INTEGRITY: providerCalls \(providerCalls) (receipt) · cloud arm \(cloudDecision == .run ? "RAN" : "guarded")")
         print("=== END ADVISOR JUDGMENT BENCHMARK ===")
     }
 }

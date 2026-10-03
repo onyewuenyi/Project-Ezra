@@ -43,6 +43,15 @@ enum ChangeLogUndo {
             SuppressionStore.undoRejection(payload, in: context)
             return
         }
+        // A rejected GROUP proposal ("Not these"): one entry for the whole member set, its
+        // `newValue` the member ids. Undo removes every sibling suppression among them —
+        // all of it, or the sweep would stay vetoed on the pairs the undo missed.
+        if entry.action == GroupingSweep.rejectedAction {
+            let ids = (entry.newValue ?? "").split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+            SuppressionStore.undoRejectedProposal(
+                memberIDs: ids, umbrellaID: entry.oldValue.flatMap(UUID.init(uuidString:)), in: context)
+            return
+        }
         guard let task = linkedTask(for: entry, in: context) else { return }
         switch entry.action {
         case "linked":
@@ -144,6 +153,24 @@ enum ChangeLogUndo {
                 context.delete(child)
             }
             task.touch(now: now)
+        case "grouped":
+            // Undo of a group made at the confirm card: unlink the steps (the `.parent`
+            // edge lives ON the step) and remove the umbrella — but only an umbrella
+            // nothing else has happened to. One a person has since touched, resolved or
+            // given other steps is real work now, and stays as an ordinary task.
+            let ids = (entry.newValue ?? "").split(separator: ",").compactMap {
+                UUID(uuidString: String($0))
+            }
+            guard let umbrellaID = task.uuid else { return }
+            let all = fetchAll(in: context)
+            for step in all where step.uuid.map(ids.contains) ?? false {
+                step.unlinkParent(umbrellaID)
+            }
+            if !task.status.isResolved, task.lastHumanTouchAt == nil, task.children(among: all).isEmpty {
+                context.delete(task)
+            } else {
+                task.touch(now: now)
+            }
         case ChangeLogEntry.editedAction:
             // A manual field edit → restore the named field from `oldValue`. Writes go
             // through the raw property (NOT the logged seams), so the revert never

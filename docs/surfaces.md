@@ -1,4 +1,4 @@
-# Surfaces — navigation, My Tasks, the task detail, the Brief
+# Surfaces — navigation, the Ask home, the Tasks sheet, the task detail
 
 Extracted verbatim from `CLAUDE.md` on 2026-09-02, when that file crossed its size
 limit. **CLAUDE.md keeps the invariants; this file keeps the reasoning, the measured
@@ -12,27 +12,80 @@ The paragraph below this section is **historical**: it describes the system tab 
 the orb parked beside it, the measured constants that placement needed, and the Brief and
 Ask tabs. All of that is gone. What stands:
 
-- **`RootTabView` shows `TasksHomeView` directly.** No `TabView`. The Brief was cut (two
-  equal pillars — Ramble/Capture and the Advisor), and the Ask TAB lasted one day: a tab
-  is a place you go to talk, which was the condition of the scoped-conversation fence
-  closest to failing (`prev-docs/product-guardrails.md`). Ask is now a **sheet** summoned
-  from the Tasks header's `text.bubble` — the same glyph the task pager wears — so asking
-  is one gesture at every scope (F-12).
-- **The orb is bottom-trailing with plain padding.** With no bar to align to, the derived
-  offset (`overlayBaseFromBottom + diameter/2 − barCentreFromBottom`), the measured
-  62.0/52.2/34.0pt constants, and `tabBarMinimizeBehavior(.never)` are retired. The
-  diameter stays 62pt (it reads as one object with the orb inside it). It hides under
-  the keyboard and pauses when covered (`barOrbPaused`, now including the Ask sheet).
-- **Three sheets, one mount each:** the composer (`\.openCapture` / `\.resumeCapture`),
-  Activity (`\.openActivity`), Ask (`\.openAsk`). The last surface whose only mount lived
-  inside another surface's conditional container was silently deleted for three weeks;
-  the shell owns them so that cannot recur.
+- **Ask is the home; the Tasks list is a SHEET behind its header button (2026-09-23).**
+  The owner's swap, argued against and made (`docs/decisions.md`): `HouseholdChatView`
+  is the root of the shell's one `NavigationStack`, opened on the day answer whenever
+  anything is open, so the resting state is the ranked rows, not a blank chat — plus
+  the catch-up line ("Since you last looked, Maya finished …") on a shared household.
+  The `checklist` button presents `TasksSheet` (Done, or swipe down); Manage Household
+  pushes on whichever stack asked. The list was a pushed page for a few hours and Back
+  from it faulted — never a push. **`ShellSurfaces`** is the one host for the composer,
+  Activity, Settings, the receipt and the 62pt orb, mounted once at the root and once
+  inside the Tasks sheet, because a sheet cannot present over another from the same
+  presenter. Before this the list was the root and Ask a sheet summoned from its
+  `text.bubble` (2026-09-02 → 2026-09-23). No `TabView`: the Brief was cut (two equal
+  pillars — Ramble/Capture and the Advisor), and the Ask TAB lasted one day — a tab is
+  a place you go to talk, which was the condition of the scoped-conversation fence
+  closest to failing (`prev-docs/product-guardrails.md`).
+- **The home says what the list cannot (2026-09-23).** The day answer is composed by
+  `AI/DayAnswer.swift`: a reason under every row, time pressure seated ahead of
+  judgment with the decisions collapsed to their oldest, an outcome speaking for its
+  steps, the hour framing the lead ("first" / "still" / "Nothing more needs you
+  tonight."), then the person's own stall line, the evening's "Today, you finished …",
+  and the catch-up. The glance strip opens the Tasks sheet filtered (`TasksPreset`,
+  the list's new ATTENTION filter axis) and never asks a question; "N open" is gone and
+  the answer ends with "and N more in Tasks". The chips under a seated answer are
+  judgment questions ("I've got 15 minutes" is the `.quick` floor shape). The
+  parked-captures row and the grouping sweep's question mount on the home, not the
+  list. Home rows carry their verb in the trailing slot (glyph-only at accessibility
+  sizes; "Decide" opens the page) and a long-press hand-off. The empty home is one
+  gradient CTA into capture. The full rule, with the why, is in `CLAUDE.md` and
+  `docs/decisions.md`.
+- **The calm home (2026-09-23, later the same day).** The strip moved to the Tasks
+  sheet's header as its own glance (`TasksCounts`); the day answer is a hero row with
+  the page's one verb and three quiet rows under "Then, in order" (`dayAnswerCap` 4);
+  news is one muted sentence with no rows, tapping into Activity; the starters and
+  follow-ups sit inside the composer bar as one line of suggestions; Ezra's questions
+  sit below the answer; a capture committed from inside the Tasks sheet closes the sheet
+  and lands on the home with the answer re-seated under `Motion.settle`. Six kinds of
+  element, three numbers above the fold. `CLAUDE.md` holds the rule.
+- **The home's design audit (2026-09-25).** Stable opener identity so re-seats animate;
+  the advance on the hero's verb (fill, dim, haptic, hold, then the store moves); one
+  card on the page (containerless quiet rows, `Radius.card` hero, `Font.heroTitle`); one
+  accent (the verb); a staggered launch settle; a leading "Today" return on a thread;
+  "Just added" for what landed during this look and rank did not seat, washed and
+  scrolled into view; "Why this first?" on the hero's long-press; micro arrows on the
+  suggestions; kickers as VoiceOver headers. Measured on frame sheets. `CLAUDE.md` holds
+  the rule.
+- **Size follows importance (2026-09-25).** Hero title 22 and a 15pt verb, then the
+  ask field (17pt text, 52pt field, 52/34 orb) and suggestions (15pt medium, 44pt
+  lines), then rows at 16; the home's title is inline. `CLAUDE.md` holds the ranking.
+- **The orb is `CaptureOrbButton`, in two placements.** The home's composer bar carries
+  it as its trailing control (`ChatComposerBar.onCapture`, 44/28pt) inside the bar's own
+  row, so it rides the keyboard with nothing to collide with; the shell parks the 62/40pt
+  one bottom-trailing over every pushed page, hidden under the keyboard. Both pause on
+  `\.orbCovered` (a sheet, onboarding, the background). Send/Stop sit INSIDE the field
+  and appear with the first character. The derived offset the tab bar needed
+  (`overlayBaseFromBottom + diameter/2 − barCentreFromBottom`), the measured
+  62.0/52.2/34.0pt constants, and `tabBarMinimizeBehavior(.never)` are retired.
+- **One host per presentation context:** `ShellSurfaces` mounts the composer
+  (`\.openCapture` / `\.resumeCapture`), Activity (`\.openActivity`) and Settings
+  (`\.openSettings`) once at the root and once inside the Tasks sheet, each with its own
+  controller; the identity link and onboarding are root-only. Both "…" menus reach
+  Activity · Manage Household · Settings. Nothing is conditional: the last surface
+  whose only mount lived inside a conditional container was silently deleted for
+  three weeks.
 - **Long-press on the orb is gone** with Private Capture's second door (F-03). Privacy is
   a posture chip in the composer's capture bar, persisted, and said in `DataBoundary`.
-- **`-InitialTab` is a no-op**; `-AskHousehold` / `-HouseholdChatFixture` present the Ask
-  sheet; `-OpenPrivateCapture` is gone.
-- **What Tasks gained:** the Ask bubble in its toolbar, and `ParkedCapturesRow` under the
-  header (F-04) — unfinished captures findable without a nudge.
+- **Seams:** `-OpenTasks` presents the list sheet (and the shell presents it unasked
+  for every argument the list's own `.task` reads); `-DismissTasksAfter N` closes it
+  again; `-OpenRoster` pushes the roster on the home; `-OpenSettings` presents Settings
+  — over the list when a list seam is beside it; `-AskHousehold` /
+  `-HouseholdChatFixture` act on the home; `-OpenAsk` and `-InitialTab` are no-ops.
+- **What the swap is judged on:** `askAsked(scope:route:)` on a person's question and
+  `tasksOpened` on the button, against `captureStarted` per session.
+- **What Tasks keeps:** `[search][…]`, and `ParkedCapturesRow` under the header (F-04) —
+  unfinished captures findable without a nudge.
 
 ## Historical — the system tab bar and the orb beside it (2026-08-18 → 2026-09-02)
 
@@ -44,3 +97,60 @@ Ask tabs. All of that is gone. What stands:
 - **Round two on the detail page (2026-09-04, same day):** **the kicker IS the category editor** — the small-caps line above the title is a `Menu` with a micro chevron, and the category chip is GONE from the property card (the same fact twice, one of them dead; Linear's breadcrumb kicker is the model). **A container takes one hand-written step** — an inline "Add a step" row closes the spine, in the rows' own register (muted plus in the glyph column, bare field; never a second CTA), committing on return or on leaving the field; `TaskItem.addStep` appends AFTER the model's order (`sortIndex` past the max) and logs a one-child `"split"` entry so the existing undo arm reclaims it, with the same "Added step" pill a breakdown gets. **A step resolved from the cockpit gets the row's undo pill** (`.resolution` + `reopenAndReblock`), matching the blocker glyph. **Dependent and step rows carry WHEN** (`DueLabel.compact`) — whether freeing a task matters today is the question the "Frees up" section asks. **The closed Details row names its count** ("3 changes", nothing for an untouched trail; gone once open). **A blank title is never saved** — `committedTitle` trims and restores the title the edit began from when it comes back empty.
 
 - **The detail page's second pass, same day (2026-09-04), four rules:** **A clearing edit offers the way back** — clear due, clear effort, stop waiting on X post the same four-second undo pill a resolution does (`TaskDetailView.offerEditUndo`): a setting edit is one tap to redo from its chip, a clearing edit is a value gone from the screen, and a mis-tap on a small × must cost a tap, never a memory; the restore re-runs the mutation through `logHumanEdit`, which folds a same-field round trip into nothing net changed. **A blocker or step resolved from ITS glyph on this page gets the resolution pill** (`pickBlockerStatus` / `pickStepStatus`): the spine's glyph could finish another task with no way back, the one resolution in the product without one; resolving the last wait names THIS task as freed. **The property card's relation rows ARE the spine's rows** — `blockerChipRow` is `spineBlockerRow`, and the card's step row carries the interactive glyph and the tap-through: which affordances a wait or a step had used to depend on which SHAPE its parent happened to be. **Share…** in the More menu (`TaskMoreMenu.shareText`): title, "Due …" when dated, the description after a blank line — plain words for anyone outside the household, nothing about Ezra (`DetailSurfaceTests`).
+
+## The grouping proposal on My Tasks (2026-09-17)
+
+- **What it is.** The 2026-09-12 deck pass left one thing owed: "the AI proposal ('Group them?') — the model naming membership". `AI/GroupingSweep.swift` is that, on the iOS 27 on-device model, in the `DuplicateSweep` shape: a deterministic prefilter (loose open tasks — no umbrella, not waiting — that share a significant word of four letters or more, clustered by union-find with rejected sibling pairs cut from the graph first; clusters of 2–5, best-linked first, five per run, three judged), a guided-generation judge (`GroupJudgment`: belongsTogether · confidence · outcomeTitle · memberTitles) behind `ModelRun`'s background deadline, and a validator that is the trust boundary — every member title must be one the model was shown (one invented title rejects the whole judgment; a group with a phantom member is a wrong group, not a smaller one), at least two members, a 1–6 word title that is not itself a member, confidence at the `childOf` tier (0.5).
+- **It proposes; it never writes.** A group is structure, and the deck view's whole argument is that structure the person did not ask for is a cost. So the sweep's output is a `GroupProposal` value in `GroupProposals.shared` (in memory for this launch) and ONE quiet row at the top of My Tasks under the parked-captures row (`GroupProposalRow`) — the same register: no colour, no count, no notification, gone when there is nothing to ask. Tap → the members and three answers. **Group them** writes the umbrella and its `.parent` edges exactly as the confirm card's group does (`GroupingSweep.apply`: commonest category, the owner who holds most steps, edges `.inferred(confidence:)`), as one reversible `"grouped"` entry — the existing undo arm unlinks the steps and removes an untouched umbrella — with the Undo pill. **Not these** writes a `siblingGroup` suppression per member pair (a new `SuppressionKind`, symmetric like a duplicate's) AND one reversible `"rejectedGroup"` trail entry for the whole set — a veto with no way back is the undo-completeness rule broken; its undo arm lifts every pair at once — so the sweep never asks that question again unless the person takes the no back. **Not now** hides the member set for this launch. A proposal whose members the household has moved past (one resolved or grouped by hand) simply stops showing.
+- **Bare chains are candidates first.** The screenshot that opened the pass showed a bare chain's deck captioned *RENEW PASSPORT → BOOK FLIG…* — the arrow story, truncated at phone width. `GroupingSweep.chainClusters` hands every umbrella-less chain (≥2 members, no rejected pair) to the same judge ahead of the word clusters (`candidates(in:snapshots:suppressions:)`); the chain's shape already says "one outcome", the judge says what to call it, and accepting writes the umbrella the deck was built to caption. Once named, the chain leaves the candidate set.
+- **Where it runs.** `runMaintenanceSweepsIfDue` — hourly, foreground, beside the duplicate sweep, on-device only, metered under `.sweeps`, absent off-device. `ModelFeature.groupingSweep` is its metrics row.
+- **Measured before shipped.** `-GroupingSweepEval` runs eight labeled clusters (four one-outcome, four word-sharing non-groups) through the judge the product uses and prints FALSE ACCEPT (the critical error: a non-group the person is asked about), recall, and latency. `-SeedGroupProposal` puts the row on screen without a model. Tests: `GroupingSweepTests` (prefilter, validator, accept → one reversible entry → undo, reject → suppressions the prefilter honours).
+- **First numbers (2026-09-17, sim iPhone18,1 · iOS 27.0 26A428 · on-device).** `-GroupingSweepEval`: served 8/8, FALSE ACCEPT 0/4, recall 4/4, p50 1119 ms, p90 2384 ms — every one-outcome cluster accepted at 0.90–0.95 with all members grounded and a plain title ("Lagos trip", "Kitchen renovation", "Moving preparation"), every word-sharing pair declined at 0.10–0.25. On a fresh install with `-SeedFlowFixtures` the LIVE sweep ran at launch and the row read *Group as “Wedding planning”? · 2 tasks* before the seed seam could fire — the first proposal came from the product path, not the fixture.
+- **The first false accept, caught by the store printout.** The eval's "store:" section lists what the sweep would ask about on THIS store, and on the flow fixtures the first live proposal had been *Group as "Wedding planning"? · 2 tasks* over "Choose the wedding caterer" and "Confirm caterer for the reunion" — two different events sharing a word, the critical error in production on the first launch. Both that pair and "Renew the car insurance / Renew car registration" are now labeled non-groups, and the judge's instructions say that two different occasions are two outcomes even when they share a word. Re-measured: served 10/10, FALSE ACCEPT 0/6, recall 4/4, p50 1545 ms — the caterer pair declines at 0.40, only 0.10 under the tier, so it is the pair to watch when the runtime moves; every real group still accepts at 0.92–0.95. With chains first, the live row on the same store now reads *Group as "Trip preparation"? · 3 tasks* — the passport chain, named.
+- **Second shape, same primitive: "Add “Pack for Lagos” to “Lagos trip”?" (2026-09-17, third pass).** A task captured after its outcome already exists sits loose while the outcome's deck is two rows down — capture-time `childOf` only sees the capture in hand. `GroupingSweep.attachClusters`: for each open outcome (an open task with an open step), the loose open tasks sharing a ≥4-letter word with the outcome's title or any step's title are candidates (three at most), minus any the person already refused for that outcome (`parentLink`, directional). The judge is shown the outcome, a few of its steps and the candidates, and asked which candidates are its steps; the validator grounds every named member and needs only one — the outcome already has its name. Accept writes one `.parent` edge per member as its own `"linked"`/`parent` entry (the arm capture-time parent links already have; the pill reverts them all, marking each undone); Not these writes a directional `parentLink` suppression per member and one `"rejectedGroup"` entry whose `oldValue` carries the outcome so the undo lifts exactly those. Order of asking: chains on screen, then attaches, then word clusters, each task in at most one question. The eval carries three labeled attach cases (a candidate that does not belong must be declined — the reunion cake under the wedding is the FALSE ACCEPT to catch).
+- **The sweep runs when a group forms.** Hourly-on-foreground meant the row could arrive an hour after the capture that completed the group. `AppBrain.commit` now calls `GroupingSweep.runSoonAfterCommit` after a successful save (20 s later, no more than once per 10 minutes), so the question is asked while the thought is warm. `-AcceptGroupProposal` accepts the first proposal the moment it is offered — the deck captioned by the named outcome and the Undo pill are screenshot-reachable without a tap.
+- **What the attach judge measured, three ways (2026-09-17, sim iPhone18,1 · iOS 27.0 26A428).** The eval's store printout, run on the dogfooding fixtures after "Trip preparation" was named, surfaced the next real question — three loose tasks sharing "trip"/"book" under it, none a step of that trip — and it went into the labeled set beside the reunion cake under the wedding and the kitchen floor under the renovation. (1) Shared `GroupJudgment` with the outcome's steps shown: FALSE ACCEPT 0 on attach across two runs; the true attach (the wedding photographer) accepted at 0.90; the Lagos case MISSED because the model copied the steps as its answer and the validator read that as "none". (2) A candidates-only answer type: the miss persisted, and two non-members were accepted at 0.60. (3) Steps removed from the prompt: three non-members accepted at 0.80–0.90. So (1) ships, with an attach tier of 0.7 above the group's 0.5 as deterministic containment, and the recall cost is recorded: attach recall 1/2 on the labeled set, group recall 4/4, FALSE ACCEPT 0 overall. A missed attach leaves a row loose; a false one asks the person to file a task under the wrong outcome — the second is the error the sweep is built to never make.
+- **Verdict: the attach shape ships OFF (`GroupingSweep.attachIsEnabled = false`).** A fourth run of the conservative configuration accepted "Plan the weekend trip" under "Trip Preparation" at 0.90 — above any tier the true accepts would survive. A group asks "are these one thing?" and the model answers that well; an attach asks "is this THAT thing?" and the model reads any shared word as yes. The prefilter, judge, validator, row branch, undo arm, suppressions, tests and labeled cases all stay; `-GroupingSweepEval` still judges the attach cases and lists the store's attach candidates marked OFF, so the next configuration is a flag flip over a clean report — a human's call, the boundary pass's rule. Groups and chains stay on: across every run today, FALSE ACCEPT 0 on the group set.
+- **An outcome is never a member.** Turning attach off exposed it in a test: an umbrella task word-clustered with a loose task would have been proposed as a step of a NEW group. `candidates` now takes every task with an open step out of the word clusters, so a person is never asked to file an outcome under a smaller one.
+
+## The detail page under a screenshot pass (2026-09-17, second pass)
+
+Three findings from screenshotting the fixtures' pages at the accessibility text sizes and leaving one open:
+
+- **Related rows wrap to two lines** (`LayoutMetrics.relatedTitleLines`). Steps, blockers, dependents and the parent link all carried `lineLimit(1)`; at accessibility-extra-large the "Frees up" row read "Book flights for th…". A list row may truncate for density (`TaskRow` keeps one line); the detail page exists to name the related work, so its rows may not. A title is one line of intent, but the line is the person's, not the layout's — two lines keep the row bounded and the words whole. One constant, six sites.
+- **Relative-time lines sit on a minute clock** (`TaskDetailView.captionTickSeconds`). "Started just now" under the title and "Looked just now — nothing to add." in the bar were strings computed at render, so a page left open kept saying "just now" until something else redrew it. Both now render inside a `TimelineView(.periodic(by: 60))` and read its date; the tick re-reads the store, never the model. The bar's line moved into `barLine(_:)` and `advisorLine(now:)` takes the clock so the silence line's test pin (`AdvisorPillarTests.silenceLine`) still holds.
+- **No per-render derivation snapshot.** `TaskDetailView.body` reaches `allTasks` through 41 `among:` sites; a probe of one render's worth on a container-plus-blocked-plus-blocking task at 240 tasks measured 1.3 ms (`ZZAIPathPerfProbeTests.detailPageDerivations`), under a frame with room to spare. The refactor was priced and declined on the number; the probe stays so the number can be re-read.
+
+## The product under a friction pass (2026-09-17, third pass)
+
+Screenshotting every surface at the default and accessibility-extra-large text sizes, plus the capture reveal on a dated ramble:
+
+- **The deterministic title no longer repeats the chip's day** (`HeuristicEngine.cleanTitle(_:droppingDate:)`; history in `docs/capture.md`). "Call the dentist thursday" under a Thu 24 chip is now "Call the dentist" — the title the model arm already produced, so the two routes agree.
+- **List rows get a second title line at accessibility sizes** (`LayoutMetrics.listTitleLines(for:)`, `TaskRow`). At accessibility-extra-large every row read as a fragment — "Pay th…", "Submit ex…", "Figure out if t…" — because the marker column, the status glyph and the due label take the width before the title gets any. One line stays the rule at reading sizes (the list is a dense scan and a row that grows by a line grows the scroll); at the accessibility sizes a row whose title cannot be read is not dense, it is empty.
+- **The parked-captures row stacks at accessibility sizes** (`ParkedCapturesRow`). The label and the excerpt shared one line and the excerpt was reduced to a single quotation mark ("9 unfinished… “("), which removed the one thing the row exists for — recognising the thought without opening it. Stacked, label over excerpt, both read; the age keeps its fixed width.
+- **Not changed, on purpose.** The Settings "data cleared" card is a durable `StoreResetRecord` with its own Dismiss and is doing its job. The Activity feed's "Filed under Work" entries carrying a blocker explanation come from the intent's `reasoning` line, which ranks judgment > blocked > owner > category; the entry title and the reason answer different questions and the pairing is left alone.
+- **The reveal's add-more row goes glyph-only at accessibility sizes** (`ComposerView.addMoreRow`, 2026-09-18). "Say more" and "Add a photo" are fixed-width capsules; at accessibility-extra-large the pair outgrew the sheet, and because a vertical `ScrollView` centres content wider than itself the whole reveal slid off the left edge ("lere's what understood", "all the dentist"). The fourth composer layout trap, same shape as the three in `docs/capture.md`: a fixed width inside a container that quietly resizes to it. Both buttons already had spoken labels, so the glyph form costs VoiceOver nothing.
+- **The Activity row's capture byline speaks the product's words** (`CaptureProvenance.bylineLine`, 2026-09-18). The row read "local · 0.0s" — and on a cloud read would have said "cloud(gemini-…) · 1.2s": a metric name, a latency and a vendor model id in the customer's feed, against the rule that the customer never hears "AI" or a vendor name. The byline now says where the words were read, in `DataBoundary`'s vocabulary ("Read on your device" / "Read in the cloud"), plus "cut short" when the read was salvaged or timed out; the numbers and the model id stay on `summaryLine` for the provenance detail and the reports. Pinned by `CaptureProvenanceTests.bylineIsPlain`.
+- **The Settings name wraps** (`SettingsView`): the profile field is a vertical-axis `TextField` with up to two lines, because at accessibility sizes it read "Charles Ony…" and a name is the one field whose whole value has to be readable to be recognised as yours.
+- **The row's WHEN token holds its width** (`TaskRow`, 2026-09-18). In the Everyone scope at accessibility-extra-large, beside the avatar column, the HStack folded "1d over" into "1d" over "over". The due label and the resolved age are one word to the eye and now keep their ideal width; the title is the part that yields, which is what its second line at those sizes is for.
+- **The canvas title holds its height** (`ComposerView.captureSurface`, 2026-09-18). The canvas stack is height-bound — the field takes the room the clamp leaves — and a squeezed `Text` gives up lines before the field gives up its floor, so at accessibility-extra-large the front door read "What's on your…" / "Dump it all here. I'll sort it…". The title now wraps to two lines at its own height; the helper subtitle yields entirely at those sizes, since its room is the field's and the title already asks the question.
+- **The canvas field's floor follows the text size** (`ComposerView.canvasCompressedFloor`, 2026-09-18). The floor under the room clamp was the fixed 44pt hit target, and at accessibility-extra-large the editor's scaled font plus its insets need more, so the first line of the person's own words rendered clipped along the top. The floor is now one line at the current size from the same metrics the input token scales with, plus the editor's inset and the field's padding; the hit target remains its minimum.
+
+## Wide surfaces (2026-09-18)
+
+The app ships to iPad and rotates on iPhone (`TARGETED_DEVICE_FAMILY = "1,2"`, landscape allowed) and no view adapted to width: on an iPad Air the list ran edge to edge with the due label a screen-width from its title, and the detail's "Mark done" was 1300pt wide. **Full-screen surfaces keep their content in a leading column no wider than `LayoutMetrics.readableWidth` (700pt)** via `.readableWidth()` — the home's stack (header, parked row, sections) and the detail's scroll content and pinned bar. Leading, not centred: the navigation title and the toolbar already sit at the edges, and a centred column left "My Tasks" a hundred points to the left of its own list. Backgrounds and the bar's hairline stay full-bleed. Every phone width is below the limit, so phones are untouched (verified by screenshot). Sheets — the composer, Ask, Activity, Settings, the task chat — are form sheets on iPad already and need nothing. iPhone landscape is unverified: the host cannot rotate the simulator without synthetic input.
+
+## The first empty screen (2026-09-18)
+
+Clean install, onboarding done, no tasks — the home read **"Nothing assigned to you"** over "Work assigned to you shows up here, grouped by state…". Nobody assigns anything to a person alone in the app, and every brand-new install is that person, so the product's first screen framed itself as someone else's inbox. `AssignedSectionsView.emptyCopy(scope:solo:searching:filteredMessage:)` now decides the words: alone (no one else on the roster) they are about capture — "Nothing here yet · Say what's on your mind and it becomes tasks here…"; with a household the scope decides as before; a filter that matches nothing still names the filter. Reached on the simulator by `simctl spawn <udid> defaults write amanze-studios.Project-Ezra hasOnboarded -bool true` on a clean install — the one state no launch argument produced. Pinned by `MyTasksEmptyCopyTests`.
+- **Search reads the title, the notes and the captured words** (`TaskSlice.matches`, 2026-09-18). It read the title alone, so a word the person remembered from their own notes or from what they said ("the blue one", "for Sam") answered "No matches" to a task they could see. The empty state now says what it searches. Pinned by `TaskSearchMatchTests`.
+- **The Settings Diagnostics card is DEBUG-only** (`SettingsView`, 2026-09-18). Its first line — "Kept 62% · rot 8% · opens 14 · first payoff 42s" — shipped to customers while everything under it was already `#if DEBUG`: acceptance and rot rates are the product's own scorecard, and the guardrails say reporting, never scoring, and no user-facing score. The whole card is the developer's now.
+- **The undo pill wraps to two lines** (`UndoNoticeView`, 2026-09-18). It is the receipt for a resolution — "Completed “Renew passport” — unblocked “Book flights for the trip”" — and one middle-truncated line read "Completed “Ren…the trip”", losing the very names the notice exists to say. The VoiceOver announcement always carried the whole sentence; the eyes now get it too.
+
+## Launch polish — the household, and the manifest (2026-09-18)
+
+- **The App Store privacy manifest exists** (`Project-Ezra/PrivacyInfo.xcprivacy`). Required for submission since 2024 and simply absent, which is a rejection, not a warning. It declares no tracking and an empty tracking-domain list; three collected types, all unlinked and none used for tracking — product interaction and the anonymous install id (Analytics), and a capture's raw words (App Functionality, the one sanctioned raw-text transmission `CaptureRoute.transmitsRawCapture` makes); and one required-reason API, `UserDefaults` with reason CA92.1. It must agree with `Models/DataBoundary.swift`, whose sentences the person reads in Settings, so a change to one is a change to both. Verified present in the built bundle in BOTH configurations — a manifest that does not ship is a manifest that does not exist.
+- **Manage household is screenshot-reachable** (`-OpenRoster`). It is the multi-user surface and it sat two taps behind the "…" menu, which Accessibility blocks on this host, so "the sharing UI is polished" was an untested claim on a build heading for a two-phone sitting.
+- **Invite is on the row, not only in the menu** (`HouseholdRosterView`). The household's whole point is the second phone, and the only route to it was each member's "…", beside "Remove from household" — nothing on the screen said sharing was possible, and an invitable adult looked exactly like a child who cannot be. Inline and secondary on rows that can be invited and have not been; once a link exists the caption carries the state ("Invited · waiting" / "Joined") and the resend stays in the menu.
+- **The fixture household had two owners** (`SampleFlowFixtures`): Maya was a `.partner` with `role: .owner`, and `canInvite` excludes owners, so the fixture set that exists to cover the core flows could not reach the launch's headline one. She is an adult caretaker now; `HouseholdActivation.caretakerIDs` counts owner AND adult, so the digest default and the activation metrics are unchanged.
+- **Names wrap in the roster** (household name, your name, a member's name): at accessibility-extra-large they read "The Onyewuen…" and "Charles Onyewu…", and a roster that cannot show a name whole has lost the one thing it is for.

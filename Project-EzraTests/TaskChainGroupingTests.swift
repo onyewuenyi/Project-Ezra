@@ -63,12 +63,35 @@ struct TaskChainGroupingTests {
         #expect(chains.count == 1)
         let chain = chains[0]
         #expect(chain.umbrella?.title == "Trip to Lagos")
+        #expect(chain.groupTitle == "Trip to Lagos")
         // The umbrella is never a card, and the front card is actionable: a step that
         // waits on another never leads while one that can move exists.
         #expect(!chain.deckMembers.contains { $0.objectID == trip.objectID })
         #expect(chain.deckMembers.count == 3)
         #expect(chain.root.title != "Book flights")
         #expect(chain.root.objectID == chain.deckMembers.first?.objectID)
+    }
+
+    @Test("Siblings under one umbrella page in breakdown order, whatever their attention")
+    func siblingsKeepBreakdownOrder() {
+        let trip = TaskItem(title: "Trip", status: .todo, confidence: 0.9)
+        let first = TaskItem(title: "first", status: .todo, confidence: 0.9)
+        let second = TaskItem(title: "second", status: .todo, confidence: 0.9)
+        let third = TaskItem(title: "third", status: .todo, confidence: 0.9)
+        for (index, step) in [first, second, third].enumerated() {
+            step.linkParent(trip.uuid!)
+            step.sortIndex = Int32(index)
+        }
+        // Make the LAST step by breakdown order the most urgent — attention would lead
+        // with it; the model's sequence must win among siblings.
+        third.isUrgent = true
+        let all = [third, second, first, trip]
+        let (chains, _) = TaskChainGrouping.computeChains(in: all)
+        #expect(chains.count == 1)
+        #expect(chains[0].deckMembers.map(\.title) == ["first", "second", "third"])
+        #expect(chains[0].root.title == "first")
+        // …which is exactly the container's own pointer.
+        #expect(trip.nextOpenStep(among: all)?.title == "first")
     }
 
     @Test("A chain of bare blockers has no umbrella, and every member is a card")
@@ -78,6 +101,8 @@ struct TaskChainGroupingTests {
         let (chains, _) = TaskChainGrouping.computeChains(in: [b, a])
         #expect(chains[0].umbrella == nil)
         #expect(chains[0].deckMembers.count == 2)
+        // No name of its own, so the caption tells the chain's story in execution order.
+        #expect(chains[0].groupTitle == "a → b")
     }
 
     @Test("Nested containers: the top-most one names the group")

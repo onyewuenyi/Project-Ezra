@@ -19,13 +19,14 @@ enum ActivityVocab {
         case "assigned": return "person.fill"
         case "filed": return "tray.and.arrow.down.fill"
         case "linked": return "link"
+        case "grouped", "split": return "square.stack.3d.up"
         case "archived": return "archivebox.fill"
         case "planned": return "calendar"
         case "decided": return "checkmark.seal.fill"
         case "unblocked": return "lock.open.fill"
         case "killed": return "xmark"
         case "edited": return "pencil"
-        case "suppressed": return "hand.raised.slash"
+        case "suppressed", "rejectedGroup": return "hand.raised.slash"
         case "captured": return "tray.and.arrow.down"
         default: return "sparkle"
         }
@@ -35,8 +36,9 @@ enum ActivityVocab {
         switch action {
         case "completed": return Palette.success
         // A rejection is a quiet "no", not an event — it reads with the receding verbs.
-        case "killed", "archived", "suppressed": return Palette.mutedText
-        case "assigned", "linked", "decided", "unblocked", "captured": return Palette.accentFlat
+        case "killed", "archived", "suppressed", "rejectedGroup": return Palette.mutedText
+        case "assigned", "linked", "decided", "unblocked", "captured", "grouped", "split":
+            return Palette.accentFlat
         default: return Palette.secondaryText
         }
     }
@@ -47,13 +49,18 @@ enum ActivityVocab {
         case "assigned": return "Assigned"
         case "filed": return "Filed"
         case "linked": return "Linked"
+        // The two structural acts that make a group: the confirm card's "Group as one
+        // outcome" and the Advisor's split. Both undo whole from here, and both read
+        // as "Updated" before they had a word.
+        case "grouped": return "Grouped"
+        case "split": return "Split"
         case "archived": return "Archived"
         case "planned": return "Planned"
         case "decided": return "Decided"
         case "unblocked": return "Unblocked"
         case "killed": return "Canceled"
         case "edited": return "Updated"
-        case "suppressed": return "Kept apart"
+        case "suppressed", "rejectedGroup": return "Kept apart"
         case "captured": return "Captured"
         default: return "Updated"
         }
@@ -97,13 +104,17 @@ struct ActorAvatar: View {
 
     var body: some View {
         if isAI {
+            // Neutral tile, accent glyph (2026-09-25, the importance audit): a gradient
+            // tile on every AI row made the feed's loudest element its most repeated
+            // one, louder than the Undo each row exists to offer. The gradient is for
+            // high-signal sites only.
             RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                .fill(Palette.accentGradient)
+                .fill(Palette.elevatedSurface)
                 .frame(width: size, height: size)
                 .overlay {
                     Image(systemName: "sparkles")
                         .font(.system(size: size * 0.44, weight: .semibold))
-                        .foregroundStyle(Palette.onAccent)
+                        .foregroundStyle(Palette.accentFlat)
                 }
         } else if let actorID, actorID == currentUserID {
             AvatarView(profile: profile, size: size)
@@ -116,6 +127,7 @@ struct ActorAvatar: View {
 }
 
 struct ActivityRow<Trailing: View>: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let entry: ChangeLogEntry
     var members: [FamilyMember] = []
     var currentUserID: UUID? = nil
@@ -131,8 +143,13 @@ struct ActivityRow<Trailing: View>: View {
                     .font(.supporting)
                     .foregroundStyle(entry.undone ? Palette.mutedText : Palette.primaryText)
                     .strikethrough(entry.undone)
+                // The why and the when are secondary to what happened (2026-09-26): at
+                // accessibility sizes this line ran to four lines under every row, so each
+                // entry filled half the screen. Two lines, then it truncates; the entry's
+                // detail page has the whole sentence.
                 Text(byline)
                     .metadataStyle()
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : nil)
             }
 
             Spacer(minLength: 0)

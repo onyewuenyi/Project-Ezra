@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  How the archive becomes something App Store Connect will accept.
+	  Used by `scripts/submit.sh`; see that file for why this exists.
+
+	  `app-store-connect` is the only method that produces an upload-able build: it
+	  strips `get-task-allow`, re-signs with an Apple Distribution identity and an App
+	  Store provisioning profile, and sets `aps-environment` to production. A plain
+	  `xcodebuild archive` does none of that — it succeeds with a development identity
+	  and yields a build that installs on a tethered phone and uploads nowhere, which is
+	  exactly the false green this file exists to end.
+
+	  `uploadSymbols` sends the dSYMs so a crash report from a tester is symbolicated
+	  rather than a column of hex addresses — the whole point of having testers.
+
+	  `manageAppVersionAndBuildNumber` is FALSE on purpose. Letting Xcode invent the
+	  build number means the number in the repo and the number in the listing drift, and
+	  the first time that matters is the day you are trying to work out which build a
+	  bug report came from. Bump `CURRENT_PROJECT_VERSION` deliberately instead.
+	-->
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>teamID</key>
+	<string>43DTQTDS67</string>
+</dict>
+</plist>

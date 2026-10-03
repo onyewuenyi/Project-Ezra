@@ -58,6 +58,15 @@ extension Font {
     static var bodyInput: Font { scaledToken(16, .regular, relativeTo: .callout) }
     /// 20pt Semibold — inline nav titles (Today's leading toolbar title).
     static var navTitle: Font { scaledToken(20, .semibold, relativeTo: .title3) }
+    /// The home's hero task (2026-09-25): the most important words on the screen after
+    /// the brand, so a step above the nav title and two above a row.
+    static var heroTitle: Font { scaledToken(22, .semibold, relativeTo: .title2) }
+    /// The home's ask field (2026-09-25, the importance audit): the home's second verb,
+    /// so it reads at body size — a step above a row title, never below it.
+    static var composerInput: Font { scaledToken(17, .regular, relativeTo: .body) }
+    /// The suggestions under the ask field: the doors into asking, ranked just below the
+    /// field, so a step below it and above a row's reason.
+    static var suggestion: Font { scaledToken(15, .medium, relativeTo: .subheadline) }
 
     // Micro-chip labels — the sub-`metadata` tier the chips used to hardcode as
     // `.system(size: 10/11)`. Tokenized so the whole app tracks Dynamic Type instead

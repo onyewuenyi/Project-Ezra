@@ -18,7 +18,7 @@ struct TaskSearchView: View {
     @FetchRequest(sortDescriptors: [NSSortDescriptor(keyPath: \TaskItem.createdAt, ascending: false)])
     private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
 
     @State private var searchText = ""
     /// Raised on arrival. This sheet's ONLY purpose is typing, and unlike Ask — which
@@ -48,7 +48,9 @@ struct TaskSearchView: View {
                     EmptyStateView(
                         symbol: "magnifyingglass",
                         title: "Search your tasks",
-                        message: "Find anything by title — across every owner and every status.")
+                        message:
+                            "Find anything by its title, its notes or what you said — across every owner and every status."
+                    )
                 } else if matches.isEmpty {
                     EmptyStateView(
                         symbol: "questionmark.circle",
@@ -66,7 +68,12 @@ struct TaskSearchView: View {
                                     stepProgress: task.stepProgress(among: tasks),
                                     ownerDisplayName: task.ownerDisplayName(among: othersRoster),
                                     ownerPhotoData: task.ownerPhotoData(among: othersRoster),
-                                    interactive: !task.status.isResolved,
+                                    interactive: !task.status.isResolved
+                                        && task.recommendedAction(
+                                            among: tasks, currentUserID: currentUserID) != nil,
+                                    // A hit that is a step of something says so — "hotel"
+                                    // finds "Book the hotel / Part of Trip to Lagos".
+                                    subtitle: outcomeSubtitle(for: task, among: tasks),
                                     // Resolving from search routes through the SAME
                                     // undo-aware seams the record surface uses. Without
                                     // these the row still completed correctly, but did it
@@ -105,6 +112,13 @@ struct TaskSearchView: View {
                 // After the sheet's presentation settles, so the field is in place before
                 // the keyboard slides under it rather than both moving at once.
                 try? await Task.sleep(for: .milliseconds(350))
+                #if DEBUG
+                // `-OpenSearch "query"` (see `TasksHomeView`) prefills the field.
+                if let seed = UserDefaults.standard.string(forKey: "debug.searchSeed") {
+                    UserDefaults.standard.removeObject(forKey: "debug.searchSeed")
+                    searchText = seed
+                }
+                #endif
                 searchFocused = true
             }
             .toolbar {

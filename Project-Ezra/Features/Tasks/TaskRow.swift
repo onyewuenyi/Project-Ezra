@@ -61,12 +61,24 @@ struct TaskRow: View {
     /// queue entry. (It used to also mean "the leading glyph is a tappable state menu";
     /// the glyph is an indicator now, so this governs the menu alone.)
     var interactive: Bool = true
+    /// A second line under the title, when the row has something to SAY about where it
+    /// sits: a deck card names what it waits on ("after Renew passport"); a step rendered
+    /// outside its deck — its siblings filtered away, or a search hit — names its outcome
+    /// ("Part of Trip to Lagos"). Nil on the ordinary list row, which stays one line and
+    /// carries a wait as the dim + hourglass alone.
+    var subtitle: String? = nil
+    /// A second arrival: when this row SURFACED rather than was created. A container's
+    /// row is hidden behind its deck while steps remain and appears the moment the last
+    /// one resolves — the list passes that moment here so the row washes in exactly like
+    /// a just-confirmed one. Same window, same wash: a row that wasn't there a moment ago.
+    var surfacedAt: Date? = nil
     var onComplete: (() -> Void)? = nil
     var onCancel: (() -> Void)? = nil
     var onOpen: (() -> Void)? = nil
 
     @Environment(\.managedObjectContext) private var context
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var isCompleting = false
     /// True while a finger is held on the row — drives the Linear-style press
     /// highlight that communicates what's about to lift into the context menu.
@@ -109,6 +121,34 @@ struct TaskRow: View {
         return RelativeAge.compact(at)
     }
 
+    /// At accessibility sizes the WHEN reads under the title, so the title keeps the row.
+    private var whenStacked: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    /// The row's WHEN: the due label on live work, the age on a resolved record. Only a
+    /// real date earns the ink (undated shows nothing), and overdue wears the one token
+    /// that means exactly that. One word to the eye, so it holds its width.
+    @ViewBuilder
+    private var whenLabel: some View {
+        if let due = dueLabel {
+            Text(due.text)
+                .font(.chipLabel)
+                .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        } else if let age = resolvedAge {
+            // A resolved row is a record, and a record says when. Same slot, the
+            // quietest register, in `RelativeAge`'s vocabulary ("2h ago") rather than
+            // the due label's ("Fri") so the two never read as the same claim.
+            Text(age)
+                .font(.chipLabel)
+                .foregroundStyle(Palette.mutedText)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
     var body: some View {
         HStack(spacing: Spacing.sm) {
             // The user's attention Signal surfaces as a leading mark here (the record
@@ -130,14 +170,28 @@ struct TaskRow: View {
             )
             .recessed(isBlocked)
 
-            Text(task.title)
-                .taskTitleStyle()
-                .foregroundStyle(Palette.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                // Crisp, never blurred — a blocked row recedes via a contrast-aware dim
-                // plus the marker below, not by frosting its own text (glass-on-content).
-                .recessed(isBlocked)
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text(task.title)
+                    .taskTitleStyle()
+                    .foregroundStyle(Palette.primaryText)
+                    .lineLimit(LayoutMetrics.listTitleLines(for: dynamicTypeSize))
+                    .truncationMode(.tail)
+                if whenStacked { whenLabel }
+                // Only when there is something to say. Reserving the line on every deck
+                // card was tried — a blank second line reads as a card missing its
+                // subtitle, the title floating above the glyph's centre — so a deck's
+                // cards may differ in height by a line, and the deck aligns their TOPS.
+                if let subtitle {
+                    Text(subtitle)
+                        .supportingStyle()
+                        .foregroundStyle(Palette.mutedText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            // Crisp, never blurred — a blocked row recedes via a contrast-aware dim
+            // plus the marker below, not by frosting its own text (glass-on-content).
+            .recessed(isBlocked)
 
             if isBlocked { BlockedIndicator() }
             if let stepProgress { StepProgressIndicator(progress: stepProgress) }
@@ -146,24 +200,10 @@ struct TaskRow: View {
 
             // WHEN, because position cannot carry it: ranking explains which row
             // outranks which, but two neighbours — one due today, one undated — read
-            // identically without this. Only a real date earns the ink (undated shows
-            // nothing), only live work (a resolved row is a record; its due is over),
-            // and overdue wears the one token that means exactly that.
-            if let due = dueLabel {
-                Text(due.text)
-                    .font(.chipLabel)
-                    .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
-                    .monospacedDigit()
-                    .recessed(isBlocked)
-            } else if let age = resolvedAge {
-                // A resolved row is a record, and a record says when. Same slot, the
-                // quietest register, in `RelativeAge`'s vocabulary ("2h ago") rather than
-                // the due label's ("Fri") so the two never read as the same claim.
-                Text(age)
-                    .font(.chipLabel)
-                    .foregroundStyle(Palette.mutedText)
-                    .monospacedDigit()
-            }
+            // identically without this. At accessibility sizes it moves under the title
+            // (`whenStacked`): beside it, the fixed-width "1d over" took half the row and
+            // squeezed a two-line title to "Pay th…" (2026-10-02, the /verify AX5 sheet).
+            if !whenStacked { whenLabel.recessed(isBlocked) }  // stacked, the title column recedes it
 
             trailingAvatar
         }
@@ -189,7 +229,10 @@ struct TaskRow: View {
             }
         )
         .onAppear {
-            guard Self.isFreshArrival(confirmedAt: task.confirmedAt) else { return }
+            guard
+                Self.isFreshArrival(confirmedAt: task.confirmedAt)
+                    || Self.isFreshArrival(confirmedAt: surfacedAt)
+            else { return }
             arrivalWash = true
             // Held long enough to be seen after the composer sheet finishes leaving, then
             // gone — a wash, never a badge. A fade is motion-safe, so Reduce Motion keeps it.
@@ -215,11 +258,24 @@ struct TaskRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
         .accessibilityAddTraits(.isButton)
+        // **Gated on `interactive`, like the swipe and the menu (2026-09-20).** These
+        // were gated only on the closures being non-nil, and the list passes those
+        // whenever the task is unresolved — so on SOMEONE ELSE'S task, where the leading
+        // swipe is deliberately absent and the long-press menu is deliberately inert,
+        // VoiceOver was still offered "Complete". "Not yours to advance" is one of this
+        // product's stated invariants and it held for the eyes and broke for everyone
+        // else. `interactive` is exactly `!resolved && recommendedAction != nil`, which
+        // is the rule the other two channels already use, and the deck passes the same
+        // `advanceable` flag — so all four channels now agree.
         .accessibilityActions {
-            if onComplete != nil { Button("Complete") { complete() } }
-            if onCancel != nil { Button("Cancel Task") { onCancel?() } }
+            if interactive, onComplete != nil { Button("Complete") { complete() } }
+            if interactive, onCancel != nil { Button("Cancel Task") { onCancel?() } }
         }
         .sensoryFeedback(.error, trigger: saveFailed)
+        // Completing from the row had no haptic at all — a tap that resolves a task is
+        // the one row moment that deserves the success tick the composer's Create gives.
+        // Keyed to the fade-out, so it lands once, as the row leaves.
+        .sensoryFeedback(.success, trigger: isCompleting) { _, now in now }
     }
 
     // MARK: - Long-press quick actions
@@ -356,6 +412,16 @@ struct TaskRow: View {
         // the reader open the task to learn the same thing the row was already carrying.
         if isBlocked { parts.append(blockerSummary.map { "blocked, \($0)" } ?? "blocked") }
         if let stepProgress { parts.append(stepProgress.label) }
+        // A subtitle that is only whitespace is a HEIGHT RESERVATION, not a sentence —
+        // `TaskDeckView` passes a single space to keep non-waiting cards the same
+        // height as waiting ones. Spoken verbatim it produced "Book flights, To do,
+        // due Friday, , " — a trailing empty component and a spurious pause on every
+        // card in any deck that contains a waiting member (2026-09-20).
+        if let subtitle, !isBlocked,
+            !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            parts.append(subtitle)
+        }
         if let ownerDisplayName {
             parts.append("owned by \(ownerDisplayName)")
         } else if task.ownerID == nil {

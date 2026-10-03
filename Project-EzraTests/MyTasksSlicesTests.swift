@@ -74,6 +74,22 @@ struct MyTasksSlicesTests {
         #expect(ledger.hiddenCount == 2)
     }
 
+    @Test("A section's count is its tasks, not its entries — a deck counts its cards")
+    func sectionCountsTasks() {
+        let me = UUID()
+        let trip = TaskItem(title: "Trip", status: .todo, ownerID: me)
+        let a = TaskItem(title: "a", status: .todo, ownerID: me)
+        let b = TaskItem(title: "b", status: .todo, ownerID: me)
+        for step in [a, b] { step.linkParent(trip.uuid!) }
+        let loose = TaskItem(title: "loose", status: .todo, ownerID: me)
+        let sections = MyTasksSlices.assigned(tasks: [trip, a, b, loose], currentUserID: me)
+        #expect(sections.count == 1)
+        // Two entries (the deck and the loose task); three tasks a person can act on. The
+        // umbrella is the deck's caption, not a card, so it is not counted.
+        #expect(sections[0].entries.count == 2)
+        #expect(sections[0].taskCount == 3)
+    }
+
     @Test("Needs Decision floats to the top within its section")
     func needsDecisionFloatsInSection() {
         let me = UUID()
@@ -140,6 +156,39 @@ struct MyTasksSlicesTests {
     }
 
     // MARK: - Filters
+
+    @Test("The attention axis narrows by the derived flags and by one owner")
+    func attentionFilter() {
+        let overdue = TaskItem(
+            title: "Overdue", category: "Home", status: .todo,
+            dueDate: Date().addingTimeInterval(-2 * 86_400))
+        let today = TaskItem(title: "Today", category: "Home", status: .todo, dueDate: Date())
+        let decision = TaskItem(title: "Decision", category: "Home", status: .todo, needsDecision: true)
+        let owner = UUID()
+        let hers = TaskItem(title: "Hers", category: "Home", status: .todo, ownerID: owner)
+        let all = [overdue, today, decision, hers]
+        #expect(TasksAttention.overdue.matches(overdue, among: all))
+        #expect(!TasksAttention.overdue.matches(today, among: all))
+        #expect(TasksAttention.dueToday.matches(today, among: all))
+        #expect(TasksAttention.decisions.matches(decision, among: all))
+        #expect(!TasksAttention.decisions.matches(hers, among: all))
+        #expect(TasksAttention.ownedBy(owner, name: "Maya").matches(hers, among: all))
+        #expect(!TasksAttention.waiting.matches(overdue, among: all))
+        #expect(
+            MyTasksSlices.applyFilters(overdue, status: nil, category: nil, attention: .overdue, among: all))
+        #expect(
+            !MyTasksSlices.applyFilters(today, status: nil, category: nil, attention: .overdue, among: all))
+        // The summary and the empty message count the third axis with the other two.
+        #expect(MyTasksHeader.filterSummary(status: nil, category: nil, attention: .waiting) == "Waiting")
+        #expect(MyTasksHeader.filterSummary(status: .todo, category: nil, attention: .waiting) == "2 filters")
+        #expect(
+            MyTasksHeader.filterSummary(status: .todo, category: "Home", attention: .waiting) == "3 filters")
+        #expect(
+            MyTasksHeader.filteredEmptyMessage(
+                status: nil, category: nil, attention: .ownedBy(owner, name: "Maya"))
+                == "No tasks match “Maya’s”.")
+        #expect(TasksAttention.ownedBy(owner, name: "Maya").label == "Maya’s")
+    }
 
     @Test("applyFilters narrows by display status and category")
     func filters() {

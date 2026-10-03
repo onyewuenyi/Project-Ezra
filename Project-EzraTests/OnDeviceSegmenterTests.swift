@@ -108,6 +108,14 @@ struct OnDeviceSegmenterTests {
 
     // MARK: - The gate
 
+    @Test("a cut is a gain only above the local read's count — never a merge of what it had")
+    func cutMustExceedLocalCount() {
+        #expect(OnDeviceSegmenter.isGain(anchors: 3, localCount: 1))
+        #expect(!OnDeviceSegmenter.isGain(anchors: 2, localCount: 3))  // the 2026-09-17 merge
+        #expect(!OnDeviceSegmenter.isGain(anchors: 3, localCount: 3))  // nothing new
+        #expect(!OnDeviceSegmenter.isGain(anchors: 1, localCount: 0))  // never a cut
+    }
+
     @Test("the arm handles ONLY under-segmentation")
     func handlesOnlyBoundaryFailures() {
         #expect(OnDeviceSegmenter.handles(.underSegmented))

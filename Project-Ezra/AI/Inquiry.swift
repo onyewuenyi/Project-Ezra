@@ -87,6 +87,12 @@ protocol InquiryScope: Sendable {
     /// Advisor's deterministic reading, the household's day answer. Nil when there is
     /// nothing factual to open with. Default: nil.
     func opener() -> InquiryAnswer?
+    /// Every unasked line the conversation opens with — a REQUIREMENT, not only an
+    /// extension default, or the generic store dispatches to the default and a scope's
+    /// override never runs (the household's catch-up line was built and never seated
+    /// for exactly that reason, 2026-09-23).
+    func openers() -> [InquiryAnswer]
+    var openerFingerprint: Int { get }
 
     /// The most lines a list-shaped reply may run to (the prose clamp is shared).
     static var maxLines: Int { get }
@@ -117,12 +123,23 @@ extension InquiryScope {
     func context(for question: String) -> InquiryContext { .none }
     var sessionDiscriminator: String { "" }
     func opener() -> InquiryAnswer? { nil }
+    /// Every unasked line the conversation opens with, in order. The default is the
+    /// one opener; the household adds its catch-up line (2026-09-23).
+    func openers() -> [InquiryAnswer] { opener().map { [$0] } ?? [] }
+    /// Identity of the OPENERS — what decides whether `open` re-seats them. Defaults to
+    /// the session fingerprint; a scope whose openers read more than its stable facts
+    /// (the household's catch-up line) folds that in HERE, never in `fingerprint`,
+    /// which is the session cache key and the model's instructions.
+    var openerFingerprint: Int { fingerprint }
 }
 
 /// What a floor or model answer carries back: the text and the tasks it is about.
-struct InquiryAnswer: Equatable, Sendable {
+struct InquiryAnswer: Equatable, Hashable, Sendable {
     let text: String
     let citedTaskIDs: [UUID]
+    /// One clause per cited task saying why it is in this answer (the day answer's
+    /// rows, 2026-09-23). Empty for answers whose sentence is the whole reason.
+    var reasons: [UUID: String] = [:]
 }
 
 /// Something a reply may cite: a task the scope showed the model, by title.
@@ -343,8 +360,18 @@ final class InquiryService {
             .historyTransform { history in
                 Array(history.suffix(InquiryPrompt.historyWindow))
             }
+            // A turn that errors (a guardrail refusal, an overflow, a decode failure) is
+            // rolled back out of the transcript rather than left in it, so "Try again"
+            // re-asks the question on the thread as it was — not on a thread that now
+            // carries the failed attempt as context. iOS 27; the default keeps it.
+            .transcriptErrorHandlingPolicy(.revertTranscript)
         }
     }
+
+    /// How often a session had to be replaced mid-thread, by cause — the meter for a
+    /// degrade that would otherwise be invisible (`responding`: a turn the deadline
+    /// abandoned was still generating; `overflow`: the context window filled).
+    private(set) var rebuilds: (responding: Int, overflow: Int) = (0, 0)
 
     /// Warm the session the moment a scope's surface appears — the person is about to
     /// type, which absorbs the prefill. A no-op off-device and under tests.
@@ -365,6 +392,12 @@ final class InquiryService {
         spares[key] = session
     }
 
+    /// Adopt a warmed spare for a ONE-SHOT call that has no scope — the kickoff step,
+    /// asked once on the Start tap. Nil when nothing was warmed; the caller builds cold.
+    func takeSpare(instructions: String, config: CapabilityProfiles.Config) -> LanguageModelSession? {
+        spares.removeValue(forKey: Self.spareKey(instructions: instructions, config: config))
+    }
+
     /// The ZERO-TURN answer (G2): one typed, guided generation over the scope's session —
     /// the ambient Advisor reading. Streaming and salvage stay the reply path's; a judgment
     /// is one value or nothing, never a partial rendered as truth.
@@ -381,13 +414,40 @@ final class InquiryService {
         let prompt = turn.prompt
         let box = PartialBox<String>()
         let started = Date()
-        let outcome = await ModelRun.perform(turn.scope.feature, deadline: ModelDeadline.seconds(for: .reply)) {
-            let session = self.session(for: turn.scope)
-            let stream = session.streamResponse(to: prompt)
-            for try await snapshot in stream {
-                box.latest = snapshot.content
+        let outcome = await ModelRun.perform(turn.scope.feature, deadline: ModelDeadline.seconds(for: .reply))
+        {
+            var session = self.session(for: turn.scope)
+            // **A session still answering a turn the deadline abandoned cannot take
+            // another.** `ModelDeadline.race` never awaits the loser, so after a timeout
+            // the model may still be generating on this session, and Foundation Models
+            // rejects a second request on it (`concurrentRequests`) — which made "Try
+            // again" after a timeout fail instantly, every time, until the abandoned
+            // call finished. The thread moves to a fresh session over the same
+            // instructions, carrying the exchanges that did finish.
+            if session.isResponding {
+                self.rebuilds.responding += 1
+                session = self.rebuild(
+                    for: turn.scope, replacing: session, keepingLast: InquiryPrompt.historyWindow)
             }
-            return try await stream.collect().content
+            do {
+                return try await Self.stream(prompt, on: session, into: box)
+            } catch {
+                // The window filled (the phone's is 4096 tokens; eight long exchanges
+                // plus the facts can reach it). Halve the thread carried and ask once
+                // more; a retry on the same session could only overflow again.
+                //
+                // Matched by LABEL, not by case (2026-09-17): this caught only the
+                // deprecated `GenerationError.exceededContextWindowSize`, and the GA
+                // model throws `LanguageModelError.contextSizeExceeded` — so on iOS 27
+                // the rebuild never fired and an overflowing thread failed every turn
+                // until the person cleared it. `AppBrain.errorLabel` is the one map over
+                // both vocabularies; matching its name keeps this catch true on either.
+                guard await Self.isContextOverflow(error) else { throw error }
+                self.rebuilds.overflow += 1
+                session = self.rebuild(
+                    for: turn.scope, replacing: session, keepingLast: InquiryPrompt.historyWindow / 2)
+                return try await Self.stream(prompt, on: session, into: box)
+            }
         }
         // Salvage: the deadline fired mid-answer. What streamed is a real answer to the
         // question — shorter than the model intended, which the clamp would have done
@@ -402,13 +462,52 @@ final class InquiryService {
         return outcome
     }
 
+    /// Whether an error is the model's context window filling — on either OS vocabulary.
+    static func isContextOverflow(_ error: Error) -> Bool {
+        AppBrain.errorLabel(error) == "contextSizeExceeded"
+    }
+
+    /// One streamed reply, the partial kept for salvage at the deadline.
+    private static func stream(
+        _ prompt: String, on session: LanguageModelSession, into box: PartialBox<String>
+    ) async throws -> String {
+        let stream = session.streamResponse(to: prompt)
+        for try await snapshot in stream {
+            box.latest = snapshot.content
+        }
+        return try await stream.collect().content
+    }
+
+    /// A fresh session over the scope's instructions, carrying the last `keep` entries
+    /// of the transcript it replaces — the thread survives, the part that could not
+    /// (an in-flight prompt, an overflowing tail) does not. A trailing prompt with no
+    /// response is dropped: it is the question being re-asked, or one nobody answered.
+    private func rebuild<S: InquiryScope>(
+        for scope: S, replacing old: LanguageModelSession, keepingLast keep: Int
+    ) -> LanguageModelSession {
+        var history = old.transcript.filter { entry in
+            if case .instructions = entry { return false }
+            return true
+        }
+        if case .prompt = history.last { history.removeLast() }
+        let session = LanguageModelSession(
+            profile: Profile(
+                instructions: scope.instructions, config: CapabilityProfiles.supported(scope.config)),
+            history: history.suffix(keep))
+        let key = Self.sessionKey(S.self, key: scope.key, discriminator: scope.sessionDiscriminator)
+        live[key] = Live(fingerprint: scope.fingerprint, session: session)
+        return session
+    }
+
     /// Drop a scope's session — the conversation was cleared, or the scope left the
     /// working set.
     func forget<S: InquiryScope>(_ scopeType: S.Type, key: S.Key, discriminator: String = "") {
         live[Self.sessionKey(scopeType, key: key, discriminator: discriminator)] = nil
     }
 
-    private static func sessionKey<S: InquiryScope>(_ scopeType: S.Type, key: S.Key, discriminator: String) -> String {
+    private static func sessionKey<S: InquiryScope>(
+        _ scopeType: S.Type, key: S.Key, discriminator: String
+    ) -> String {
         "\(S.self)#\(key)#\(discriminator)"
     }
 
@@ -469,6 +568,10 @@ final class InquiryStore<Scope: InquiryScope> {
         var messages: [ChatMessage] = []
         /// The fingerprint the LAST turn was sent over. Nil until the first ask.
         var fingerprint: Int?
+        /// The openers' fingerprint the thread was last seated on (see `open`). Kept
+        /// apart from `fingerprint` so re-seating the openers never reads as a moved
+        /// session to the first real turn.
+        var openerFingerprint: Int?
         /// In-flight replies, keyed by the advisor message they will fill.
         var work: [UUID: Task<Void, Never>] = [:]
         /// Which rung answered the last question.
@@ -531,7 +634,9 @@ final class InquiryStore<Scope: InquiryScope> {
             ledger.record(.facts, for: .chat, now: now)
             conversation.lastRoute = .floor
             conversation.messages.append(
-                ChatMessage(role: .advisor, text: floor.text, citedTaskIDs: floor.citedTaskIDs))
+                ChatMessage(
+                    role: .advisor, text: floor.text, citedTaskIDs: floor.citedTaskIDs, reasons: floor.reasons
+                ))
             conversations[scope.key] = conversation
             return
         }
@@ -550,14 +655,28 @@ final class InquiryStore<Scope: InquiryScope> {
     func open(scope: Scope, now: Date = Date()) {
         var conversation = conversations[scope.key] ?? Conversation()
         guard !conversation.messages.contains(where: { $0.role == .user }) else { return }
-        guard conversation.fingerprint != scope.fingerprint else { return }
+        guard conversation.openerFingerprint != scope.openerFingerprint else { return }
+        // **A re-seated opener keeps its identity (2026-09-25).** The home's answer
+        // re-seats whenever the household moves — a task completed from its own hero
+        // row, a capture landing — and a fresh id each time made SwiftUI replace the
+        // whole block (fade out, fade in) instead of animating the rows: the done row
+        // leaving, the next rising into the hero slot, the count rolling. Same slot,
+        // same id; the text and the rows are what change.
+        let previous = conversation.messages
         conversation.messages.removeAll()
         conversation.fingerprint = scope.fingerprint
-        if let opener = scope.opener() {
+        conversation.openerFingerprint = scope.openerFingerprint
+        let openers = scope.openers()
+        if !openers.isEmpty {
             ledger.record(.facts, for: .chat, now: now)
             conversation.lastRoute = .floor
-            conversation.messages.append(
-                ChatMessage(role: .advisor, text: opener.text, citedTaskIDs: opener.citedTaskIDs))
+            for (index, opener) in openers.enumerated() {
+                let keptID = previous.indices.contains(index) ? previous[index].id : UUID()
+                conversation.messages.append(
+                    ChatMessage(
+                        id: keptID, role: .advisor, text: opener.text, citedTaskIDs: opener.citedTaskIDs,
+                        reasons: opener.reasons))
+            }
         }
         conversations[scope.key] = conversation
     }

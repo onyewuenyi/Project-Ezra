@@ -181,6 +181,9 @@ enum QuickCaptureDiagnostics {
         }
 
         print("=== QUICK CAPTURE DIAG · CAMPAIGN 3: the Private Capture envelope ===")
+        print(
+            Instrument.runStamp(
+                model: brain.status.description, configuration: PrivateCaptureEngine.instructions))
         guard brain.status.isOnDevice else {
             print("(skipped — no on-device model on this host; these numbers are device-only)")
             print("=== END QUICK CAPTURE DIAG ===")
@@ -244,7 +247,8 @@ enum QuickCaptureDiagnostics {
                     repCount: q1Repeats,
                     sessionLabel: q1Rows.isEmpty ? "post-reboot first invocation " : "fresh",
                     acquisitionMs: nil, preparedAheadMs: nil, preFirstTokenMs: nil,
-                    totalMs: nil, failure: nil, promptTok: nil, outTok: nil)
+                    totalMs: nil, failure: nil, promptTok: nil, outTok: nil,
+                    utterance: evalCase.utterance)
                 do {
                     let (preMs, totalMs, capture) = try await ModelDeadline.race(
                         timeout: LaunchSeams.evalCaseTimeoutSeconds
@@ -295,7 +299,7 @@ enum QuickCaptureDiagnostics {
                     row.failure = "TIMEOUT \(Int(LaunchSeams.evalCaseTimeoutSeconds))s"
                     consecutiveFailures += 1
                 } catch {
-                    row.failure = AppBrain.errorLabel(error)
+                    row.failure = AppBrain.errorLine(error)
                     consecutiveFailures += 1
                 }
                 q1Rows.append(row)
@@ -328,7 +332,8 @@ enum QuickCaptureDiagnostics {
             var row = FMDiagnostics.Row(
                 caseNumber: index + 1, caseCount: detectorCases.count, rep: 1, repCount: 1,
                 sessionLabel: "fresh", acquisitionMs: nil, preparedAheadMs: nil,
-                preFirstTokenMs: nil, totalMs: nil, failure: nil, promptTok: nil, outTok: nil)
+                preFirstTokenMs: nil, totalMs: nil, failure: nil, promptTok: nil, outTok: nil,
+                utterance: evalCase.utterance)
             do {
                 let (preMs, totalMs, verdict) = try await ModelDeadline.race(
                     timeout: LaunchSeams.evalCaseTimeoutSeconds
@@ -343,7 +348,7 @@ enum QuickCaptureDiagnostics {
                 row.failure = "TIMEOUT \(Int(LaunchSeams.evalCaseTimeoutSeconds))s"
                 consecutiveFailures += 1
             } catch {
-                row.failure = AppBrain.errorLabel(error)
+                row.failure = AppBrain.errorLine(error)
                 consecutiveFailures += 1
             }
             detRows.append(row)
@@ -526,6 +531,37 @@ enum QuickCaptureDiagnostics {
             print(
                 "  private capture summary: n \(latencies.count) · captured \(captured) · fallback \(fallbacks)"
                     + " · perceived p50/p95 \(p50)/\(p95)ms · \(tally.line) · asks[when?] \(asks)")
+        }
+
+        // (a′) The PRODUCTION shape: the silence window arms speculation, the window
+        // runs its 2.5 s, and the person waits only for what is left. The number above
+        // is prewarm-then-finish with no window — the cold path. Until 2026-09-17 the
+        // composer built a fresh engine at submit, so THIS path never ran in the product
+        // and "perceived" was the only truth; now it is the one that ships.
+        print("  private capture, silence-window shape (speculate → 2.5 s window → finish):")
+        var windowed: [Int] = []
+        var speculativeWins = 0
+        for evalCase in real where evalCase.expected.count == 1 {
+            let engine = PrivateCaptureEngine()
+            engine.prewarm()
+            engine.silenceArmed(text: evalCase.utterance)
+            try? await Task.sleep(for: .seconds(PrivateCaptureEngine.silenceStopSeconds))
+            let started = Date()
+            let outcome = await engine.finish(text: evalCase.utterance)
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            windowed.append(ms)
+            if case .captured(_, let speculative) = outcome, speculative { speculativeWins += 1 }
+            print(
+                "  \(String(format: "%5d", ms))ms after the window"
+                    + " \({ if case .captured(_, true) = outcome { return "speculative" }; return "fresh" }())"
+                    + "  ← \(evalCase.utterance.prefix(48))")
+        }
+        if !windowed.isEmpty {
+            let p50 = Int(CapturePerformanceContract.nearestRank(windowed, quantile: 0.5))
+            let p95 = Int(CapturePerformanceContract.nearestRank(windowed, quantile: 0.95))
+            print(
+                "  silence-window summary: n \(windowed.count) · speculative \(speculativeWins)/\(windowed.count)"
+                    + " · waited after the window p50/p95 \(p50)/\(p95)ms")
         }
 
         // (b) The anti-invention rows: what a long-press on pure chatter produces.

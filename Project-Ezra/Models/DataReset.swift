@@ -6,8 +6,11 @@
 //  not a repair. The other three (`schemaGeneration`, the load-failure self-heal, the
 //  `-SeedTodayFixtures` seam) destroy the store file itself because they run before or
 //  around a store that won't open. This one runs against a store that is open and in
-//  use, so it empties the graph through the context instead: the view context stays
-//  consistent, every `@FetchRequest` on screen updates, and no relaunch is needed.
+//  use, so it empties the rows instead of destroying the file, and no relaunch is needed.
+//
+//  It empties them IN THE STORE and tells the open context nothing — the long note at
+//  the deletion loop says why that is the only survivable shape, and `DataGeneration`
+//  says how the screens catch up afterwards. Read both before changing either.
 //
 //  Two scopes, because "clear" means two different things. `.work` deletes what you
 //  captured and keeps who you are — no re-onboarding to get an empty list. `.everything`
@@ -102,8 +105,66 @@ enum DataReset {
         let captures = (try? context.fetch(NSFetchRequest<Capture>(entityName: "Capture"))) ?? []
         let imageRefs = captures.compactMap(\.imageRef)
 
+        // **Deleted IN THE STORE, not object by object in the live context (2026-09-19).**
+        // The loop here used to fetch every row of an entity and `context.delete` each
+        // one, and it crashed the app with SIGSEGV every single time.
+        //
+        // The fault is TEARDOWN AFTER READ, and it is the same one the test host has
+        // worked around since 2026-08-07 (`TestStore`, ~70 EXC_BAD_ACCESS reports): once a
+        // managed object's attributes have been read, any later teardown of that object —
+        // a property snapshot, a refresh to a fault, a delete, a dealloc — retains a value
+        // that is no longer a pointer and dies inside `objc_retain`. `SettingsView` holds
+        // live `@FetchRequest`s for `ChangeLogEntry`, `TaskItem` and `Correction` and runs
+        // the clear from that very screen, so every object deleted here is an object it
+        // has already read. Bisected with a `-ClearStep` seam: deleting every `TaskItem`
+        // alone was survivable, `ChangeLogEntry` was where it died.
+        //
+        // A batch delete does the work in the persistent store and never materialises a
+        // row, so there is no per-object KVO for the view to re-enter. Persistent
+        // history tracking is on, which is what lets CloudKit export these deletions —
+        // the reason batch deletes are safe here at all.
+        //
+        // **And the in-memory copies are dropped WHOLESALE, never merged.** Merging the
+        // deleted ids back in was the crash's last hiding place, and the debugger named
+        // it exactly: `mergeChanges(fromRemoteContextSave:)` calls `deleteObject:` on
+        // every registered object it matches, `deleteObject:` takes a property snapshot
+        // (`_establishEventSnapshotsForObject`), and snapshotting an object whose
+        // relationships point at rows this same loop has ALREADY deleted reads freed
+        // memory — EXC_BAD_ACCESS in `objc_retain`, inside the merge, inside the clear.
+        //
+        // `reset()` and `refreshAllObjects()` were each tried in that spot and each
+        // crashes too, for the same reason: both walk the registered objects, and walking
+        // an object that has been read is the fault. `reset()` also invalidates the
+        // identity objects this very screen is bound to, which made the crash
+        // deterministic rather than fixing it. There is no safe way to tell this context
+        // what happened — so nothing tells it, and `DataGeneration` rebuilds the
+        // interface instead of refreshing the objects.
+        //
+        // Every object the context has already materialised, kept alive for the life of
+        // the process. They are about to become unreachable — the rows go, the views that
+        // held them are discarded by `DataGeneration.rebuild()` — and "unreachable" for a
+        // managed object means `dealloc`, which unregisters it, which makes the
+        // coordinator's row cache release the row it was read from. That release is the
+        // SAME teardown-after-read fault as the snapshot one (`_NSQLRow_dealloc_standard`
+        // in the reports), and it lands on Core Data's own queue where no caller can
+        // catch it. So they are parked instead of freed: a one-off leak the size of one
+        // personal store, taken deliberately, on the path whose whole purpose is that the
+        // data is never read again.
+        parked.append(contentsOf: context.registeredObjects)
+
+        // **This phone's own store only (2026-09-30).** The shared mirror holds a household
+        // someone ELSE owns, and a batch delete there is exported like any other — "Clear
+        // all tasks" on a participant's phone emptied the whole household's plan for
+        // everyone in it. The owner's household lives in the private store, so on the
+        // owner's phone nothing changes.
+        let stores = clearableStores(context.persistentStoreCoordinator?.persistentStores ?? [])
         for name in entityNames(for: scope, in: context) {
+            if batchDeleted(name, in: context, stores: stores) { continue }
+            // A store that cannot batch-delete — an in-memory one, which is what a
+            // SwiftUI preview runs on. Nothing is observing it there, so the
+            // object-by-object loop is both safe and the only option.
             let request = NSFetchRequest<NSManagedObject>(entityName: name)
+            request.affectedStores = stores
             (try? context.fetch(request))?.forEach(context.delete)
         }
 
@@ -120,6 +181,10 @@ enum DataReset {
                 reason: .userRequested(clearedIdentity: scope == .everything), date: now,
                 backupName: backupName, destroyedData: false)
         }
+
+        // Nothing happens here on the memory side, deliberately — see above. What the
+        // screen is still showing is handled by `DataGeneration.rebuild()`, which the
+        // caller fires once the person has read the receipt.
 
         // The three file sidecars, cleared only once the rows they describe are actually
         // gone. Each is keyed to something BOTH scopes delete — provenance and the
@@ -156,6 +221,36 @@ enum DataReset {
             backupName: backupName, destroyedData: true)
         StoreResetLog.write(record, to: defaults)
         return record
+    }
+
+    /// Objects retired by a clear, held for the life of the process so none of them is
+    /// ever deallocated. See the note at the `append` site: on this runtime a managed
+    /// object that was READ and is then torn down — snapshotted, faulted, deallocated —
+    /// dies in `objc_retain` on a value that is no longer a pointer. The test host holds
+    /// the same line with `retainsRegisteredObjects` and a parking array (`TestStore`).
+    nonisolated(unsafe) private static var parked: [NSManagedObject] = []
+
+    /// Every row of one entity, deleted in the STORE. False when the store cannot do it
+    /// (an in-memory one), so the caller falls back to the object-by-object loop.
+    ///
+    /// The ids the request is asked for are deliberately never used. Asking for them is
+    /// what makes the deletion reportable — and the whole point of this path is that the
+    /// result is NOT reported to the live context.
+    private static func batchDeleted(
+        _ name: String, in context: NSManagedObjectContext, stores: [NSPersistentStore]?
+    ) -> Bool {
+        let fetch = NSFetchRequest<NSFetchRequestResult>(entityName: name)
+        fetch.affectedStores = stores
+        let request = NSBatchDeleteRequest(fetchRequest: fetch)
+        request.resultType = .resultTypeObjectIDs
+        return (try? context.execute(request)) != nil
+    }
+
+    /// The stores a clear may touch: every one but the shared mirror. Nil — "all of
+    /// them", Core Data's own default — when there is no shared store to protect.
+    static func clearableStores(_ all: [NSPersistentStore]) -> [NSPersistentStore]? {
+        let own = all.filter { !PersistenceStack.isShared($0) }
+        return own.count == all.count ? nil : own
     }
 
     private static func entityNames(for scope: Scope, in context: NSManagedObjectContext) -> [String] {

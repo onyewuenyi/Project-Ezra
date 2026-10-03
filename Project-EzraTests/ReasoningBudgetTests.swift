@@ -316,11 +316,23 @@ struct DataBoundaryTests {
         #expect(!boundary.judgment.lowercased().contains("cloud"))
     }
 
-    @Test("Corrections never leave, in every configuration")
-    func correctionsNeverLeave() {
+    /// **This pinned "never leave" until 2026-09-20, and the claim was false.** The
+    /// private store carries `NSPersistentCloudKitContainerOptions` at `.private` scope
+    /// with no entity exclusions, so on a signed-in phone every entity — corrections
+    /// included — mirrors to the person's own iCloud. What the sentence was really
+    /// describing is the `CKShare`: those entities carry no `household` edge, so they
+    /// never reach anyone invited. The guarantee is real; the words were not.
+    ///
+    /// So the test now pins the two things that ARE true in every configuration, and
+    /// pins the old wording OUT — a privacy sentence that is wrong in the person's
+    /// favour is still wrong, and a test that enforces it is how it survives for months.
+    @Test("Corrections never reach us or anyone invited, in every configuration")
+    func correctionsNeverReachUs() {
         for reachable in [true, false] {
             let boundary = DataBoundary.current(cloudReachable: reachable)
-            #expect(boundary.never.contains("never leave"))
+            #expect(boundary.never.localizedCaseInsensitiveContains("never reach us"))
+            #expect(boundary.never.localizedCaseInsensitiveContains("invite"))
+            #expect(!boundary.never.localizedCaseInsensitiveContains("never leave this device"))
         }
     }
 

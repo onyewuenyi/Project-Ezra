@@ -6,6 +6,16 @@
 	<string>Ezra</string>
 	<key>CKSharingSupported</key>
 	<true/>
+	<!-- Export compliance, answered in the binary rather than by hand on every upload.
+	     FALSE is the honest answer, not a convenience: the app ships no cryptography of
+	     its own (no CryptoKit, no CommonCrypto, no keychain crypto — grep-checked). All
+	     it uses is HTTPS to Apple and to Firebase, which is exempt under the standard
+	     exemption for encryption that is limited to authentication and transport.
+	     Without this key, App Store Connect stops every single build on the export
+	     compliance question and TestFlight will not distribute until someone answers it
+	     by hand. Revisit the moment the app encrypts anything itself. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
@@ -14,5 +24,7 @@
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Ezra uses the microphone to transcribe what you say into a capture, entirely on your device.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Ezra turns what you say into text on your device, so it can understand your capture.</string>
 </dict>
 </plist>

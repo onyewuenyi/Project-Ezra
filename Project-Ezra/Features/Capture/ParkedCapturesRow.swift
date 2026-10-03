@@ -29,6 +29,7 @@ import SwiftUI
 struct ParkedCapturesRow: View {
     @Environment(\.resumeCapture) private var resumeCapture
     @Environment(\.managedObjectContext) private var context
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The parked capture a long-press asked to let go of; the dialog confirms.
     @State private var discardCandidate: Capture?
     @FetchRequest(
@@ -127,21 +128,50 @@ struct ParkedCapturesRow: View {
             // a quote beside it. Priority, not `fixedSize`: the label is served first
             // and the excerpt takes what is left, but at an accessibility size where the
             // label alone outgrows the row it still truncates instead of overflowing.
-            Text(text)
-                .supportingStyle()
-                .lineLimit(1)
-                .layoutPriority(1)
-            Text("“\(detail)”")
-                .supportingStyle()
-                .foregroundStyle(Palette.mutedText)
-                .lineLimit(1)
-            Spacer(minLength: Spacing.xs)
-            // WHEN, in the row's quietest register: "2h ago" is what lets the person
-            // recognise the thought without opening it.
-            Text(age)
-                .font(.chipLabel)
-                .foregroundStyle(Palette.mutedText)
-                .monospacedDigit()
+            if dynamicTypeSize.isAccessibilitySize {
+                // At the accessibility sizes the texts no longer share a line: the
+                // label took the width and the excerpt was left as one quotation mark
+                // (2026-09-17, "9 unfinished… “(") — the part that lets the person
+                // recognise the thought was the part that vanished. Stacked, all three
+                // read, and the age joins the stack: beside the label it left "9" alone
+                // on a line.
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text(text)
+                        .supportingStyle()
+                        .lineLimit(2)
+                    Text("“\(detail)”")
+                        .supportingStyle()
+                        .foregroundStyle(Palette.mutedText)
+                        .lineLimit(2)
+                    Text(age)
+                        .font(.chipLabel)
+                        .foregroundStyle(Palette.mutedText)
+                        .monospacedDigit()
+                }
+                .multilineTextAlignment(.leading)
+                Spacer(minLength: Spacing.xs)
+            } else {
+                Text(text)
+                    .supportingStyle()
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Text("“\(detail)”")
+                    .supportingStyle()
+                    .foregroundStyle(Palette.mutedText)
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.xs)
+                // WHEN, in the row's quietest register: "2h ago" is what lets the person
+                // recognise the thought without opening it.
+                Text(age)
+                    .font(.chipLabel)
+                    .foregroundStyle(Palette.mutedText)
+                    .monospacedDigit()
+                    // Never squeezed: at accessibility sizes the row ran out of width and
+                    // the HStack folded "3h ago" into one letter per line. The age holds
+                    // its ideal width; the excerpt beside it is the part that yields.
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
             Image(systemName: "chevron.right")
                 .font(.glyphCaption())
                 .foregroundStyle(Palette.mutedText)

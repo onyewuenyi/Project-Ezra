@@ -205,6 +205,13 @@ final class CloudHealth {
         // The service answered and said "not now".
         if l.contains("ratelimit") || l.contains("resourceexhausted") || l.contains("quota")
             || l.contains("toomanyrequests") || l.contains("429")
+            // "This model is currently experiencing high demand … please try again
+            // later" arrived as HTTP 500 INTERNAL on 2026-09-17 (Gemini 3.7 Flash, twice
+            // in a row) — a "not now" spelled as a server error. The first one is the
+            // signal; paying a second doomed call to reach the transient threshold is
+            // what this branch exists to avoid.
+            || l.contains("highdemand") || l.contains("tryagainlater") || l.contains("503")
+            || l.contains("serviceunavailable")
         {
             return .refused
         }

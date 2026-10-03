@@ -1,0 +1,60 @@
+# Accepted warnings (file | message). Regenerate: scripts/ai/build.sh --update-baseline
+Project-Ezra/AI/AIEngine.swift | Call to main actor-isolated static method 'dateString' in a synchronous nonisolated context
+Project-Ezra/AI/AppBrain.swift | Converting non-Sendable function value to '@MainActor @Sendable ([TaskIntent]) -> Void' may introduce data races
+Project-Ezra/AI/AppBrain.swift | Main actor-isolated static property 'isLive' can not be referenced from a nonisolated context
+Project-Ezra/AI/AppBrain.swift | Main actor-isolated static property 'none' can not be referenced from a nonisolated context
+Project-Ezra/AI/CaptureConversation.swift | Main actor-isolated static property 'promptHead' can not be referenced from a nonisolated context
+Project-Ezra/AI/CaptureConversation.swift | No 'async' operations occur within 'await' expression
+Project-Ezra/AI/CaptureTriageRace.swift | No 'async' operations occur within 'await' expression
+Project-Ezra/AI/ContextRetrieval.swift | Main actor-isolated static property 'categoryWeight' can not be referenced from a nonisolated context
+Project-Ezra/AI/ContextRetrieval.swift | Main actor-isolated static property 'embeddingWeight' can not be referenced from a nonisolated context
+Project-Ezra/AI/ContextRetrieval.swift | Main actor-isolated static property 'lexicalWeight' can not be referenced from a nonisolated context
+Project-Ezra/AI/ContextRetrieval.swift | Main actor-isolated static property 'maxCandidates' can not be referenced from a nonisolated context
+Project-Ezra/AI/ContextRetrieval.swift | Main actor-isolated static property 'maxFreshEmbeds' can not be referenced from a nonisolated context
+Project-Ezra/AI/ContextRetrieval.swift | Main actor-isolated static property 'recencyWeight' can not be referenced from a nonisolated context
+Project-Ezra/AI/ContextRetrieval.swift | Main actor-isolated static property 'relevanceFloor' can not be referenced from a nonisolated context
+Project-Ezra/AI/CorrectionProfile.swift | Main actor-isolated static property 'stopWords' can not be referenced from a nonisolated autoclosure
+Project-Ezra/AI/DraftMerge.swift | Call to main actor-isolated static method 'stem' in a synchronous nonisolated context
+Project-Ezra/AI/FMDiagnostics.swift | Main actor-isolated static property 'standard' can not be referenced from a nonisolated context
+Project-Ezra/AI/FMDiagnostics.swift | No 'async' operations occur within 'await' expression
+Project-Ezra/AI/FMDiagnostics.swift | No calls to throwing functions occur within 'try' expression
+Project-Ezra/AI/FoundationModelsEngine.swift | No 'async' operations occur within 'await' expression
+Project-Ezra/AI/HeuristicEngine.swift | Call to main actor-isolated static method 'intent(from:)' in a synchronous nonisolated context
+Project-Ezra/AI/HeuristicEngine.swift | Call to main actor-isolated static method 'splitIntoItems' in a synchronous nonisolated context
+Project-Ezra/AI/HouseholdChat.swift | Call to main actor-isolated static method 'promptLine' in a synchronous nonisolated context
+Project-Ezra/AI/Inquiry.swift | Main actor-isolated instance method 'rebuild(for:replacing:keepingLast:)' cannot be called from outside of the actor; this is an error in the Swift 6 language mode
+Project-Ezra/AI/Inquiry.swift | Main actor-isolated instance method 'session(for:)' cannot be called from outside of the actor; this is an error in the Swift 6 language mode
+Project-Ezra/AI/Inquiry.swift | Main actor-isolated property 'rebuilds' cannot be accessed from outside of the actor; this is an error in the Swift 6 language mode
+Project-Ezra/AI/Inquiry.swift | Main actor-isolated static property 'shared' can not be referenced from a nonisolated context; this is an error in the Swift 6 language mode
+Project-Ezra/AI/ModelAvailability.swift | 'GenerationError' was deprecated in iOS 27.0
+Project-Ezra/AI/ModelDeadline.swift | Main actor-isolated initializer 'init()' cannot be called from outside of the actor; this is an error in the Swift 6 language mode
+Project-Ezra/AI/ModelDeadline.swift | Main actor-isolated instance method 'take()' cannot be called from outside of the actor; this is an error in the Swift 6 language mode
+Project-Ezra/AI/OnDeviceSegmenter.swift | Main actor-isolated static property 'none' can not be referenced from a nonisolated context
+Project-Ezra/AI/RambleEvalSet.swift | Main actor-isolated static property 'evalSet' can not be referenced from a nonisolated context
+Project-Ezra/AI/ReasoningBudget.swift | Main actor-isolated static property 'shared' can not be referenced from a nonisolated context; this is an error in the Swift 6 language mode
+Project-Ezra/AI/Segmentation.swift | Call to main actor-isolated static method 'isItemLike' in a synchronous nonisolated context
+Project-Ezra/AI/Segmentation.swift | Call to main actor-isolated static method 'strippedLeadIn' in a synchronous nonisolated context
+Project-Ezra/AI/SpeechCaptureService.swift | 'InterruptionType' was deprecated in iOS 27.0: Use AVAudioSessionDidBecomeInactiveNotification and AVAudioSessionResumptionRecommendationNotification instead
+Project-Ezra/AI/SpeechCaptureService.swift | 'installTap(onBus:bufferSize:format:block:)' was deprecated in iOS 27.0
+Project-Ezra/AI/TaskAdvisorService.swift | Main actor-isolated initializer 'init(taskID:facts:mode:)' cannot be called from outside of the actor; this is an error in the Swift 6 language mode
+Project-Ezra/AI/TaskAdvisorService.swift | Main actor-isolated static property 'relatedCap' cannot be accessed from outside of the actor; this is an error in the Swift 6 language mode
+Project-Ezra/AI/TaskAdvisorStore.swift | Main actor-isolated static property 'shared' can not be referenced from a nonisolated context; this is an error in the Swift 6 language mode
+Project-Ezra/Design/Glass.swift | Conformance of 'AnyHashable' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode
+Project-Ezra/Features/Chat/ChatComponents.swift | Cannot use conformance of 'NSManagedObject' to 'NSFetchRequestResult' in a property declaration member of a type not marked '@_implementationOnly'; 'CoreData' was not imported by this file; this is an error in the Swift 6 language mode
+Project-Ezra/Features/Detail/TaskDetailPager.swift | Storing a closure in '@Entry var openTaskChat' may invalidate dependents on every update because closures may not be comparable. (from macro 'Entry ')
+Project-Ezra/Features/Digest/WeeklyDigestScheduler.swift | Main actor-isolated static property 'identifier' cannot be accessed from outside of the actor; this is an error in the Swift 6 language mode
+Project-Ezra/Features/Root/RootTabView.swift | Storing a closure in '@Entry var openActivity' may invalidate dependents on every update because closures may not be comparable. (from macro 'Entry ')
+Project-Ezra/Features/Root/RootTabView.swift | Storing a closure in '@Entry var openCapture' may invalidate dependents on every update because closures may not be comparable. (from macro 'Entry ')
+Project-Ezra/Features/Root/RootTabView.swift | Storing a closure in '@Entry var openRoster' may invalidate dependents on every update because closures may not be comparable. (from macro 'Entry ')
+Project-Ezra/Features/Root/RootTabView.swift | Storing a closure in '@Entry var openSettings' may invalidate dependents on every update because closures may not be comparable. (from macro 'Entry ')
+Project-Ezra/Features/Root/RootTabView.swift | Storing a closure in '@Entry var openTasks' may invalidate dependents on every update because closures may not be comparable. (from macro 'Entry ')
+Project-Ezra/Features/Root/RootTabView.swift | Storing a closure in '@Entry var resumeCapture' may invalidate dependents on every update because closures may not be comparable. (from macro 'Entry ')
+Project-Ezra/Features/Settings/SettingsView.swift | Call to main actor-isolated static method 'caretakerIDs(in:)' in a synchronous nonisolated context
+Project-Ezra/Features/Tasks/GroupProposalRow.swift | Call to main actor-isolated static method 'question' in a synchronous nonisolated context
+Project-Ezra/Models/Capture.swift | Main actor-isolated conformance of 'ParkedDrafts' to 'Decodable' cannot be used in nonisolated context; this is an error in the Swift 6 language mode
+Project-Ezra/Models/Capture.swift | Main actor-isolated conformance of 'ParkedDrafts' to 'Encodable' cannot be used in nonisolated context; this is an error in the Swift 6 language mode
+Project-Ezra/Models/HumanVerdict.swift | Main actor-isolated static property 'preferenceWindowDays' can not be referenced from a nonisolated context
+Project-Ezra/Models/TaskItem.swift | Call to main actor-isolated static method 'decode' in a synchronous nonisolated context
+Project-Ezra/Models/TaskItem.swift | Main actor-isolated conformance of 'AttentionMetadata' to 'Decodable' cannot be used in nonisolated context; this is an error in the Swift 6 language mode
+Project-Ezra/Models/TaskItem.swift | Main actor-isolated conformance of 'AttentionMetadata' to 'Encodable' cannot be used in nonisolated context; this is an error in the Swift 6 language mode
+Project-Ezra/Project_EzraApp.swift | Call to main actor-isolated static method 'caretakerIDs(in:)' in a synchronous nonisolated context

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  The App Store's privacy manifest. Required for submission since 2024, and it must
+	  agree with `Models/DataBoundary.swift` — the sentences the app shows the person in
+	  Settings are the same facts declared here, so a change to one is a change to both.
+
+	  Ezra does not track: no advertising identifier, no data joined with third-party
+	  data for advertising or measurement, so `NSPrivacyTracking` is false and the
+	  tracking-domain list is empty.
+
+	  Three collected types, all unlinked to identity and none used for tracking:
+	    • Product interaction — the closed telemetry enum (`Models/Telemetry.swift`),
+	      whose every payload is an enum or a bucket; never a title, a name, a raw count
+	      or a duration, pinned by `TelemetryAllowlistTests`. Opt-out in Settings, and
+	      absent entirely when no client key is configured.
+	    • Device ID — the anonymous install id (`Telemetry.installID`), a UUID minted on
+	      first use and reset with the store. Not the IDFA or the IDFV.
+	    • Other user content — a capture's raw words, transmitted ONLY when the router
+	      escalates a ramble to the cloud model (`CaptureRoute.transmitsRawCapture`) so it
+	      can be read into tasks. Audio never leaves the device; corrections and history
+	      never leave; the on-device posture keeps even this on the phone.
+
+	  One required-reason API: `UserDefaults`, reason CA92.1 — the app reads and writes
+	  only its own defaults (posture, opt-out, install id, schema digests).
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

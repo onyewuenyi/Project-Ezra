@@ -52,6 +52,7 @@ struct ComposerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppBrain.self) private var brain
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// Backs the owner proposal (see `OwnerProposer`) and the on-device
     /// resolve-person tool. A solo install has nobody to hand work to, so the whole
     /// ownership ladder terminates at the capturer.
@@ -60,7 +61,7 @@ struct ComposerView: View {
     /// The learning loop's inputs: past corrections (+ tasks, for keyword context).
     @FetchRequest(sortDescriptors: []) private var correctionsResults: FetchedResults<Correction>
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
-    @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profiles: FetchedResults<UserProfile>
     private var corrections: [Correction] { Array(correctionsResults) }
     private var allTasks: [TaskItem] { Array(allTasksResults) }
 
@@ -153,6 +154,12 @@ struct ComposerView: View {
     /// says the user can undo anything; this is where that was untrue.
     @State private var cardNotice: UndoNotice?
     @State private var committed = 0
+    /// Set by a successful commit (2026-09-26). The drafts used to be CLEARED there so
+    /// `parkIfUnfinished` would not park a duplicate on disappear, and the sheet then
+    /// spent its dismissal animation showing "Nothing actionable in that" over an empty
+    /// box — a flash of the wrong page between Create and the home. The guard now reads
+    /// this flag, and the reveal stays as the person left it while the sheet leaves.
+    @State private var sessionCommitted = false
     @State private var speech = SpeechCaptureService()
     /// True once dictation contributed to this capture — recorded on the Capture row.
     @State private var usedDictation = false
@@ -172,6 +179,13 @@ struct ComposerView: View {
     /// each mutation bought a redundant view invalidation — nothing in `body` reads
     /// them. `@State` here only pins the box's lifetime to the view's.
     @State private var parse = LiveParseState()
+    /// ONE engine for the sheet's life, not one per submit. The engine's whole design —
+    /// prewarm behind the presentation animation, speculate inside the silence window,
+    /// invalidate on new words — only exists across the listening phase; a fresh
+    /// `PrivateCaptureEngine()` at submit (the shape until 2026-09-17) reached none of
+    /// it, and every private capture paid the cold ~1.5 s pre-first-token the design
+    /// was written to hide. `speculative:` on the outcome was never true.
+    @State private var privateEngine = PrivateCaptureEngine()
     /// The user's past "no"s, loaded once per composer session — they only change at commit
     /// (which writes new `SuppressionRecord`s and dismisses). Loading also lazily prunes
     /// expired/orphaned rows, so caching keeps that off the per-keystroke path.
@@ -186,6 +200,12 @@ struct ComposerView: View {
     /// The intent path (F-01): the words arrived from Siri or the Action Button, so the
     /// composer submits them on arrival and the person lands on the confirm card.
     private let autoSubmit: Bool
+    /// The outcome the revealed cards become steps of, when the person groups them
+    /// ("Group as one outcome") — nil means no group. A USER act on the reveal, never a
+    /// proposal: the umbrella is born at Create, at the one publish boundary.
+    @State private var groupTitle: String?
+    @State private var groupPrompt = false
+    @State private var groupDraftTitle = ""
     /// The privacy posture (F-03) — a control beside the one door, persisted.
     @AppStorage(CapturePosture.storageKey) private var postureRaw = CapturePosture.open.rawValue
     private var posture: CapturePosture { CapturePosture(rawValue: postureRaw) ?? .open }
@@ -247,6 +267,14 @@ struct ComposerView: View {
     @State private var transcriptLineHeight: CGFloat = 0
 
     init(resuming: Capture? = nil, autoSubmit: Bool = false) {
+        #if DEBUG
+        // `-GroupAs "Title"` lands the reveal already grouped, so the grouped state and
+        // the Create CTA it changes are screenshot-reachable without the alert's tap.
+        let args = ProcessInfo.processInfo.arguments
+        if let flag = args.firstIndex(of: "-GroupAs"), args.indices.contains(flag + 1) {
+            _groupTitle = State(initialValue: args[flag + 1])
+        }
+        #endif
         self.resuming = resuming
         self.autoSubmit = autoSubmit
         _phase = State(initialValue: Self.initialPhase(resuming: resuming))
@@ -300,7 +328,13 @@ struct ComposerView: View {
             .safeAreaInset(edge: .bottom) {
                 switch phase {
                 case .capture: captureBar
-                case .confirm: confirmBar
+                // No bar on an empty reveal (2026-09-18): a disabled "Create 0 tasks"
+                // still wore the full primary gradient under "Nothing actionable in
+                // that" — a dead affordance in the one accented slot, the same fault
+                // the canvas's empty state already refuses. "Keep it as one task" is
+                // the honest action there, and it lives in the content.
+                case .confirm:
+                    if !interpretation.drafts.isEmpty { confirmBar }
                 default: EmptyView()
                 }
             }
@@ -355,6 +389,7 @@ struct ComposerView: View {
             .onAppear {
                 refreshRosterCaches()
                 restoreIfResuming()
+                if posture == .onDevice { privateEngine.prewarm() }
                 if phase == .listening {
                     // Fresh open, mic permitted (decided in `init`): the sheet opens
                     // INTO listening. Opening capture is opening a listening
@@ -388,6 +423,7 @@ struct ComposerView: View {
             // The orb's reassurance line — long work must read as calm, never as stuck.
             .onChange(of: phase) { _, newPhase in
                 showReassurance = false
+                announcePhase(newPhase)
                 // The last unreachable beat: `-AutoCreate` taps Create for us, so the
                 // ✓ receipt and the return-to-where-you-were can be verified headlessly
                 // like every other phase. The receipt keeps its real duration — a seam
@@ -418,7 +454,12 @@ struct ComposerView: View {
                 // (minus trailing whitespace) and kick off a full re-parse before a
                 // single word had been spoken.
                 let next = dictationBase + transcript
-                if next != text { text = next }
+                if next != text {
+                    text = next
+                    // New words: any hidden generation is about a capture that no
+                    // longer exists.
+                    if posture == .onDevice { privateEngine.transcriptChanged() }
+                }
                 guard Self.shouldArmSilence(transcript: transcript) else { return }
                 usedDictation = true
                 // Armed ONLY here, on words — the system never finishes an empty
@@ -489,6 +530,7 @@ struct ComposerView: View {
             .onDisappear {
                 let midListening = phase == .listening && speech.isActive
                 speech.stop()
+                privateEngine.cancel()
                 parse.silenceTask?.cancel()
                 silenceDeadline = nil
                 parse.parseTask?.cancel()
@@ -528,10 +570,7 @@ struct ComposerView: View {
             // hook between the tap and the sheet, and the mic must not stay hot behind
             // it. The canvas's own `imageButton` is still a plain `PhotosPicker`; it has
             // nothing to tear down.
-            .photosPicker(
-                isPresented: $showPhotoPicker, selection: $photoItem, matching: .images,
-                photoLibrary: .shared()
-            )
+            .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
             .alert("Couldn't read that photo", isPresented: $showPhotoImportFailedAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -686,7 +725,7 @@ struct ComposerView: View {
                         cloudAvailable: CloudModel.isReachable(for: .ramble))
                     run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
                     let final: [TaskDraft]
-                    if case .accepted(let drafts, let fragments) = outcome {
+                    if case .accepted(let drafts, let fragments, _) = outcome {
                         run.rung = IntelligenceRung.onDevice.rawValue
                         run.engineName = "on-device(segment→\(fragments))"
                         final = drafts
@@ -724,13 +763,20 @@ struct ComposerView: View {
                 parse.parseTask?.cancel()
                 parse.parseTask = Task {
                     let learned = sessionRules()
-                    let outcome = await PrivateCaptureEngine().finish(text: captured, learned: learned)
+                    let outcome = await privateEngine.finish(text: captured, learned: learned)
                     guard !Task.isCancelled else { return }
                     var run = CaptureRunTelemetry.local(
                         segmentation: Segmentation.structure(of: captured).label,
                         cloudAvailable: CloudModel.isReachable(for: .ramble))
                     run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
                     run.rung = IntelligenceRung.onDevice.rawValue
+                    // The receipt says whether the silence window paid for the read.
+                    switch outcome {
+                    case .captured(_, let speculative):
+                        run.armWon = speculative ? "privateEngine(speculative)" : "privateEngine"
+                    case .fallback:
+                        run.armWon = "deterministic(fallback)"
+                    }
                     lastRun = run
                     await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
                     guard !Task.isCancelled else { return }
@@ -864,7 +910,7 @@ struct ComposerView: View {
             // the GA report flips it, not an argument here).
             let segmentStarted = Date()
             if OnDeviceSegmenter.attempts(escalation),
-                case .accepted(let segmented, let fragments) = await OnDeviceSegmenter.segment(
+                case .accepted(let segmented, let fragments, _) = await OnDeviceSegmenter.segment(
                     text: captured, learned: learned, ownership: ownership)
             {
                 guard !Task.isCancelled else { return }
@@ -968,6 +1014,7 @@ struct ComposerView: View {
     /// interpretation reopens: the user is about to say more, so the next parse is allowed
     /// to speak again. Their existing cards and any edits ride along.
     private func backToCapture() {
+        groupTitle = nil  // a re-read is a new interpretation; the group was of the old cards
         parse.parseTask?.cancel()
         parse.parseTask = nil
         interpretation.reopen()
@@ -1082,11 +1129,22 @@ struct ComposerView: View {
     /// anything; the bar also rides above the keyboard, so Ramble stays one tap away
     /// while typing instead of hiding under it.
     @ViewBuilder private var captureSurface: some View {
+        // The title never truncates. This stack is height-bound (the field below
+        // takes the ROOM, see the clamp), and a `Text` that is squeezed gives up
+        // lines before the field gives up its floor — at accessibility-extra-large the
+        // canvas read "What's on your…" / "Dump it all here. I'll sort it…"
+        // (2026-09-18). The title holds its height and wraps to two lines; the helper
+        // subtitle yields entirely at those sizes, since the room it would take is
+        // the field's, and the title already asks the question.
         Text("What's on your mind?")
             .screenTitleStyle()
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.top, Spacing.xs)
-        Text("Dump it all here. I'll sort it out.")
-            .supportingStyle()
+        if !dynamicTypeSize.isAccessibilitySize {
+            Text("Dump it all here. I'll sort it out.")
+                .supportingStyle()
+        }
 
         imageChip
         // GROWS with the words, between a floor and a ceiling — and never past the ROOM.
@@ -1111,7 +1169,7 @@ struct ComposerView: View {
         // one line, so the editor never collapses to a hairline on a short screen.
         GeometryReader { room in
             let height = min(
-                clampedCanvasHeight, max(Self.canvasCompressedFloor, room.size.height))
+                clampedCanvasHeight, max(canvasCompressedFloor, room.size.height))
             composerField
                 .frame(height: height)
                 .animation(Motion.settle, value: height)
@@ -1418,9 +1476,13 @@ struct ComposerView: View {
     /// scale — never an animated headline competing with the orb. The space keeps the
     /// line's height reserved while `.preparing` stays unlabeled.
     private var statusWord: some View {
+        // The space reserves the line's height; it is not something to stop on. Without
+        // the hide, VoiceOver lands on an element containing one space between the
+        // (hidden) orb and the aux line and says nothing (2026-09-20).
         Text(statusText.isEmpty ? " " : statusText)
             .font(.sectionHeader)
             .foregroundStyle(Palette.primaryText)
+            .accessibilityHidden(statusText.isEmpty)
             .contentTransition(.opacity)
             .animation(Motion.fade, value: statusText)
     }
@@ -1463,9 +1525,19 @@ struct ComposerView: View {
     @ViewBuilder private var listeningCountdown: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
             let remaining = silenceDeadline.map { $0.timeIntervalSince(timeline.date) } ?? 0
+            // **`.opacity(0)` hides a view from the eyes and not from VoiceOver
+            // (2026-09-20).** The line is built unconditionally so the row keeps its
+            // height, and it was faded rather than removed — so for the WHOLE listening
+            // phase a VoiceOver user swiping the screen heard "Finishing up — keep
+            // talking to continue", whether or not the silence window was armed. The one
+            // piece of copy that warns about the five-second auto-submit was permanently
+            // true-sounding and therefore told nobody anything. The fade stays (the
+            // height reservation is the point); the element leaves the tree with it.
+            let counting = remaining > 0 && remaining <= Self.countdownVisibleSeconds
             Text("Finishing up — keep talking to continue.")
                 .metadataStyle()
-                .opacity(remaining > 0 && remaining <= Self.countdownVisibleSeconds ? 1 : 0)
+                .opacity(counting ? 1 : 0)
+                .accessibilityHidden(!counting)
                 .animation(Motion.fade, value: remaining <= Self.countdownVisibleSeconds)
         }
         .frame(height: Spacing.md)
@@ -1535,10 +1607,21 @@ struct ComposerView: View {
                         onRemove: { noteRemoval(of: $0) },
                         revealedAt: revealedAt
                     )
+                    if interpretation.drafts.count >= 2 { groupRow }
                 }
             }
             .padding(.top, Spacing.xs)
             .padding(.bottom, Spacing.md)
+        }
+        .alert("Group as one outcome", isPresented: $groupPrompt) {
+            TextField("Outcome, e.g. Trip to Lagos", text: $groupDraftTitle)
+            Button("Group") {
+                let title = groupDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !title.isEmpty { Motion.withMotion(Motion.settle) { groupTitle = title } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("These \(interpretation.drafts.count) tasks become its steps, in this order.")
         }
         // The keyboard is a guest on this page: it leaves the moment the user does
         // anything else with the surface.
@@ -1574,6 +1657,68 @@ struct ComposerView: View {
         case .voice: return "What I heard — edit it if I misheard."
         case .image: return "What the photo said — edit it if I misread."
         default: return "What you wrote — edit it to change the tasks."
+        }
+    }
+
+    /// The person's own act of grouping — "these are one thing" — at the one place a task
+    /// comes into existence. A bordered secondary like "Keep it as one task": Create stays
+    /// the page's one primary. Nothing here is proposed by the system; the umbrella is
+    /// born at Create as the outcome the cards become steps of, in the order shown, and
+    /// the list renders it as a deck. (The AI proposing a group is a separate change.)
+    @ViewBuilder private var groupRow: some View {
+        if let groupTitle {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.glyphCaption())
+                    .foregroundStyle(Palette.secondaryText)
+                Text("Grouped as “\(groupTitle)”")
+                    .supportingStyle()
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.sm)
+                Button {
+                    Motion.withMotion(Motion.settle) { self.groupTitle = nil }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.glyphCaption())
+                        .foregroundStyle(Palette.mutedText)
+                }
+                .buttonStyle(.plain)
+                .minimumHitTarget()
+                .accessibilityLabel("Ungroup")
+            }
+            .padding(.top, Spacing.sm)
+            .transition(.opacity)
+        } else {
+            // When the capture NAMED its outcome ("Lagos trip: …"), the button carries the
+            // name and one tap groups — the person's own words, read back, never a guess
+            // (ungroup and tap again to rename through the alert). Otherwise the alert.
+            let named = CaptureFlow.suggestedOutcomeTitle(from: text)
+            Button {
+                if let named {
+                    Motion.withMotion(Motion.settle) { groupTitle = named }
+                } else {
+                    groupDraftTitle = ""
+                    groupPrompt = true
+                }
+            } label: {
+                Label(
+                    named.map { "Group as “\($0)”" } ?? "Group as one outcome",
+                    systemImage: "square.stack.3d.up"
+                )
+                .font(.controlLabel)
+                .foregroundStyle(Palette.primaryText)
+                .lineLimit(1)
+                .padding(.horizontal, Spacing.md)
+                .frame(height: 40)
+                .background(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+                .frame(minHeight: LayoutMetrics.hitTarget)
+            }
+            .buttonStyle(.pressable)
+            .padding(.top, Spacing.sm)
+            .accessibilityHint(
+                named == nil
+                    ? "Names an outcome these tasks become the steps of"
+                    : "Makes these tasks the steps of that outcome")
         }
     }
 
@@ -1646,10 +1791,25 @@ struct ComposerView: View {
                 }
                 .animation(Motion.fade, value: focused)
 
+            // The echo of what was said is the EDIT path, not the answer (2026-09-25,
+            // the importance audit): supporting size, secondary until focused, so the
+            // drafts below it read first. The oracle measures with the same font.
             TextEditor(text: $text)
                 .focused($focused)
-                .font(.bodyInput)
-                .foregroundStyle(Palette.primaryText)
+                .font(Self.transcriptFont)
+                .foregroundStyle(focused ? Palette.primaryText : Palette.secondaryText)
+                // A resting echo that is clipped fades out at its foot (2026-09-26): the
+                // editor sets lines tighter than the oracle's `Text`, so the whole-line
+                // snap left a sliced last line. A fade reads as "more" at any pitch.
+                .mask {
+                    VStack(spacing: 0) {
+                        Rectangle()
+                        if echoIsClipped {
+                            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                                .frame(height: Self.echoFadeHeight)
+                        }
+                    }
+                }
                 .scrollContentBackground(.hidden)
                 .padding(Spacing.sm)
                 .accessibilityLabel("What you said")
@@ -1662,7 +1822,29 @@ struct ComposerView: View {
 
     /// The measured natural height of the transcript, clamped to the page's budget.
     private var clampedTranscriptHeight: CGFloat {
-        fieldHeight(min: Self.transcriptMinHeight, max: Self.transcriptMaxHeight)
+        // At accessibility sizes the echo is held to about two lines (it scrolls inside):
+        // uncapped it took the whole first screen and put every draft — the thing the
+        // person came for — below the fold (2026-09-26). Focused, it gets its full room.
+        // And at every size (2026-09-26): a seven-item brain dump echoed five lines and
+        // left one and a half drafts above the fold. Unfocused, the echo is a reminder of
+        // what was said, about three lines; tapped, it gets its full editing room.
+        let ceiling =
+            focused
+            ? Self.transcriptMaxHeight
+            : dynamicTypeSize.isAccessibilitySize
+                ? Self.transcriptAccessibilityMaxHeight : Self.transcriptRestingMaxHeight
+        // At rest the echo fits its words: a one-line capture sat in an 88pt box that
+        // was mostly empty. The editing floor returns the moment it is tapped.
+        return fieldHeight(min: focused ? min(Self.transcriptMinHeight, ceiling) : 0, max: ceiling)
+    }
+    private static let transcriptAccessibilityMaxHeight: CGFloat = 120
+    private static let transcriptRestingMaxHeight: CGFloat = 96
+    private static let echoFadeHeight: CGFloat = 22
+
+    /// The resting echo holds less than the words: the foot fades.
+    private var echoIsClipped: Bool {
+        !focused
+            && transcriptHeight + Spacing.sm * 2 + Self.transcriptEditorInset > clampedTranscriptHeight + 1
     }
 
     /// Natural height for a growing field, between a floor and a ceiling. At the ceiling
@@ -1682,6 +1864,9 @@ struct ComposerView: View {
     /// at its ideal height and never drawn. `fixedSize` is what makes it honest; without
     /// it the measurement would be clamped by the very frame it exists to decide. The
     /// second, one-glyph measurement is the line height the ceiling snaps to.
+    /// One font for the transcript editor and the oracle that sizes it.
+    private static var transcriptFont: Font { .supporting }
+
     private var transcriptHeightOracle: some View {
         GeometryReader { proxy in
             let inner = proxy.size.width - Spacing.sm * 2 - Self.transcriptEditorHorizontalInset
@@ -1698,7 +1883,7 @@ struct ComposerView: View {
         of string: String, width: CGFloat, into report: @escaping (CGFloat) -> Void
     ) -> some View {
         Text(string)
-            .font(.bodyInput)
+            .font(Self.transcriptFont)
             .frame(width: max(1, width), alignment: .topLeading)
             .fixedSize(horizontal: false, vertical: true)
             .background {
@@ -1722,7 +1907,18 @@ struct ComposerView: View {
     /// The floor under the room clamp: one input line. Below this the editor is a
     /// hairline with a cursor in it, which is worse than letting the bar lose a few
     /// points on a screen that short — and no portrait phone this app runs on is.
-    private static let canvasCompressedFloor: CGFloat = LayoutMetrics.hitTarget
+    ///
+    /// One line at the CURRENT text size, never a fixed number (2026-09-18): the floor
+    /// was the 44pt hit target, and at accessibility-extra-large the editor's scaled
+    /// font plus its insets need more than that, so the first line of the person's own
+    /// words rendered clipped along the top. Measured from the same metrics the
+    /// `bodyInput` token scales with, plus the editor's text-container inset and the
+    /// field's padding on both sides; the hit target stays the floor's floor.
+    private var canvasCompressedFloor: CGFloat {
+        let line = UIFontMetrics(forTextStyle: .callout)
+            .scaledFont(for: .systemFont(ofSize: 16, weight: .regular)).lineHeight
+        return max(LayoutMetrics.hitTarget, line + 2 * (Self.transcriptEditorInset + Spacing.sm))
+    }
 
     /// A short capture must still read as a box, not a chip.
     private static let transcriptMinHeight: CGFloat = 88
@@ -1745,8 +1941,17 @@ struct ComposerView: View {
         HStack(spacing: Spacing.sm) {
             // "Say more", never "Speak instead" — on this page the mic ADDS to a capture
             // that has already been read, and the tasks below stay.
-            micButton("Say more")
-            imageButton
+            //
+            // Glyph-only at the accessibility sizes (2026-09-18). Both capsules are
+            // fixed-width, and at accessibility-extra-large the pair outgrew the sheet:
+            // a vertical ScrollView CENTRES content wider than itself, so the whole
+            // reveal slid off the left edge — "lere's what understood", "all the
+            // dentist". The fourth composer layout trap, and the same shape as the
+            // first three: a fixed width inside a container that quietly resizes to it.
+            // The buttons keep their spoken labels ("Dictate", "Add a photo of a list
+            // or note"), so VoiceOver loses nothing.
+            micButton(dynamicTypeSize.isAccessibilitySize ? nil : "Say more")
+            imageButton(dynamicTypeSize.isAccessibilitySize ? nil : "Add a photo")
             Spacer(minLength: 0)
             if transcriptEdited { rereadButton.transition(.opacity) }
         }
@@ -1826,14 +2031,21 @@ struct ComposerView: View {
 
     private var createTitle: String {
         let merged = interpretation.drafts.filter { $0.acceptedDuplicate != nil }.count
-        return Self.createTitle(created: interpretation.drafts.count - merged, merged: merged)
+        return Self.createTitle(
+            created: interpretation.drafts.count - merged, merged: merged, group: groupTitle)
     }
 
     /// The CTA says what pressing it DOES. "Create 3 tasks" over a set where one card
     /// merges into an existing task was a small lie the commit pill then had to correct
     /// a second later; the button is the last thing read before the commit, and it
     /// should be the first place the truth is stated.
-    static func createTitle(created: Int, merged: Int) -> String {
+    static func createTitle(created: Int, merged: Int, group: String? = nil) -> String {
+        // Grouped, the button names the OUTCOME being created and the steps it gets —
+        // the umbrella is the one task the cards did not show.
+        if let group, created >= 2 {
+            let base = "Create “\(group)” · \(created) steps"
+            return merged == 0 ? base : base + " · merge \(merged)"
+        }
         let createPart = created == 1 ? "Create 1 task" : "Create \(created) tasks"
         switch (created, merged) {
         case (_, 0): return createPart
@@ -1870,6 +2082,36 @@ struct ComposerView: View {
     /// are the answer to "did it understand me?", which is the question the reveal exists
     /// to answer.
     ///
+    /// Say what just happened, for the two beats that were silent.
+    ///
+    /// **The sheet opens INTO a live microphone (2026-09-20).** That is the product's
+    /// whole shape and it is the one thing a VoiceOver user was never told: the orb is
+    /// `accessibilityHidden` (it is a mood, not information), there is no live transcript
+    /// by design, and focus lands on the toolbar rather than the "Listening" word. So the
+    /// sheet opened, the mic went hot, and nothing said so.
+    ///
+    /// The other silence was longer. Pressing Done replaces the whole screen, the button
+    /// vanishes, focus is lost, and on a cloud route the next spoken word — the reveal —
+    /// can be thirty seconds away. The arrival was announced; the departure and the wait
+    /// were not, which reads as the app having stopped.
+    ///
+    /// Two sentences, once each per transition. A no-op when VoiceOver is off.
+    private func announcePhase(_ phase: RamblePhase) {
+        switch phase {
+        case .listening:
+            AccessibilityNotification.Announcement(
+                "Listening. Say what's on your mind, then choose Done when you've finished."
+            ).post()
+        case .understanding:
+            AccessibilityNotification.Announcement("Reading what you said.").post()
+        case .capture, .confirm:
+            // The canvas is a text field the user was sent to deliberately, and the
+            // reveal has `announceReveal`, which says something far more useful than
+            // the name of a phase.
+            break
+        }
+    }
+
     /// A no-op when VoiceOver is off.
     private func announceReveal() {
         let drafts = interpretation.drafts
@@ -1907,6 +2149,8 @@ struct ComposerView: View {
     }
 
     private func parkIfUnfinished(force: Bool = false) {
+        // A committed session has nothing unfinished, whatever its drafts still say.
+        guard !sessionCommitted else { return }
         guard
             !interpretation.drafts.isEmpty
                 || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1978,7 +2222,7 @@ struct ComposerView: View {
         brain.commit(
             interpretation.drafts, rawCapture: text, source: captureSource,
             imageRef: capturedImageRef,
-            parked: parked, telemetry: lastRun, into: context)
+            parked: parked, telemetry: lastRun, groupTitle: groupTitle, into: context)
         finishCommit(count: count)
     }
 
@@ -1998,16 +2242,14 @@ struct ComposerView: View {
         // Success notification moved here (from the point of calling `commit`) so a
         // dropped save never plays the success haptic right before the failure alert.
         committed += 1
-        // Clearing is REQUIRED, not tidiness: `.onDisappear` runs `parkIfUnfinished`,
-        // and it keys off `drafts`/`text` — leaving them populated would park a phantom
-        // duplicate of the capture just committed.
+        // NOT cleared any more: the drafts and the words stay on screen while the sheet
+        // leaves, and `sessionCommitted` is what stops `parkIfUnfinished` parking a
+        // duplicate of the capture just committed. Every open is a fresh session
+        // (`ComposerSession`), so nothing here outlives the dismissal.
+        sessionCommitted = true
         parked = nil
-        interpretation = Interpretation()
-        removedDrafts = RemovedDraftSet()
-        lastRemoved = nil
         cardNotice = nil
         lastRun = nil  // spent: this receipt belongs to the capture just committed
-        text = ""
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         parse.cachedRules = nil  // likewise new corrections
         // Straight back to whatever the user was doing — capture is something you do
@@ -2103,15 +2345,25 @@ struct ComposerView: View {
 
     // MARK: - Dictation
 
-    /// Capture by photo — the third input mode. Library-only in V1 (`PhotosPicker`
-    /// is out-of-process, so no privacy prompt); the live camera is the recorded
-    /// fast-follow. Recognized text streams into the SAME field the keyboard and
-    /// the mic feed, so the rolling parse needs no new path.
+    /// Capture by photo — the third input mode. Library-only in V1; the live camera is
+    /// the recorded fast-follow. Recognized text streams into the SAME field the keyboard
+    /// and the mic feed, so the rolling parse needs no new path.
+    ///
+    /// **Never pass `photoLibrary:` to a picker in this app (2026-09-20).** That one
+    /// argument is the whole difference between the out-of-process picker, which needs no
+    /// permission and no usage string, and an in-process one, which needs photo-library
+    /// AUTHORIZATION — and the app declares no `NSPhotoLibraryUsageDescription`, so iOS
+    /// terminates it the moment the picker opens. All four pickers in the app carried it,
+    /// including the one on the first screen a new user ever sees, while this very comment
+    /// said the picker was out-of-process and therefore promptless. Nothing in the
+    /// simulator catches it, because the simulator's TCC is usually already primed.
+    /// Every site only calls `loadTransferable` on the one item the person chose, so
+    /// library access buys nothing — the correct answer is the one that asks for less.
     private var imageButton: some View { imageButton("Add a photo") }
 
     /// Nil title = glyph only (the row's tightest widths).
     private func imageButton(_ title: String?) -> some View {
-        PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+        PhotosPicker(selection: $photoItem, matching: .images) {
             Label(readingImage ? "Reading…" : (title ?? "Add a photo"), systemImage: "photo")
                 .labelStyle(CapsuleLabelStyle(iconOnly: title == nil && !readingImage))
                 .font(.controlLabel)
@@ -2267,10 +2519,21 @@ struct ComposerView: View {
     /// already available right here) or unavailable. The listening states themselves
     /// live on the orb surface now; the canvas never hosts a hot mic.
     @ViewBuilder private var dictationHint: some View {
-        if case .unavailable(let message) = speech.state {
-            Text(message)
-                .metadataStyle()
-                .transition(.opacity)
+        if case .unavailable(let message, let retryable) = speech.state {
+            HStack(spacing: Spacing.xs) {
+                Text(message)
+                    .metadataStyle()
+                // A failed first-use model download is a condition, not a verdict, and
+                // without this the only way back was closing and reopening the sheet —
+                // which nobody discovers (2026-09-20).
+                if retryable {
+                    Button("Try again") { Task { await speech.retry() } }
+                        .font(.metadata.weight(.semibold))
+                        .foregroundStyle(Palette.accentFlat)
+                        .buttonStyle(.pressableLink)
+                }
+            }
+            .transition(.opacity)
         } else if !micUsable {
             HStack(spacing: Spacing.xs) {
                 Text("Microphone access is off.")
@@ -2410,6 +2673,16 @@ struct ComposerView: View {
     private func scheduleSilenceFinish() {
         parse.silenceTask?.cancel()
         silenceDeadline = Date().addingTimeInterval(Self.silenceStopSeconds)
+        // The silence window is the private engine's whole budget: a single thought on
+        // the on-device posture starts generating NOW, hidden, and `finish` collects it
+        // when the window fires. Several things go to the other on-device arm and are
+        // not speculated (`CaptureFlow.plan` decides that at submit; the same predicate
+        // gates the speculation so nothing is generated the plan would discard).
+        if posture == .onDevice, PrivateCaptureEngine.modelAvailable(),
+            !PrivateCaptureEngine.soundsLikeSeveralThings(text)
+        {
+            privateEngine.silenceArmed(text: text)
+        }
         parse.silenceTask = Task {
             try? await Task.sleep(for: .seconds(Self.silenceStopSeconds))
             guard !Task.isCancelled, phase == .listening, speech.state == .listening

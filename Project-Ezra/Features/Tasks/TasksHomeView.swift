@@ -14,25 +14,48 @@
 //  tabs again — live in `MyTasksHeader` (Models/MyTasksSlices.swift), where they are
 //  testable. Read that contract before changing what this header renders.
 //
+//  Since 2026-09-23 this is a SHEET (`TasksSheet`), one tap behind the Ask home's list
+//  button — the grammar Ask had when this was the home, swapped. The sheet supplies the
+//  stack, so this carries none of its own; the roster and Settings it used to present
+//  are the sheet's host's (`\.openRoster`, `\.openSettings`), reachable from both "…"
+//  menus. It closes like a summoned sheet: Done, or a swipe down.
+//
 
 import CoreData
 import SwiftUI
 
 struct TasksHomeView: View {
+    /// What the sheet opens ON (2026-09-23): the glance strip's count deep-links here
+    /// with a tab, a status or an attention already set. Applied once, on appear —
+    /// after that the header owns its state as it always did. `.plain` for a plain open.
+    var preset: TasksPreset = .plain
+
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     /// Activity is the shell's screen, not this one's — it is reachable from the Brief
     /// too, so it has exactly one mount point and neither surface owns it.
     @Environment(\.openActivity) private var openActivity
-    @Environment(\.openAsk) private var openAsk
+    @Environment(\.openRoster) private var openRoster
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedObjectContext) private var context
+    /// At accessibility text sizes three pills and a filter no longer fit one row, and a
+    /// row that cannot shrink its children overflows off the screen — the filter was the
+    /// first thing to go. There the header WRAPS (`FlowLayout`), the filter following the
+    /// pills onto a second line with its summary intact; the `GeometryReader` host follows
+    /// the measured height. At the default sizes nothing changes.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var tab: MyTasksTab = .assigned
     @State private var statusFilter: TaskStatus?
     @State private var categoryFilter: String?
+    /// The third filter axis (`TasksAttention`): overdue, due today, waiting, decisions,
+    /// urgent, or one person's — the row markers as a subset.
+    @State private var attentionFilter: TasksAttention?
+    /// When the sheet appeared, for the dwell meter on the way out.
+    @State private var appearedAt: Date?
     @State private var showSearch = false
-    @State private var showSettings = false
-    @State private var showRoster = false
     @State private var selectedTask: TaskItem?
     @State private var notice: UndoNotice?
     @Namespace private var tabPill
@@ -46,7 +69,13 @@ struct TasksHomeView: View {
     /// take the whole screen. Starts at the row's floor and follows Dynamic Type.
     @State private var headerRowHeight: CGFloat = LayoutMetrics.tasksHeaderRow
 
-    private var tasks: [TaskItem] { Array(tasksResults) }
+    /// LIVE rows only (2026-09-18). A destructive clear deletes every task and saves,
+    /// and for the render between the delete and the fetch refresh the results still
+    /// hand back objects Core Data has torn down — every attribute answers empty, so
+    /// the rows lose their identity and the list crashes on duplicate ids. A deleted or
+    /// context-less object is not a task any more; it simply leaves the list, which is
+    /// also exactly what the clear means.
+    private var tasks: [TaskItem] { tasksResults.filter(\.isLiveRow) }
     private var members: [FamilyMember] { Array(membersResults) }
     private var profiles: [UserProfile] { Array(profilesResults) }
 
@@ -56,7 +85,9 @@ struct TasksHomeView: View {
         members.filter { !$0.isRemoved && $0.uuid != currentUserID }
     }
 
-    private var filtersActive: Bool { statusFilter != nil || categoryFilter != nil }
+    private var filtersActive: Bool {
+        statusFilter != nil || categoryFilter != nil || attentionFilter != nil
+    }
 
     /// Both header decisions come from the contract, never from view nesting.
     private var showsTabs: Bool { MyTasksHeader.showsTabs(othersRoster: othersRoster.count) }
@@ -101,118 +132,152 @@ struct TasksHomeView: View {
             return .sectioned(
                 MyTasksSlices.assigned(
                     tasks: tasks, currentUserID: currentUserID, status: statusFilter,
-                    category: categoryFilter), scope: .assigned)
+                    category: categoryFilter, attention: attentionFilter), scope: .assigned)
         case .everyone:
             return .sectioned(
                 MyTasksSlices.everyone(
-                    tasks: tasks, status: statusFilter, category: categoryFilter),
+                    tasks: tasks, status: statusFilter, category: categoryFilter,
+                    attention: attentionFilter),
                 scope: .everyone)
         case .created:
             return .created(
                 MyTasksSlices.createdEntries(
                     tasks: tasks, currentUserID: currentUserID, status: statusFilter,
-                    category: categoryFilter))
+                    category: categoryFilter, attention: attentionFilter))
         }
     }
 
     var body: some View {
         let slice = visibleSlice
-        return NavigationStack {
-            VStack(spacing: Spacing.sm) {
-                headerRow
-                    .padding(.horizontal, Spacing.lg)
-                    .padding(.top, Spacing.xs)
-                // Unfinished captures are findable here, quietly (F-04). Renders nothing
-                // when nothing is parked.
-                ParkedCapturesRow()
-                    .padding(.horizontal, Spacing.lg)
-
-                Group {
-                    switch slice {
-                    case .sectioned(let sections, let scope):
-                        AssignedSectionsView(
-                            sections: sections, allTasks: tasks, othersRoster: othersRoster,
-                            currentUserID: currentUserID,
-                            scope: scope,
-                            searchIsActive: filtersActive,
-                            filteredEmptyMessage: filteredEmptyMessage,
-                            onShowAll: { status in
-                                Motion.withMotion(Motion.settle) { statusFilter = status }
-                            },
-                            onClearFilters: clearFilters,
-                            selectedTask: $selectedTask, notice: $notice)
-                    case .created(let entries):
-                        CreatedFlatView(
-                            entries: entries, allTasks: tasks, othersRoster: othersRoster,
-                            currentUserID: currentUserID,
-                            searchIsActive: filtersActive,
-                            filteredEmptyMessage: filteredEmptyMessage,
-                            onClearFilters: clearFilters,
-                            selectedTask: $selectedTask, notice: $notice)
-                    }
+        return VStack(spacing: Spacing.sm) {
+            headerRow
+                .padding(.horizontal, Spacing.lg)
+                .padding(.top, Spacing.xs)
+            // The household's counts, the list's own glance (2026-09-23): each one sets
+            // the filter in place. They left the home, where six capsules were the most
+            // dashboard-like thing on the screen; here they are inventory over inventory.
+            let counts = TasksCounts.items(tasks: tasks)
+            if !counts.isEmpty {
+                ChatSummaryStrip(items: counts) { item in
+                    Telemetry.log(.glanceOpened(kind: item.kind))
+                    Motion.withMotion(Motion.snap) { apply(item.preset) }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(.opacity)
+                // Leading, under the scopes: a short strip centred itself (2026-09-25).
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Spacing.lg)
             }
-            .animation(Motion.fade, value: tab)
-            .background(Palette.background)
-            .navigationTitle(title)
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    // Ask, from where you are (F-12) — the same bubble the task pager
-                    // wears for its own scope. A verb beside the record, not a place.
-                    Button {
-                        openAsk()
-                    } label: {
-                        Image(systemName: "text.bubble")
-                    }
-                    .accessibilityLabel("Ask about your tasks")
+            // The parked-captures row and the grouping sweep's question used to sit
+            // here. They are the AI's own proposals, and since 2026-09-23 they live on
+            // the home — the AI's surface, which is also the first thing on screen — so
+            // the list is a plain workbench: the header, then the rows.
 
-                    Button {
-                        showSearch = true
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
-                    .accessibilityLabel("Search tasks")
-
-                    Menu {
-                        // The trust surface, demoted from a tab but not from the
-                        // product: every AI action has to be understandable and
-                        // undoable, and merged-pair entries have no other home. It
-                        // leads the menu because it is the only item here that is
-                        // about what the SYSTEM did.
-                        Button {
-                            openActivity()
-                        } label: {
-                            Label("Activity", systemImage: "clock.arrow.circlepath")
-                        }
-                        Button {
-                            showRoster = true
-                        } label: {
-                            Label("Manage Household", systemImage: "person.2")
-                        }
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Label("Settings", systemImage: "gearshape")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                    }
-                    .accessibilityLabel("More")
+            Group {
+                switch slice {
+                case .sectioned(let sections, let scope):
+                    AssignedSectionsView(
+                        sections: sections, allTasks: tasks, othersRoster: othersRoster,
+                        currentUserID: currentUserID,
+                        scope: scope,
+                        searchIsActive: filtersActive,
+                        filteredEmptyMessage: filteredEmptyMessage,
+                        onShowAll: { status in
+                            Motion.withMotion(Motion.settle) { statusFilter = status }
+                        },
+                        onClearFilters: clearFilters,
+                        selectedTask: $selectedTask, notice: $notice)
+                case .created(let entries):
+                    CreatedFlatView(
+                        entries: entries, allTasks: tasks, othersRoster: othersRoster,
+                        currentUserID: currentUserID,
+                        searchIsActive: filtersActive,
+                        filteredEmptyMessage: filteredEmptyMessage,
+                        onClearFilters: clearFilters,
+                        selectedTask: $selectedTask, notice: $notice)
                 }
             }
-            .navigationDestination(isPresented: $showRoster) { HouseholdRosterView() }
-            .sheet(isPresented: $showSearch) { TaskSearchView() }
-            .sheet(isPresented: $showSettings) { SettingsView() }
-            .taskDetailSheet($selectedTask, peers: slice.peers, handOffNotice: { notice = $0 })
-            .undoNotice($notice)
-            .task {
-                applyFilterArgsIfRequested()
-                openDetailIfRequested()
-                openSettingsIfRequested()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(.opacity)
+        }
+        .animation(Motion.fade, value: tab)
+        // A column, not a sheet of glass: on an iPad the list ran edge to edge with
+        // the due label a screen-width from its title (2026-09-18).
+        .readableWidth()
+        .background(Palette.background)
+        .navigationTitle(title)
+        // A pushed page defaults to an inline title; the record keeps its large one.
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            // A summoned sheet closes like one (the Ask sheet's Done, swapped over).
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Done") { dismiss() }
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showSearch = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel("Search tasks")
+
+                Menu {
+                    // The trust surface, demoted from a tab but not from the
+                    // product: every AI action has to be understandable and
+                    // undoable, and merged-pair entries have no other home. It
+                    // leads the menu because it is the only item here that is
+                    // about what the SYSTEM did.
+                    Button {
+                        openActivity()
+                    } label: {
+                        Label("Activity", systemImage: "clock.arrow.circlepath")
+                    }
+                    Button {
+                        openRoster()
+                    } label: {
+                        Label("Manage Household", systemImage: "person.2")
+                    }
+                    Button {
+                        openSettings()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("More")
             }
         }
+        .sheet(isPresented: $showSearch) { TaskSearchView() }
+        .taskDetailSheet($selectedTask, peers: slice.peers, handOffNotice: { notice = $0 })
+        // Above the capture orb (2026-09-26): at the default inset the 62pt orb sat on
+        // the pill's trailing edge and covered its Undo — the list's only reversal.
+        .undoNotice($notice, bottomInset: ShellSurfaces<EmptyView>.captureButtonDiameter + Spacing.md)
+        .task {
+            applyPreset()
+            applyFilterArgsIfRequested()
+            openDetailIfRequested()
+            await completeRowIfRequested()
+        }
+        .onAppear { appearedAt = Date() }
+        // The modal-depth meter (2026-09-23): a sheet is a place you visit; one that
+        // stays up for minutes is the home in exile, and the number says which.
+        .onDisappear {
+            guard let appearedAt else { return }
+            Telemetry.log(
+                .tasksSheetDwell(elapsed: DurationBucket(seconds: Date().timeIntervalSince(appearedAt))))
+        }
+    }
+
+    /// The deep-link's state, applied once. A tab the roster does not show falls back
+    /// through `effectiveTab` as it always did.
+    private func applyPreset() { apply(preset) }
+
+    /// One preset, applied whole: a count under the header replaces the status and
+    /// attention axes with its own (never stacks on them), and moves the scope when it
+    /// names one.
+    private func apply(_ preset: TasksPreset) {
+        if let presetTab = preset.tab { tab = presetTab }
+        statusFilter = preset.status
+        attentionFilter = preset.attention
     }
 
     /// Deterministic verification seam. Launch with `-OpenTaskDetail [N]` to open the
@@ -220,12 +285,31 @@ struct TasksHomeView: View {
     /// is reachable without a synthetic tap (blocked by Accessibility here). Never fires
     /// in normal runs.
     private func openDetailIfRequested() {
+        #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         guard let flag = args.firstIndex(of: "-OpenTaskDetail") else { return }
         let index = args.indices.contains(flag + 1) ? Int(args[flag + 1]) ?? 0 : 0
         let peers = visibleSlice.peers
         guard peers.indices.contains(index) else { return }
         selectedTask = peers[index]
+        #endif
+    }
+
+    /// `-CompleteListRow N` completes the Nth visible row through the same seam the glyph
+    /// and the swipe use, 1.5 s after the list settles (2026-09-26): the reflow and the
+    /// undo pill are a sequence no synthetic tap can reach. Never fires in normal runs.
+    private func completeRowIfRequested() async {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        guard let flag = args.firstIndex(of: "-CompleteListRow") else { return }
+        let index = args.indices.contains(flag + 1) ? Int(args[flag + 1]) ?? 0 : 0
+        try? await Task.sleep(for: .seconds(1.5))
+        let peers = visibleSlice.peers
+        guard peers.indices.contains(index) else { return }
+        Motion.withMotion(Motion.settle) {
+            completeTask(peers[index], in: context, tasks: tasks, notice: $notice)
+        }
+        #endif
     }
 
     /// Deterministic verification seam. `-FilterStatus <raw>` / `-FilterCategory <name>`
@@ -235,6 +319,7 @@ struct TasksHomeView: View {
     /// so a typo in a verification command reads as "no filter", not a failed launch.
     /// Never fires in normal runs.
     private func applyFilterArgsIfRequested() {
+        #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         if let flag = args.firstIndex(of: "-FilterStatus"), args.indices.contains(flag + 1) {
             statusFilter = TaskStatus(rawValue: args[flag + 1])
@@ -243,6 +328,15 @@ struct TasksHomeView: View {
             let value = args[flag + 1]
             categoryFilter = TaskCategory.all.contains(value) ? value : nil
         }
+        // `-OpenSearch ["query"]` presents search (2026-09-26): the magnifier is a tap,
+        // and search was the one list surface no seam reached, so it had never been
+        // reviewed at accessibility sizes or against the importance audit.
+        if let flag = args.firstIndex(of: "-OpenSearch") {
+            if args.indices.contains(flag + 1), !args[flag + 1].hasPrefix("-") {
+                UserDefaults.standard.set(args[flag + 1], forKey: "debug.searchSeed")
+            }
+            showSearch = true
+        }
         // `-MyTasksTab created` lands on the Created tab — the ownership pill is a tap
         // too, and the flat authorship record was the one header state no seam reached.
         if let flag = args.firstIndex(of: "-MyTasksTab"), args.indices.contains(flag + 1),
@@ -250,15 +344,7 @@ struct TasksHomeView: View {
         {
             tab = candidate
         }
-    }
-
-    /// Deterministic verification seam. Launch with `-OpenSettings` to present the
-    /// Settings sheet, which is otherwise two taps deep behind the "…" menu. It now holds
-    /// the destructive clears, and a screen that can delete everything should be reviewable
-    /// without a synthetic tap (blocked by Accessibility here). Never fires in normal runs.
-    private func openSettingsIfRequested() {
-        guard ProcessInfo.processInfo.arguments.contains("-OpenSettings") else { return }
-        showSettings = true
+        #endif
     }
 
     // MARK: - Header row (ownership navigation · filter — two independent dimensions)
@@ -275,7 +361,30 @@ struct TasksHomeView: View {
     /// Alone, the filter takes the leading edge — anchored to the title and the list's
     /// content column, rather than floating in an otherwise empty corner. With tabs it
     /// yields the lead to them and trails, because ownership is the coarser question.
+    @ViewBuilder
     private var headerRow: some View {
+        if headerWraps {
+            // A wrapping header sizes itself from its proposal — no offered-width
+            // arithmetic, no reader, no state-fed frame (which lagged the wrapped height
+            // and let the second line overlap the parked-captures row).
+            FlowLayout(spacing: Spacing.sm, lineSpacing: Spacing.xs) {
+                ForEach(MyTasksTab.allCases) { candidate in
+                    tabButton(candidate)
+                }
+                if MyTasksHeader.showsFilter(othersRoster: othersRoster.count) {
+                    filterControl(offeredWidth: 0)
+                }
+            }
+            .frame(minHeight: LayoutMetrics.tasksHeaderRow)
+            // Leading: the page's VStack centres what does not fill it, and a wrapped
+            // row of pills started ~50pt in from the title's edge (2026-09-26).
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            headerRowMeasured
+        }
+    }
+
+    private var headerRowMeasured: some View {
         // Hosted in a `GeometryReader` for ONE number: the width the row is OFFERED. A
         // row of one-line pills grows past its proposal rather than shrinking, and every
         // view sized by it — the row, its padding, a `Color` sibling in a ZStack (placed
@@ -284,12 +393,16 @@ struct TasksHomeView: View {
         // height follows the row's measured height, because a reader is otherwise greedy.
         GeometryReader { proxy in
             headerRowContent(offeredWidth: proxy.size.width)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                .onGeometryChange(for: CGFloat.self) {
+                    $0.size.height
+                } action: {
                     headerRowHeight = $0
                 }
         }
         .frame(height: headerRowHeight)
     }
+
+    private var headerWraps: Bool { dynamicTypeSize.isAccessibilitySize && showsTabs }
 
     private func headerRowContent(offeredWidth: CGFloat) -> some View {
         HStack(spacing: Spacing.sm) {
@@ -299,7 +412,9 @@ struct TasksHomeView: View {
                         tabButton(candidate)
                     }
                 }
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                .onGeometryChange(for: CGFloat.self) {
+                    $0.size.width
+                } action: {
                     pillsWidth = $0
                 }
                 // No floor of its own: the stack's two gaps already keep 24pt between
@@ -353,6 +468,14 @@ struct TasksHomeView: View {
         // both capsules stretched to fill the entire screen.
         .frame(minHeight: LayoutMetrics.tasksHeaderRow)
         .background { pillBackground(isSelected: isSelected) }
+        // **Which scope is showing was carried entirely by pixels (2026-09-20).**
+        // Selection here is a font weight, a text colour and a solid capsule — all of
+        // them invisible to VoiceOver, which read three identically-named buttons. The
+        // navigation title separates Mine from the other two and nothing separated
+        // Everyone from Created, so the answer to "whose tasks am I looking at?" was
+        // unavailable. The app already does this correctly on the composer's posture
+        // chip; this is the same trait.
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     @ViewBuilder
@@ -400,7 +523,9 @@ struct TasksHomeView: View {
                 filterCapsule(labelled: true)
                     .hidden()
                     .fixedSize(horizontal: true, vertical: false)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                    .onGeometryChange(for: CGFloat.self) {
+                        $0.size.width
+                    } action: {
                         labelledFilterWidth = $0
                     }
             }
@@ -412,7 +537,8 @@ struct TasksHomeView: View {
     /// the capsule, against the row. True until measured, so the first frame renders the
     /// fuller control and the probe has something to measure.
     private func filterShowsSummary(offeredWidth: CGFloat) -> Bool {
-        guard showsTabs, offeredWidth > 0, labelledFilterWidth > 0 else { return true }
+        // A wrapping header always has room for the words — that is what wrapping buys.
+        guard showsTabs, !headerWraps, offeredWidth > 0, labelledFilterWidth > 0 else { return true }
         return pillsWidth + 2 * Spacing.sm + labelledFilterWidth <= offeredWidth
     }
 
@@ -443,6 +569,33 @@ struct TasksHomeView: View {
                             Image(systemName: statusFilter == status ? "checkmark" : status.symbol)
                         }
                     }
+                }
+            }
+            Section("Attention") {
+                Button {
+                    attentionFilter = nil
+                } label: {
+                    filterLabel("All", checked: attentionFilter == nil)
+                }
+                ForEach(TasksAttention.pickable, id: \.self) { attention in
+                    Button {
+                        attentionFilter = attention
+                    } label: {
+                        Label {
+                            Text(attention.label)
+                        } icon: {
+                            Image(systemName: attentionFilter == attention ? "checkmark" : attention.symbol)
+                        }
+                    }
+                }
+                // The owner arm is reached from the strip only; while it is on, the
+                // menu names it so it can be seen and cleared.
+                if case .ownedBy(_, let name)? = attentionFilter {
+                    Button {
+                    } label: {
+                        Label("\(name)’s", systemImage: "checkmark")
+                    }
+                    .disabled(true)
                 }
             }
             Section("Category") {
@@ -502,12 +655,14 @@ struct TasksHomeView: View {
 
     /// What the control calls itself — the rule lives in the contract, where it's tested.
     private var filterSummary: String? {
-        MyTasksHeader.filterSummary(status: statusFilter, category: categoryFilter)
+        MyTasksHeader.filterSummary(
+            status: statusFilter, category: categoryFilter, attention: attentionFilter)
     }
 
     /// What an empty filtered list says — same contract, same file as the summary.
     private var filteredEmptyMessage: String? {
-        MyTasksHeader.filteredEmptyMessage(status: statusFilter, category: categoryFilter)
+        MyTasksHeader.filteredEmptyMessage(
+            status: statusFilter, category: categoryFilter, attention: attentionFilter)
     }
 
     /// The one clearer, shared by the menu and the empty state's button.
@@ -515,6 +670,7 @@ struct TasksHomeView: View {
         Motion.withMotion(Motion.snap) {
             statusFilter = nil
             categoryFilter = nil
+            attentionFilter = nil
         }
     }
 

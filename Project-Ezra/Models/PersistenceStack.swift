@@ -199,6 +199,13 @@ enum PersistenceStack {
         container.persistentStoreCoordinator.persistentStore(for: sharedStoreURL)
     }
 
+    /// Whether `store` is the shared-database mirror — a household someone ELSE owns. Read
+    /// from the file name, so it answers from inside a save or a plain fetch with no
+    /// container in hand. An unsaved object has no store yet and is never shared.
+    static func isShared(_ store: NSPersistentStore?) -> Bool {
+        store?.url?.lastPathComponent == sharedStoreFileName
+    }
+
     // MARK: - Safety copies
 
     /// Where a store and its safety copies live.
@@ -341,17 +348,31 @@ enum PersistenceStack {
     /// it. The reason is required, not defaulted: a wipe with no explanation is exactly the
     /// failure this exists to prevent.
     @discardableResult
+    /// Destroy the store files at `location`, after a safety copy.
+    ///
+    /// `only` narrows it to ONE store file (2026-09-20). Both stores are still COPIED —
+    /// a wider safety net is never the wrong call — but only the named one is removed.
+    /// It exists because the launch self-heal did not have it: there are two stores in
+    /// one container, `loadPersistentStores` calls its handler once PER store, and a
+    /// failure to open the CloudKit shared mirror therefore deleted the user's private
+    /// store along with it. The shared mirror is the one that depends on CloudKit's mood;
+    /// the private store holds every task they have ever captured. A repair for one must
+    /// not be a wipe of the other.
     static func destroyStore(
-        reason: StoreResetReason, now: Date = Date(), at location: StoreLocation = .default
+        reason: StoreResetReason, now: Date = Date(), at location: StoreLocation = .default,
+        only fileName: String? = nil
     ) -> StoreResetRecord {
         // Whether anything was actually destroyed, captured BEFORE the backup: a nil
         // `backupName` is ambiguous on its own (no store to copy, or a copy that failed),
         // and those two want opposite handling. A first launch must stay silent; a wipe
         // whose backup failed is precisely when the user most needs telling.
-        let storeExisted = FileManager.default.fileExists(atPath: location.storeURL.path)
-        let backupName = backupStore(now: now, at: location)
+        let doomed = fileName.map { [$0] } ?? location.storeFileNames
         let dir = location.storeURL.deletingLastPathComponent()
-        for name in location.storeFileNames {
+        let storeExisted = doomed.contains {
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path)
+        }
+        let backupName = backupStore(now: now, at: location)
+        for name in doomed {
             for suffix in storeSuffixes {
                 try? FileManager.default.removeItem(at: dir.appendingPathComponent(name + suffix))
             }

@@ -190,7 +190,9 @@ struct ConfirmCreationCard: View, Equatable {
                 // unexplained status and the other destroyed the card — neither said what
                 // it was. The delete control is the only glyph in this row.
                 TextField("Task", text: titleBinding, axis: .vertical)
-                    .font(presentation == .hero ? .sectionHeader : .taskTitle)
+                    // The drafts are what the person came for (2026-09-25, the importance
+                    // audit): a step above a list row, and the lone hero a step above that.
+                    .font(presentation == .hero ? .navTitle : .sectionHeader)
                     .foregroundStyle(Palette.primaryText)
                     // A title is a NAME. If the model hasn't produced one, the card should
                     // not silently become a transcript viewer — cap it and let the field
@@ -290,7 +292,9 @@ struct ConfirmCreationCard: View, Equatable {
     /// not missing a date; a task where someone said "Thursday" and we could not read it
     /// is.
     private var whenAskChip: some View {
-        Button { showDatePicker.toggle() } label: {
+        Button {
+            showDatePicker.toggle()
+        } label: {
             MetadataChip {
                 Image(systemName: "calendar.badge.questionmark").font(.glyphCaption())
                 Text("When?").font(.metadata.weight(.medium))
@@ -829,11 +833,14 @@ struct ConfirmCreationCard: View, Equatable {
         draft.markEdited(.dueDate)
     }
 
+    /// The ONE due vocabulary (`DueLabel`), at the detail's density. This card kept its
+    /// own until 2026-09-18 — "Thu 1" for a date nine months out, a weekday-and-day form
+    /// that only means something inside a fortnight — the very drift `DueLabel` was
+    /// written to end. A draft's date is never "overdue" (it is not a task yet), so a
+    /// past date reads as a plain date.
     private func dueText(_ date: Date) -> String {
-        let cal = Calendar.current
-        if cal.isDateInToday(date) { return "Today" }
-        if cal.isDateInTomorrow(date) { return "Tomorrow" }
-        return date.formatted(.dateTime.weekday(.abbreviated).day())
+        if let label = DueLabel.make(due: date, style: .full), !label.isOverdue { return label.text }
+        return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
     }
 }
 

@@ -24,8 +24,15 @@ enum ModelUnavailableError: Error {
     case timedOut
 }
 
-
 extension AppBrain {
+    /// A stable, short name for a model failure — the key `ModelMetrics` and every eval
+    /// histogram count by. ONE name per meaning across OS versions: iOS 27 deprecated
+    /// `LanguageModelSession.GenerationError` and split its cases across
+    /// `LanguageModelError` (model), `LanguageModelSession.Error` (session) and
+    /// `SystemLanguageModel.Error` (assets); a 26.x device still throws the old enum, so
+    /// its cases map onto the GA names rather than starting a second series.
+    /// `errorDetail(_:)` carries the GA payloads (reset date, token counts) that a name
+    /// cannot — reports append it; counters never do.
     static func errorLabel(_ error: Error) -> String {
         if let e = error as? ModelUnavailableError {
             switch e {
@@ -33,23 +40,6 @@ extension AppBrain {
             case .unavailable: return "unavailable"
             }
         }
-        if let g = error as? LanguageModelSession.GenerationError {
-            switch g {
-            case .exceededContextWindowSize(_): return "exceededContextWindowSize"
-            case .assetsUnavailable(_): return "assetsUnavailable"
-            case .guardrailViolation(_): return "guardrailViolation"
-            case .unsupportedGuide(_): return "unsupportedGuide"
-            case .unsupportedLanguageOrLocale(_): return "unsupportedLanguageOrLocale"
-            case .decodingFailure(_): return "decodingFailure"
-            case .rateLimited(_): return "rateLimited"
-            case .concurrentRequests(_): return "concurrentRequests"
-            case .refusal(_, _): return "refusal"
-            @unknown default: return "generationError"
-            }
-        }
-        // iOS 27's model-level error vocabulary — a second surface the new session
-        // APIs can throw from. Losing the case to a bare type name would blunt the
-        // one diagnostic the footer exists to sharpen.
         if let m = error as? LanguageModelError {
             switch m {
             case .contextSizeExceeded(_): return "contextSizeExceeded"
@@ -58,7 +48,38 @@ extension AppBrain {
             case .refusal(_): return "refusal"
             case .unsupportedCapability(_): return "unsupportedCapability"
             case .unsupportedTranscriptContent(_): return "unsupportedTranscriptContent"
+            case .unsupportedGenerationGuide(_): return "unsupportedGenerationGuide"
+            case .unsupportedLanguageOrLocale(_): return "unsupportedLanguageOrLocale"
+            case .timeout(_): return "modelTimeout"
             @unknown default: return "languageModelError"
+            }
+        }
+        if let s = error as? LanguageModelSession.Error {
+            switch s {
+            case .concurrentRequests: return "concurrentRequests"
+            case .transcriptMutationWhileResponding: return "transcriptMutationWhileResponding"
+            @unknown default: return "sessionError"
+            }
+        }
+        if let a = error as? SystemLanguageModel.Error {
+            switch a {
+            case .assetsUnavailable(_): return "assetsUnavailable"
+            @unknown default: return "systemModelError"
+            }
+        }
+        if error is GeneratedContent.ParsingError { return "decodingFailure" }
+        if let g = error as? LanguageModelSession.GenerationError {
+            switch g {
+            case .exceededContextWindowSize(_): return "contextSizeExceeded"
+            case .assetsUnavailable(_): return "assetsUnavailable"
+            case .guardrailViolation(_): return "guardrailViolation"
+            case .unsupportedGuide(_): return "unsupportedGenerationGuide"
+            case .unsupportedLanguageOrLocale(_): return "unsupportedLanguageOrLocale"
+            case .decodingFailure(_): return "decodingFailure"
+            case .rateLimited(_): return "rateLimited"
+            case .concurrentRequests(_): return "concurrentRequests"
+            case .refusal(_, _): return "refusal"
+            @unknown default: return "generationError"
             }
         }
         // An error from NEITHER public vocabulary. The bare type name was all this used
@@ -73,6 +94,33 @@ extension AppBrain {
         let name = String(describing: type(of: error))
         let detail = String(describing: error)
         return detail.isEmpty || detail == name ? name : "\(name): \(detail)"
+    }
+
+    /// What the GA payload says beyond its name — the part a report needs to tell a
+    /// throttle from a quota, or a prompt that was too long from a model that is. Nil
+    /// when the name already says everything. Never a counter key.
+    static func errorDetail(_ error: Error) -> String? {
+        guard let m = error as? LanguageModelError else { return nil }
+        switch m {
+        case .rateLimited(let r):
+            let reset = r.resetDate.map { date -> String in
+                let seconds = Int(max(0, date.timeIntervalSinceNow))
+                return "reset in \(seconds)s"
+            }
+            return [reset, r.debugDescription.isEmpty ? nil : r.debugDescription]
+                .compactMap { $0 }.joined(separator: " · ")
+        case .contextSizeExceeded(let c):
+            return "\(c.tokenCount) tok in a \(c.contextSize) window"
+        default:
+            return nil
+        }
+    }
+
+    /// `errorLabel` with `errorDetail` appended when there is one — the line reports print.
+    static func errorLine(_ error: Error) -> String {
+        let label = errorLabel(error)
+        guard let detail = errorDetail(error), !detail.isEmpty else { return label }
+        return "\(label) (\(detail))"
     }
 
     /// The current on-device model availability, as a short label for the footer.

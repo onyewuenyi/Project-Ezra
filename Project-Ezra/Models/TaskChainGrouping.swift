@@ -10,6 +10,7 @@
 //  instead of being flattened into a single line.
 //
 
+import CoreData
 import Foundation
 
 /// A dependency-linked group of active tasks, in execution order: root(s) first,
@@ -25,9 +26,16 @@ struct TaskChain: Identifiable {
     /// could be driven by different `effectiveAttention` values.
     let rankKeys: [UUID: RankKey]
 
-    /// Stable enough for a single render pass: the sorted member uuids joined.
+    /// Stable enough for a single render pass: the sorted member uuids joined — and
+    /// never EMPTY (2026-09-18). A chain whose members have all just been deleted
+    /// `compactMap`s to nothing and joined to "", which is the same duplicate-id crash
+    /// `TaskLaneEntry.id` carries the long note about; the object identities are the
+    /// fallback that cannot collide.
     var id: String {
-        members.compactMap(\.uuid).map(\.uuidString).sorted().joined(separator: "-")
+        let uuids = members.compactMap(\.uuid).map(\.uuidString).sorted()
+        guard uuids.isEmpty else { return uuids.joined(separator: "-") }
+        return members.map { $0.objectID.uriRepresentation().absoluteString }.sorted()
+            .joined(separator: "-")
     }
 
     /// The member that decides this chain's lane and sort position: whichever root
@@ -35,11 +43,7 @@ struct TaskChain: Identifiable {
     /// collapsed stack shows) sorts first under the stack precedence.
     var root: TaskItem {
         let roots = members.filter { TaskChainGrouping.prerequisites(of: $0, within: members).isEmpty }
-        return roots.min { a, b in
-            guard let ka = a.uuid.flatMap({ rankKeys[$0] }), let kb = b.uuid.flatMap({ rankKeys[$0] })
-            else { return false }
-            return TaskRanking.stackOrder(ka, kb)
-        } ?? members[0]
+        return roots.min { TaskChainGrouping.precedes($0, $1, keys: rankKeys) } ?? members[0]
     }
 }
 
@@ -66,6 +70,16 @@ extension TaskChain {
         }
     }
 
+    /// What the deck's caption calls the group. A named outcome is its umbrella's title. A
+    /// chain of bare blockers has no name, so its caption is its STORY — the members in
+    /// execution order, "Renew passport → Book flights → Request time off" — because the
+    /// only thing that made these one group is that each unlocks the next, and saying so
+    /// is more useful than the generic "Linked tasks" it replaced. One line; the caption
+    /// truncates the tail.
+    var groupTitle: String {
+        umbrella?.title ?? deckMembers.map(\.title).joined(separator: " → ")
+    }
+
     /// The cards the group pages through: every member but the umbrella, in execution
     /// order — the front card is `root`, the first member with nothing left to wait on, so
     /// a waiting member never leads while an actionable one exists.
@@ -80,9 +94,19 @@ enum TaskLaneEntry: Identifiable {
     case single(TaskItem)
     case chain(TaskChain)
 
+    /// **The fallback must be UNIQUE, not merely present (2026-09-18).** It used to be
+    /// `task.title`, and a DELETED managed object answers "" for every attribute — so
+    /// the instant "Clear all tasks" deleted the store's rows, every entry still on
+    /// screen collapsed to the same empty id, SwiftUI logged
+    /// *"the ID  occurs multiple times within the collection"* at fatal level, and the
+    /// app died before the fetch could refresh. `objectID` is the identity Core Data
+    /// guarantees for the object itself: unique, never empty, and still answerable
+    /// after a delete. The uuid stays the primary id, because it is stable across a
+    /// temporary objectID becoming permanent at save.
     var id: String {
         switch self {
-        case .single(let task): return task.uuid?.uuidString ?? task.title
+        case .single(let task):
+            return task.uuid?.uuidString ?? task.objectID.uriRepresentation().absoluteString
         case .chain(let chain): return chain.id
         }
     }
@@ -230,13 +254,29 @@ enum TaskChainGrouping {
     /// whatever's left if nothing is ever ready (shouldn't happen — `addBlocker`
     /// already prevents cycles at write time, and containment can't cycle — but this
     /// keeps grouping from infinite-looping if one somehow existed).
+    /// The tiebreak between two members that are both ready: **siblings under one umbrella
+    /// keep their BREAKDOWN order** (`sortIndex`, then `createdAt`, then uuid — the same
+    /// ordering `children(among:)` is), everything else takes the stack precedence.
+    ///
+    /// This is what makes the deck's front card, the container spine's next-step pointer
+    /// and the kickoff line agree: all three now read the model's proposed sequence for
+    /// steps. Before it the deck picked its front by attention among the roots, so
+    /// "Order the cake" led the deck while the page called it "2 of 3 left".
+    static func precedes(_ a: TaskItem, _ b: TaskItem, keys: [UUID: RankKey]) -> Bool {
+        if let parent = a.parentTaskID, parent == b.parentTaskID {
+            return (a.sortIndex, a.createdAt, a.uuid?.uuidString ?? "")
+                < (b.sortIndex, b.createdAt, b.uuid?.uuidString ?? "")
+        }
+        guard let ka = a.uuid.flatMap({ keys[$0] }), let kb = b.uuid.flatMap({ keys[$0] })
+        else { return false }
+        return TaskRanking.stackOrder(ka, kb)
+    }
+
     private static func topologicallyLayer(
         _ members: [TaskItem], keys: [UUID: RankKey]
     ) -> [TaskItem] {
         func precedes(_ a: TaskItem, _ b: TaskItem) -> Bool {
-            guard let ka = a.uuid.flatMap({ keys[$0] }), let kb = b.uuid.flatMap({ keys[$0] })
-            else { return false }
-            return TaskRanking.stackOrder(ka, kb)
+            TaskChainGrouping.precedes(a, b, keys: keys)
         }
         var remaining = members
         var ordered: [TaskItem] = []

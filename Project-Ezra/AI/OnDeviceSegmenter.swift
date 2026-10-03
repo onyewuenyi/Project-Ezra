@@ -118,16 +118,20 @@ enum OnDeviceSegmenter {
         case failed(String)
         /// An anchor was not in the user's own words, or the artifact came apart.
         case ungrounded
-        /// Fewer than two boundaries — there is nothing here the read did not already
-        /// have. Note this is also the answer when the model says "it is all one thing":
+        /// Fewer than two boundaries, or no more than the deterministic read already
+        /// found — there is nothing here the read did not already have (a cut BELOW the
+        /// local count merges outcomes the read had told apart, and refuses here). Note
+        /// this is also the answer when the model says "it is all one thing":
         /// that claim is not accepted on the model's authority, because the signal count
         /// is what escalated and FM's own multi-intent boolean measured 43% precision
         /// against the deterministic detector's 90% (Campaign 3).
         case noGain
         /// The cut resolved, and the existing validator still refused it. Carries how many
-        /// drafts the cut produced — without it a caller cannot tell a cut that was nearly
-        /// right from one that came apart, and a report scoring this cell would have to
-        /// substitute the deterministic count and quietly score the wrong artifact.
+        /// FRAGMENTS the cut produced (the model's count, not the resolver's draft count,
+        /// which fans a day-list into several) — without it a caller cannot tell a cut
+        /// that was nearly right from one that came apart, and a report scoring this cell
+        /// would have to substitute the deterministic count and quietly score the wrong
+        /// artifact.
         case validator(CaptureEscalationReason, fragments: Int)
 
         var label: String {
@@ -145,7 +149,9 @@ enum OnDeviceSegmenter {
     enum Outcome: Equatable, Sendable {
         /// The capture stays on the device. `fragments` is how many boundaries the cut
         /// produced — drafts may exceed it where `IntentResolver.expand` fans one out.
-        case accepted(drafts: [TaskDraft], fragments: Int)
+        /// `anchors` are the model's verbatim openings, carried so a report can show
+        /// WHERE it cut — a false accept with only a count cannot be argued with.
+        case accepted(drafts: [TaskDraft], fragments: Int, anchors: [String] = [])
         case refused(Refusal)
 
         var isAccepted: Bool { if case .accepted = self { return true }; return false }
@@ -197,6 +203,17 @@ enum OnDeviceSegmenter {
         }
         guard cleaned.count >= 2, !cleaned.contains(where: \.isEmpty) else { return nil }
         return cleaned
+    }
+
+    /// The arm exists to fix UNDER-segmentation. A cut with no more parts than the
+    /// deterministic read already found cannot be a gain, and can be a loss: on
+    /// 2026-09-17 the GA model, which had cut "renew my passport and after that book
+    /// flights … and book the hotel …" into three on three runs, cut it into two on the
+    /// fourth, and the validator accepted a read that merged two errands the local pass
+    /// had already told apart. The count the read had is the floor; fewer than two
+    /// boundaries was never a cut at all.
+    static func isGain(anchors: Int, localCount: Int) -> Bool {
+        anchors >= 2 && anchors > localCount
     }
 
     /// One word of the text, with where it starts. Punctuation is trimmed from the EDGES
@@ -295,7 +312,8 @@ enum OnDeviceSegmenter {
         ModelMetrics.shared.record(
             .captureSegment, .success, latencyMs: Int(Date().timeIntervalSince(started) * 1000))
 
-        guard read.starts.count >= 2 else { return .refused(.noGain) }
+        guard isGain(anchors: read.starts.count, localCount: AppBrain.provisionalDrafts(text).count)
+        else { return .refused(.noGain) }
         guard let fragments = cut(text, at: read.starts) else { return .refused(.ungrounded) }
         let drafts = AppBrain.drafts(
             fromClauses: fragments, learned: learned, ownership: ownership, now: now)
@@ -303,8 +321,8 @@ enum OnDeviceSegmenter {
         // The validator, unchanged and authoritative. It is asked about the ORIGINAL text
         // — the signals it counts are the person's, not the cut's.
         if let reason = CaptureEscalation.reason(for: text, drafts: drafts) {
-            return .refused(.validator(reason, fragments: drafts.count))
+            return .refused(.validator(reason, fragments: fragments.count))
         }
-        return .accepted(drafts: drafts, fragments: fragments.count)
+        return .accepted(drafts: drafts, fragments: fragments.count, anchors: read.starts)
     }
 }

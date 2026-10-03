@@ -32,9 +32,13 @@ struct CaptureEscalationTests {
         }
     }
 
-    @Test("An empty read always escalates — there is nothing to reveal")
+    @Test("An empty read of a real line escalates — there is nothing to reveal")
     func emptyReadEscalates() {
-        #expect(CaptureEscalation.reason(for: "hmm", drafts: []) == .emptyRead)
+        // A line with words the read could not turn into a draft goes to the authority.
+        #expect(CaptureEscalation.reason(for: "the thing with the school", drafts: []) == .emptyRead)
+        // A line the segmenter dropped whole (filler only) has nothing to escalate
+        // (2026-09-18): it reveals locally as "Nothing actionable".
+        #expect(CaptureEscalation.reason(for: "hmm", drafts: []) == nil)
     }
 
     @Test("A big dump escalates on the existing depth floors, by characters or items")

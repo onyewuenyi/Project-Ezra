@@ -62,19 +62,23 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
     /// with or a title the reply named that the facts actually hold — never a model's
     /// claim about the graph.
     var citedTaskIDs: [UUID]
+    /// One clause per cited task saying why it is here — the day answer's rows carry
+    /// them (2026-09-23); a plain citation carries none and the row places itself.
+    var reasons: [UUID: String]
     /// When the line was sent (a question) or landed (an answer). Drives the thread's
     /// time dividers and survives the Ask tab's archive.
     var sentAt: Date
 
     init(
         id: UUID = UUID(), role: Role, text: String, state: State = .sent,
-        citedTaskIDs: [UUID] = [], sentAt: Date = Date()
+        citedTaskIDs: [UUID] = [], reasons: [UUID: String] = [:], sentAt: Date = Date()
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.state = state
         self.citedTaskIDs = citedTaskIDs
+        self.reasons = reasons
         self.sentAt = sentAt
     }
 }
@@ -86,7 +90,9 @@ enum ChatThreadRhythm {
     /// after the line before it, or when it is the first line and older than this.
     static let sittingGap: TimeInterval = 60 * 60
 
-    static func needsDivider(before message: ChatMessage, after previous: ChatMessage?, now: Date = Date()) -> Bool {
+    static func needsDivider(
+        before message: ChatMessage, after previous: ChatMessage?, now: Date = Date()
+    ) -> Bool {
         guard let previous else { return now.timeIntervalSince(message.sentAt) > sittingGap }
         return message.sentAt.timeIntervalSince(previous.sentAt) > sittingGap
     }
@@ -355,7 +361,6 @@ extension InquiryStore where Scope == TaskInquiryScope {
     #endif
 }
 
-
 // MARK: - The task's floor (rung 0)
 
 enum TaskInquiryFloor {
@@ -376,10 +381,15 @@ enum TaskInquiryFloor {
         guard !InquiryFloor.isReasoning(gated) else { return nil }
         let lowered = question.lowercased()
         func has(_ phrases: String...) -> Bool { InquiryFloor.mentions(any: phrases, in: lowered) }
-        if has("when is this due", "when's this due", "due date", "deadline", "when is it due", "due when", "overdue") {
+        if has(
+            "when is this due", "when's this due", "due date", "deadline", "when is it due", "due when",
+            "overdue")
+        {
             return .due
         }
-        if has("blocking", "blocked", "waiting on", "in the way", "waiting for", "blockers") { return .blockers }
+        if has("blocking", "blocked", "waiting on", "in the way", "waiting for", "blockers") {
+            return .blockers
+        }
         if has("how long", "how much time", "effort", "estimate", "time will") { return .effort }
         if has("what's left", "what is left", "steps", "remaining", "what remains") { return .steps }
         return nil
@@ -399,7 +409,8 @@ enum TaskInquiryFloor {
         switch shape {
         case .due:
             if let over = facts.overdueDays {
-                return InquiryAnswer(text: "It was due \(over) day\(over == 1 ? "" : "s") ago.", citedTaskIDs: [])
+                return InquiryAnswer(
+                    text: "It was due \(over) day\(over == 1 ? "" : "s") ago.", citedTaskIDs: [])
             }
             if let days = facts.daysUntilDue {
                 let when = days == 0 ? "today" : days == 1 ? "tomorrow" : "in \(days) days"
@@ -408,12 +419,15 @@ enum TaskInquiryFloor {
             return InquiryAnswer(text: "No due date on this.", citedTaskIDs: [])
         case .blockers:
             let waits = facts.blockerTitles + facts.externalWaits
-            guard !waits.isEmpty else { return InquiryAnswer(text: "Nothing is blocking it.", citedTaskIDs: []) }
+            guard !waits.isEmpty else {
+                return InquiryAnswer(text: "Nothing is blocking it.", citedTaskIDs: [])
+            }
             return InquiryAnswer(
                 text: "Waiting on " + waits.joined(separator: "; ") + ".", citedTaskIDs: facts.blockerIDs)
         case .effort:
             if let minutes = facts.effortMinutes {
-                return InquiryAnswer(text: "About \(minutes) minutes, going by the estimate.", citedTaskIDs: [])
+                return InquiryAnswer(
+                    text: "About \(minutes) minutes, going by the estimate.", citedTaskIDs: [])
             }
             return InquiryAnswer(text: "No estimate on this one.", citedTaskIDs: [])
         case .steps:
@@ -422,7 +436,8 @@ enum TaskInquiryFloor {
             }
             let count = facts.openStepTitles.count
             return InquiryAnswer(
-                text: "\(count) step\(count == 1 ? "" : "s") left: " + facts.openStepTitles.joined(separator: "; ") + ".",
+                text: "\(count) step\(count == 1 ? "" : "s") left: "
+                    + facts.openStepTitles.joined(separator: "; ") + ".",
                 citedTaskIDs: facts.childIDs)
         }
     }

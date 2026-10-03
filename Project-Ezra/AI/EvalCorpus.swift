@@ -20,6 +20,12 @@
 //  A dimension that reads "—" is not a low score, it is an unmeasurable one, and a
 //  walkthrough cannot judge what never renders.
 //
+//  2026-09-17 extended it by the same rule for the surfaces built since: a loose
+//  cluster the grouping sweep can earn its row from (and a refusal already recorded),
+//  a group made at the confirm card with its "Grouped" trail entry, a waiting card
+//  inside a deck, a live duplicate pair for the lexically-gated sweep to judge, and
+//  parked captures carrying the phrasings the deterministic read now resolves locally.
+//
 //  Two things it deliberately does NOT do:
 //
 //  • **No synthetic capture provenance.** The receipt sidecar records forward only,
@@ -461,6 +467,169 @@ enum EvalCorpus {
                 in: context)
             context.insert(mayaDone)
             mayaDone.complete(now: now.addingTimeInterval(-2 * day))
+
+            // Someone else's OUTCOME with open steps: the Everyone scope renders it as a
+            // deck whose caption has to say whose project it is (the owner's avatar
+            // beside the title), and whose cards carry her avatar — the family's shared
+            // list, not only her ledger. Left out of Mine, where it must not appear.
+            let fundraiser = TaskItem(
+                title: "Run the school fundraiser", category: "Family", status: .todo,
+                creatorID: maya, confidence: 0.85, reasoning: "A few moving parts.",
+                ownerID: maya, effortMinutes: 90, createdAt: now.addingTimeInterval(-3 * day),
+                in: context)
+            context.insert(fundraiser)
+            let fundraiserSteps = fundraiser.splitInto(
+                [
+                    BreakdownStep(title: "Book the school hall", effortMinutes: 20),
+                    BreakdownStep(title: "Print the flyers", effortMinutes: 30),
+                ], in: context)
+            for step in fundraiserSteps {
+                step.ownerID = maya
+                step.creatorID = maya
+            }
+        }
+
+        // MARK: The grouping sweep's question (2026-09-17)
+        // The sweep proposes over LOOSE open tasks — no umbrella, not waiting — that share a
+        // ≥4-letter word, and asks the on-device judge whether they serve one outcome. The
+        // corpus so far clusters only by accident (five "renew" tasks that are five outcomes,
+        // which the judge should refuse — a useful control, not a demonstration). Four
+        // thoughts about one nursery, captured over a week as four separate tasks, is the
+        // real shape: six links, so it ranks first among the loose clusters and lands in the
+        // capped judgment set on the first run; the bare passport chain (no umbrella) is the
+        // OTHER candidate kind and is judged ahead of it. `-SeedGroupProposal` shows the row
+        // without a model; this shows the row the model actually earns.
+        let nurseryTitles: [(String, String, Int, TimeInterval)] = [
+            ("Book the nursery tour", "Family", 30, -8 * day),
+            ("Fill in the nursery application", "Family", 30, -6 * day),
+            ("Pay the nursery deposit", "Finance", 10, -4 * day),
+            ("Buy the nursery uniform", "Family", 20, -1 * day),
+        ]
+        for (title, category, effort, created) in nurseryTitles {
+            context.insert(
+                TaskItem(
+                    title: title, category: category, status: .todo, confidence: 0.85,
+                    reasoning: "Filed under \(category) from the wording.", ownerID: you,
+                    effortMinutes: effort, createdAt: now.addingTimeInterval(created), in: context))
+        }
+
+        // A question already answered "Not these": the two donations share a word and would
+        // be asked about every run — the `siblingGroup` suppression is what makes the no
+        // stick, and the ONE reversible `rejectedGroup` entry is the way back. Undo on it
+        // is the arm `ChangeLogUndo` grew for this; without a seeded row it is never seen.
+        let donateBooks = TaskItem.fetchAll(in: context).first { $0.title == "Donate the old books" }
+        let donateClothes = TaskItem.fetchAll(in: context).first { $0.title == "Donate old clothes" }
+        if let a = donateBooks?.uuid, let b = donateClothes?.uuid {
+            SuppressionStore.recordRejectedSiblings(a, b, in: context, now: now.addingTimeInterval(-2 * day))
+            context.insert(
+                ChangeLogEntry(
+                    summary: "Said no to grouping 2 tasks as “Donations”",
+                    detail: "Donate the old books · Donate old clothes. Undo lets the suggestion come back.",
+                    action: GroupingSweep.rejectedAction,
+                    newValue: [a, b].map(\.uuidString).joined(separator: ","),
+                    initiatedBy: .human, isReversible: true, taskTitle: "Donations", actorID: you,
+                    timestamp: now.addingTimeInterval(-2 * day), in: context))
+        }
+
+        // MARK: A group made at the confirm card
+        // The reveal can group a capture as one outcome ("Group as…"), and Activity names
+        // the act — "Grouped 3 tasks as …" with an Undo that unlinks the steps and removes
+        // an untouched umbrella. Kept separate from the party plan on purpose, as the
+        // parent-link entry above is: undoing it here dissolves a deck nobody else is
+        // walking through. It is also the second deck in Mine, so the pager has two decks
+        // with different captions to page between, and one step WAITS on something
+        // external — the card in a deck that says what it waits on, which gives every card
+        // in that deck its second line.
+        let winterReady = TaskItem(
+            title: "Get the house ready for winter", category: "Home", status: .todo,
+            confidence: 0.8, reasoning: "Grouped at the confirm card — you named the outcome.",
+            dueDate: now.addingTimeInterval(21 * day), ownerID: you, effortMinutes: 90,
+            createdAt: now.addingTimeInterval(-5 * day), in: context)
+        context.insert(winterReady)
+        let winterSteps = [
+            ("Service the boiler", 60), ("Clean the gutters", 45), ("Bleed the radiators", 20),
+        ]
+        .enumerated().map { index, step in
+            let task = TaskItem(
+                title: step.0, category: "Home", status: .todo, confidence: 0.85,
+                reasoning: "One of the winter jobs.", ownerID: you, effortMinutes: step.1,
+                createdAt: now.addingTimeInterval(-5 * day), in: context)
+            task.sortIndex = Int32(index)
+            context.insert(task)
+            if let umbrellaID = winterReady.uuid {
+                task.linkParent(umbrellaID, origin: .inferred(confidence: 0.8))
+            }
+            return task
+        }
+        winterSteps[0].addExternalBlocker("the engineer to confirm a slot", among: winterSteps)
+        let winterCapture = Capture(
+            rawText: "service the boiler, clean the gutters and bleed the radiators before it gets cold",
+            source: .voice, parsedTaskIDs: ([winterReady] + winterSteps).compactMap(\.uuid),
+            committedAt: now.addingTimeInterval(-5 * day),
+            createdAt: now.addingTimeInterval(-5 * day), in: context)
+        context.insert(winterCapture)
+        context.insert(
+            ChangeLogEntry(
+                summary: "Grouped \(winterSteps.count) tasks as “\(winterReady.title)”",
+                detail: winterSteps.map(\.title).joined(separator: " · "),
+                action: "grouped",
+                newValue: winterSteps.compactMap { $0.uuid?.uuidString }.joined(separator: ","),
+                initiatedBy: .ai, isReversible: true, taskTitle: winterReady.title,
+                taskUUID: winterReady.uuid, actorID: you,
+                timestamp: now.addingTimeInterval(-5 * day), in: context))
+        context.insert(
+            ChangeLogEntry(
+                summary: "Captured 3 things", detail: winterCapture.rawText,
+                action: ChangeLogEntry.capturedAction, oldValue: winterCapture.uuid?.uuidString,
+                initiatedBy: .ai, isReversible: false,
+                timestamp: now.addingTimeInterval(-5 * day), in: context))
+
+        // The party plan gains a waiting step too — the deck the walkthrough opens first
+        // should show the second line, not only the one it reaches by paging.
+        if partySteps.count > 2 {
+            partySteps[2].addExternalBlocker("the bakery to confirm the date", among: partySteps)
+        }
+
+        // MARK: A duplicate the sweep has NOT folded yet
+        // Since 2026-09-17 the sweep's prefilter is the lexical floor alone, and the judge
+        // decides. This pair clears the floor on its words (Jaccard 0.5) and is the same
+        // job, so a launch on the real on-device model should merge it — kill-don't-delete,
+        // one `mergedPair` entry, one Undo. The pair above (`airFilter`) shows the merge
+        // ALREADY made; this one lets the walkthrough watch it happen.
+        context.insert(
+            TaskItem(
+                title: "Gym membership renewal", category: "Personal", status: .todo,
+                confidence: 0.8, reasoning: "Filed under Personal from the wording.", ownerID: you,
+                effortMinutes: 15, createdAt: now.addingTimeInterval(-1 * day), in: context))
+
+        // MARK: What the deterministic read learned this week
+        // Resuming a parked capture re-reads its words, so the parked row is the one seeded
+        // route to the new local resolutions: a short wait that OPENS on a pronoun points at
+        // the previous draft ("after it comes through" waits on the passport, not on an
+        // external called "it comes through"), and two clauses that each carry a day are two
+        // outcomes even though the right side has no verb. Both resolve locally in ~2ms — the
+        // reveal must show two cards with a real edge, and two dated cards, with no network.
+        let parkedAnaphoric = Capture(
+            rawText: "renew ezra's passport and book the flights after it comes through",
+            source: .voice, createdAt: now.addingTimeInterval(-1 * hour), in: context)
+        parkedAnaphoric.parkedDrafts = []
+        context.insert(parkedAnaphoric)
+        let parkedTwoDays = Capture(
+            rawText: "dentist on thursday and the vet on friday",
+            source: .text, createdAt: now.addingTimeInterval(-2 * day), in: context)
+        parkedTwoDays.parkedDrafts = []
+        context.insert(parkedTwoDays)
+
+        // MARK: The human clock
+        // Staleness reads `lastHumanTouchAt`, never `updatedAt`, so a system write can't
+        // fake engagement. The three hand edits above happened; the clock should say so —
+        // and one task the person explicitly assigned carries `.human` ownership, the only
+        // kind the affinity denominator counts.
+        offsiteAgenda.touchHuman(now: now.addingTimeInterval(-1 * hour))
+        if let offsiteVenue = TaskItem.fetchAll(in: context).first(where: {
+            $0.title == "Book venue for the offsite"
+        }) {
+            offsiteVenue.ownerOrigin = .human
         }
 
         // MARK: The pass that has to run last

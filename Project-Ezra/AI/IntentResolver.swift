@@ -29,14 +29,44 @@ enum IntentResolver {
         openTasks: [OpenTaskSnapshot] = [], candidates: [RetrievalCandidate] = [],
         suppressions: [RelationshipSuppression] = [], now: Date = Date()
     ) -> [TaskDraft] {
-        intents.filter { $0.action == .create }
+        let drafts = intents.filter { $0.action == .create }
             .flatMap { expand($0, now: now) }
             .map {
                 resolve(
                     $0, rules: rules, openTasks: openTasks, candidates: candidates,
                     suppressions: suppressions, now: now)
             }
+        return resolvingAnaphoricWaits(drafts)
     }
+
+    /// "Book flights after IT comes through": a wait that opens on a pronoun points at
+    /// the outcome just spoken, not at a task called "it comes through". Left as
+    /// words, the commit's `resolveBlocker` matched nothing and wrote an EXTERNAL wait
+    /// in those words — the passport it plainly meant was one draft earlier in the same
+    /// breath (2026-09-17, `-CaptureCompare`; the model arm resolved the same reference
+    /// to "passport"). The phrase becomes the previous draft's title, which the commit
+    /// then matches to the sibling and writes as a real edge. Short phrases only: "that
+    /// report from Sarah" names its own thing and is left alone.
+    static func resolvingAnaphoricWaits(_ drafts: [TaskDraft]) -> [TaskDraft] {
+        guard drafts.count > 1 else { return drafts }
+        var out = drafts
+        for i in 1..<out.count {
+            guard let phrase = out[i].blockedBy, isAnaphoricWait(phrase) else { continue }
+            out[i].blockedBy = out[i - 1].title
+        }
+        return out
+    }
+
+    static func isAnaphoricWait(_ phrase: String) -> Bool {
+        let words = phrase.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" })
+            .map(String.init)
+        guard let first = words.first, words.count <= 3 else { return false }
+        return anaphoricOpeners.contains(first)
+    }
+
+    private static let anaphoricOpeners: Set<String> = [
+        "it", "it's", "that", "that's", "this", "those", "these", "they", "them",
+    ]
 
     // MARK: - Instance expansion (one intent → one draft per named occasion)
 
@@ -335,7 +365,8 @@ enum IntentResolver {
         // Effort fills an EMPTY estimate only — a spoken "two hours" beats a learned
         // default; urgency is additive, never cleared by a rule.
         if intent.effortMinutes == nil {
-            for case let .effortForKeyword(keyword, minutes) in rules where words.contains(keyword.lowercased()) {
+            for case let .effortForKeyword(keyword, minutes) in rules
+            where words.contains(keyword.lowercased()) {
                 intent.effortMinutes = minutes
                 break
             }
@@ -596,6 +627,11 @@ enum IntentResolver {
 
         // A named month and day ("july 20", "20 july", "jul 20th").
         if let calendarDate = parseMonthDay(raw, now: now, cal: cal) { return calendarDate }
+        // A bare month behind a preposition ("in July", "by march", "before the summer
+        // holidays in July", 2026-09-18): the first of its next occurrence. The month
+        // is the whole precision the person gave, and the first is the day that keeps
+        // every "before" and "by" reading honest.
+        if let monthStart = parseBareMonth(raw, now: now, cal: cal) { return monthStart }
 
         // A named weekday beats any bare week reference below.
         if let weekday = weekdayNumber(in: raw) {
@@ -774,6 +810,35 @@ enum IntentResolver {
         comps.day = day
         comps.year = cal.component(.year, from: now)
         guard let candidate = cal.date(from: comps).map(cal.startOfDay(for:)) else { return nil }
+        if candidate < cal.startOfDay(for: now) {
+            comps.year = (comps.year ?? 0) + 1
+            return cal.date(from: comps).map(cal.startOfDay(for:))
+        }
+        return candidate
+    }
+
+    /// "in july" / "by march" → the first of that month's NEXT occurrence (this month
+    /// counts only while it has begun and not ended — "in September" said mid-September
+    /// is now). Prepositioned only, so a month named as a topic ("the july invoice")
+    /// is never a date; `HeuristicEngine.dateExpression` hands over that shape alone.
+    private static func parseBareMonth(_ raw: String, now: Date, cal: Calendar) -> Date? {
+        guard
+            let match = raw.range(
+                of: #"\b(?:in|by|before|until|during|for)\s+(?:early\s+|mid\s+|late\s+)?([a-z]+)\b"#,
+                options: .regularExpression)
+        else { return nil }
+        let word = raw[match].split(separator: " ").last.map(String.init) ?? ""
+        guard
+            let month = monthNames.firstIndex(where: {
+                $0 == word || ($0.prefix(3) == word && word.count == 3)
+            })
+        else { return nil }
+        var comps = DateComponents()
+        comps.month = month + 1
+        comps.day = 1
+        comps.year = cal.component(.year, from: now)
+        guard let candidate = cal.date(from: comps).map(cal.startOfDay(for:)) else { return nil }
+        if cal.component(.month, from: now) == month + 1 { return cal.startOfDay(for: now) }
         if candidate < cal.startOfDay(for: now) {
             comps.year = (comps.year ?? 0) + 1
             return cal.date(from: comps).map(cal.startOfDay(for:))

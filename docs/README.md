@@ -30,19 +30,20 @@ spec says *what* and *why*, and these say *how it is built* and *how it must loo
 | `docs/primitives.md` | The small durable core features compose, and the test a new primitive must pass. Cited by the spec's §05. | In force |
 | `docs/capture.md` | Ramble in full — the voice-first arc, routing history, the deleted confidence gate, the orb's tuning traps, the eval-instrument lessons. | In force |
 | `docs/advisor.md` | The Advisor in full — rung 0's floor, the fingerprint, the validation contract, the lift metric, per-rung deadlines. | In force |
-| `docs/surfaces.md` | The shell (one surface, two verbs — the tab bar, the Brief and the Ask tab are all gone as of 2026-09-02, with the archaeology kept), My Tasks, the parked-captures row, and the shape-driven task detail. | In force |
+| `docs/surfaces.md` | The shell (Ask is the home and My Tasks a sheet behind its button as of 2026-09-23, with `ShellSurfaces` hosting the composer, Activity, Settings and the orb once per presentation context; the tab bar, the Brief and the Ask tab are gone since 2026-09-02, archaeology kept), My Tasks, the parked-captures row, and the shape-driven task detail. | In force |
 | `prev-docs/design-system-managing-chaos.md` | Palette, type scale, spacing, motion, the calm-intelligence principle. | In force |
 | `prev-docs/product-guardrails.md` | What the product refuses to build. The daily-nudge carve-out **closed** on 2026-09-02 with the Brief; a NEW one — the Sunday household digest — was argued from scratch on 2026-09-12, with seven conditions that are code. Also home to the 2026-09-12 telemetry boundary: user data local-first, product telemetry not. Cited by the spec's §09. | In force |
 | `docs/platform-notes.md` | The iOS 27 beta specifics verified the hard way — the four capability/profile traps, Liquid Glass, guided generation. Extracted from `CLAUDE.md` 2026-09-03. | In force |
-| `docs/decisions.md` | The long form of every rule in `CLAUDE.md` — the 182 KB text the 2026-09-12 rulebook was compressed from, verbatim, same headings. Grep a rule's bold lead here for its dates, reversals and measurements. To be folded into the topical docs one subject at a time, never grown. | In force |
+| `.claude/rules/*.md` | The rules, by area (task model, sync/persistence, capture, Advisor, surfaces, notifications/telemetry, two-engine AI, device/cloud). Moved verbatim out of `CLAUDE.md` on 2026-10-02; each loads only when Claude opens a file its `paths:` match. `CLAUDE.md` keeps only what applies everywhere. | In force |
+| `docs/decisions.md` | The long form of every rule — the 182 KB text the 2026-09-12 rulebook was compressed from. Its headings do not match the rule files one for one; grep a rule's bold lead. CLAUDE.md text that had no other copy was appended verbatim under *Moved from CLAUDE.md (2026-10-02)*. Grep a rule's bold lead here for its dates, reversals and measurements. To be folded into the topical docs one subject at a time, never grown. | In force |
 | `docs/kinly-launch-plan.md` | The 2026-09-12 launch positioning (Kinly) layered over Product Shape v8, verbatim, plus the map of its six build-order items onto the repo — what was already true, what was built that day (telemetry boundary, live sync + one-link invite, Sunday digest, activation derivations, onboarding screenshot input), and what is deliberately not done (the rename, until the name check). A go-to-market plan, not a spec: where it and v8 disagree, v8 wins. | In force |
 | `docs/cohort0-checklist.md` | The flows and failure modes the Cohort 0 Readiness Audit checks, plus the findings already ruled on. The routine reads this file rather than carrying its own list — **update it in the same change that changes a flow.** | In force |
 | `prev-docs/household-architecture.md` | The identity/ownership substrate multiplayer surfaces — LIVE since 2026-09-12 (`HouseholdSync.isLive`, the one-link invite in `HouseholdSharing`). | In force |
 
 `docs/capture.md`, `docs/advisor.md` and `docs/surfaces.md` were extracted verbatim from
-`CLAUDE.md` on 2026-09-02, when that file crossed its 150k-character limit. **CLAUDE.md keeps the invariants; these keep the
-reasoning, the measurements and the archaeology behind them** — so the rules stay in the
-always-loaded file and the evidence stays one hop away. A rule that changes in one changes
+`CLAUDE.md` on 2026-09-02, when that file crossed its 150k-character limit. **The rules (`.claude/rules/`, and `CLAUDE.md` for what applies everywhere) keep the invariants; these keep the
+reasoning, the measurements and the archaeology behind them** — so each rule loads where it
+applies and the evidence stays one hop away. A rule that changes in one changes
 in the other.
 
 `prev-docs/` keeps its name: it is the superseded *generation*, and these three are the
@@ -56,11 +57,11 @@ the spec's §09 ledger now carries. None of them described anything the code sti
 - `docs/PRD.md` — the consolidated spec, written around the Today sequence and a
   four-tab navigation. Superseded wholesale; this file replaces it.
 - `docs/capture-roadmap.md` — two capture phases. Phase B (image capture) shipped;
-  Phase A survives as a one-line entry in CLAUDE.md's deferred list.
+  Phase A survives as a one-line entry in the deferred list (`docs/decisions.md`, *Moved from CLAUDE.md*).
 - `docs/product-design-plan.md` — a dated audit of a roadmap that no longer exists;
   self-described as "a point-in-time record".
 - `docs/product-readiness.md` — the argument for not enabling CloudKit sync yet. Still
-  true, and now stated where it is enforced: CLAUDE.md's schema-freeze rule and
+  true, and now stated where it is enforced: the schema-freeze rule (`CLAUDE.md`, `.claude/rules/sync-persistence.md`) and
   `HouseholdSync.isLive`.
 - `docs/task-primitive-v2-spec.md` — a draft whose contents shipped. Its durable half,
   the bloat-watch adjudications, moved into `docs/primitives.md`.
@@ -68,7 +69,7 @@ the spec's §09 ledger now carries. None of them described anything the code sti
   the vision and strategy, now §01–§02 of the spec.
 - `prev-docs/mock-data-user-flows.md` — a walkthrough written against a status vocabulary
   (`suggested`, `ready`, `inProgress`) that the four-axis model deleted. The launch
-  arguments it documented are listed in CLAUDE.md.
+  arguments it documented are listed in `.claude/skills/verify-ezra/seams.md`.
 - `prev-docs/*.html` — mockups of the Inbox / Review / Today navigation, all three cut.
 
 ## The rule that keeps this from happening again

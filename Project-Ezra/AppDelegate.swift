@@ -48,8 +48,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // cannot be turned back off — see `AppCheckSetup` for what installing it does and
         // does not do. Enforcement itself is a console setting, deliberately still off:
         // wire the client, prove one attested call serves, then enforce.
-        AppCheckSetup.install()
-        FirebaseApp.configure()
+        // **Only when there is something to configure WITH (2026-09-20).**
+        // `GoogleService-Info.plist` is gitignored, and `FirebaseApp.configure()` raises
+        // an uncaught ObjC exception when it cannot find one — so a build from a clean
+        // clone (a cloud session, a second machine, CI) crashed on launch, in both
+        // configurations, with a stack that names Firebase and nothing that names the
+        // missing file. The app is already designed for a dormant cloud rung: without
+        // `configure()`, `GeminiProvider.isAvailable` is false, routing keeps every
+        // capture on the device, and `DataBoundary` stops claiming anything is
+        // transmitted. That is a correct build, not a broken one — so it should boot and
+        // say so in the diagnostics card, not die.
+        if FirebaseOptions.defaultOptions() != nil {
+            AppCheckSetup.install()
+            FirebaseApp.configure()
+        }
         // Product telemetry — the ONE vendor the domain never names (`Telemetry` owns the
         // allowlist and the opt-out; `StatsigSink` is the only file importing the SDK).
         // Absent with no client key in Info.plist, so an unconfigured build sends nothing.

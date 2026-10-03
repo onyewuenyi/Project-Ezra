@@ -37,6 +37,16 @@ struct CloudHealthTests {
 
     // MARK: - Classification
 
+    @Test("A 'high demand, try again later' answer is a refusal, whatever status it wears")
+    func highDemandIsRefused() {
+        let label = "NSError: Gemini API error (INTERNAL, HTTP 500): This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later."
+        #expect(CloudHealth.kind(ofLabel: label) == .refused)
+        #expect(CloudHealth.kind(ofLabel: "HTTP 503 Service Unavailable") == .refused)
+        let health = fresh()
+        health.recordFailure(LabeledError(description: label))
+        #expect(!health.isClosed(now: Date()))
+    }
+
     @Test("A refusal, a transport failure and a content failure are three different facts")
     func classification() {
         // The service said "not now" — however it phrases it.

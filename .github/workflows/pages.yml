@@ -1,0 +1,48 @@
+# Publishes the two public pages — the privacy policy and the support page — and nothing
+# else. `docs/` holds every design doc too; serving the folder would put all of them on
+# the web as pages, so only `docs/web` is uploaded.
+#
+# Guideline 5.1.1(i) wants the policy linked from inside the app, and the first thing a
+# reviewer taps is that link. So this refuses to deploy a policy that still says
+# `<CONTACT EMAIL>`: a page with no way to reach anyone is worse than no page, and the app
+# renders no link while `SupportLinks.privacyPolicy` is nil.
+#
+# URLs: https://onyewuenyi.github.io/Project-Ezra/privacy.html
+#       https://onyewuenyi.github.io/Project-Ezra/support.html
+name: Public pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/web/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse a page with no contact address
+        run: |
+          if grep -lE 'CONTACT EMAIL' docs/web/*.html; then
+            echo "::error::Fill in <CONTACT EMAIL> in docs/privacy-policy.md and docs/support.md, then run python3 scripts/render-pages.py."
+            exit 1
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/web
+      - id: deployment
+        uses: actions/deploy-pages@v4

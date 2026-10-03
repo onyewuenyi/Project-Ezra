@@ -153,12 +153,21 @@ enum FMDiagnostics {
     /// - `candidateTotalMs`: the candidate configuration's (arm C) total p50.
     /// - `accuracyHeld`: the candidate's scored accuracy did not drop below the
     ///   baseline arm's on the same cases (nil = not measurable → blocks GREEN).
+    /// The campaign's gates, named so the report can print what GREEN meant on the day
+    /// it was read, and the baseline every "from the floor" claim is measured against —
+    /// the first device run, not a number anyone remembers.
+    static let greenPreMs = 1000
+    static let greenTotalMs = 2000
+    static let redPreMs = 3000
+    static let baselinePreMs = 3500
+    static let baselineStamp = "iOS 27 beta 8 · iPhone16,2 · 2026-08-29 (Campaign 2, production instructions)"
+
     static func campaignVerdict(
         bestPreMs: Int?, candidateTotalMs: Int?, accuracyHeld: Bool?
     ) -> CampaignVerdict {
         guard let bestPreMs else { return .inconclusive }
-        if bestPreMs >= 3000 { return .red }
-        if bestPreMs < 1000, let candidateTotalMs, candidateTotalMs <= 2000,
+        if bestPreMs >= redPreMs { return .red }
+        if bestPreMs < greenPreMs, let candidateTotalMs, candidateTotalMs <= greenTotalMs,
             accuracyHeld == true
         {
             return .green
@@ -221,6 +230,10 @@ enum FMDiagnostics {
         var failure: String?
         var promptTok: Int?
         var outTok: Int?
+        /// Printed only on a FAILED row — a refusal nobody can reproduce is not a
+        /// finding ("file the taxes" was `guardrailViolation` on 2026-09-17 and the row
+        /// said only `case 13/44`). Success rows stay grep-stable.
+        var utterance: String? = nil
 
         var postFirstTokenMs: Int? {
             guard let totalMs, let preFirstTokenMs else { return nil }
@@ -243,7 +256,12 @@ enum FMDiagnostics {
             "postFirstToken \(ms(row.postFirstTokenMs))",
             "total \(ms(row.totalMs))",
         ]
-        if let failure = row.failure { parts.append("FAILED(\(failure))") }
+        if let failure = row.failure {
+            parts.append("FAILED(\(failure))")
+            if let utterance = row.utterance {
+                parts.append("← \(Instrument.oneLine(String(utterance.prefix(60))))")
+            }
+        }
         if let promptTok = row.promptTok { parts.append("promptTok \(promptTok)") }
         if let outTok = row.outTok { parts.append("outTok ~\(outTok)") }
         if let post = row.postFirstTokenMs, post > 0, let outTok = row.outTok {
@@ -437,6 +455,15 @@ enum FMDiagnostics {
         }
 
         print("=== FM DIAGNOSTICS · CAMPAIGN 2: can preFirstToken collapse? ===")
+        print(
+            Instrument.runStamp(
+                model: brain.status.description,
+                configuration: tier300Instructions + "|" + tier800Instructions + "|"
+                    + measurementOnlyInstructions + "|gates=\(greenPreMs)/\(greenTotalMs)/\(redPreMs)"))
+        print(
+            "gates: GREEN = pre p50 < \(greenPreMs)ms AND candidate total ≤ \(greenTotalMs)ms AND accuracy held · "
+                + "RED = pre p50 ≥ \(redPreMs)ms · baseline: \(baselinePreMs)ms pre-first-token, "
+                + "\(baselineStamp)")
         guard brain.status.isOnDevice else {
             print("(skipped — no on-device model on this host; these numbers are device-only)")
             print("=== END FM DIAGNOSTICS ===")
@@ -608,8 +635,9 @@ enum FMDiagnostics {
             bestPreMs: bestPre, candidateTotalMs: candidate?.totalP50, accuracyHeld: accuracyHeld)
         print(
             "CAMPAIGN: \(verdict.rawValue)"
-                + (bestPre.map { " · best preFirstToken p50 \($0)ms (from the ~3500ms floor)" }
-                    ?? ""))
+                + (bestPre.map {
+                    " · best preFirstToken p50 \($0)ms vs the \(baselinePreMs)ms baseline (\(baselineStamp))"
+                } ?? ""))
         if let accuracyHeld, let base = baseline, let cand = candidate {
             print(
                 String(
@@ -656,7 +684,7 @@ enum FMDiagnostics {
                     caseNumber: caseOffset + 1, caseCount: cases.count, rep: rep,
                     repCount: repeats, sessionLabel: label, acquisitionMs: sessionMs,
                     preparedAheadMs: nil, preFirstTokenMs: nil, totalMs: nil, failure: nil,
-                    promptTok: nil, outTok: nil)
+                    promptTok: nil, outTok: nil, utterance: item.evalCase.utterance)
                 do {
                     let (preMs, totalMs, drafts) = try await ModelDeadline.race(
                         timeout: LaunchSeams.evalCaseTimeoutSeconds
@@ -684,7 +712,7 @@ enum FMDiagnostics {
                     row.failure = "TIMEOUT \(Int(LaunchSeams.evalCaseTimeoutSeconds))s"
                     consecutiveFailures += 1
                 } catch {
-                    row.failure = AppBrain.errorLabel(error)
+                    row.failure = AppBrain.errorLine(error)
                     consecutiveFailures += 1
                 }
                 rows.append(row)

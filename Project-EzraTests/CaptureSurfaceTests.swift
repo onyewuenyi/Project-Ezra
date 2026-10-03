@@ -36,6 +36,12 @@ struct CaptureSurfaceTests {
         #expect(ComposerView.createTitle(created: 1, merged: 0) == "Create 1 task")
         #expect(ComposerView.createTitle(created: 3, merged: 0) == "Create 3 tasks")
         #expect(ComposerView.createTitle(created: 2, merged: 1) == "Create 2 tasks · merge 1")
+        // Grouped, the button names the outcome — the one task the cards did not show —
+        // and a single card is never a group.
+        #expect(
+            ComposerView.createTitle(created: 3, merged: 0, group: "Trip to Lagos")
+                == "Create “Trip to Lagos” · 3 steps")
+        #expect(ComposerView.createTitle(created: 1, merged: 0, group: "Trip") == "Create 1 task")
         #expect(ComposerView.createTitle(created: 0, merged: 1) == "Merge into existing task")
         #expect(ComposerView.createTitle(created: 0, merged: 2) == "Merge 2 into existing tasks")
     }

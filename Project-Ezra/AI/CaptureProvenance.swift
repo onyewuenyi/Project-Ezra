@@ -137,12 +137,29 @@ struct CaptureProvenance: Codable, Equatable {
     var createdTaskIDs: [UUID]
     var mergedTaskIDs: [UUID]
 
-    /// The one-line summary that rides the Activity row's byline.
+    /// The one-line DIAGNOSTIC summary — route, model id, seconds, outcome. For reports
+    /// and the provenance detail; never the feed (see `bylineLine`).
     var summaryLine: String {
         var parts: [String] = [run.modelIdentifier.map { "cloud(\($0))" } ?? run.route]
         if let ms = run.parseMs { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
         if run.outcome != "success" { parts.append(run.outcome) }
         return parts.joined(separator: " · ")
+    }
+
+    /// The Activity row's byline, in the product's words (2026-09-18). The row used to
+    /// carry `summaryLine` — "local · 0.0s", or "cloud(gemini-…) · 1.2s" — a metric name,
+    /// a latency and a VENDOR MODEL ID in the customer's feed, against the rule that the
+    /// customer never hears "AI" or a vendor name. What the person can use is where
+    /// their words were read (`DataBoundary`'s own vocabulary) and whether the read was
+    /// cut short; the numbers stay in the provenance detail.
+    var bylineLine: String {
+        let route = CaptureRoute(rawValue: run.route)
+        let place = route?.transmitsRawCapture == true ? "Read in the cloud" : "Read on your device"
+        switch run.outcome {
+        case "success": return place
+        case "salvaged", "timedOut": return "\(place) · cut short"
+        default: return "\(place) · fell back"
+        }
     }
 }
 
