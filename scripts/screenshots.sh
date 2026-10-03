@@ -46,23 +46,27 @@ IPAD_NAME="iPad Pro 13-inch (M5)"
 # the sentence. Seven seconds everywhere caught the reveal mid-thought and produced a
 # second picture of the orb — pretty, and not what that slot is for.
 SHOTS=(
-  "01-tasks|6|-SeedFlowFixtures"
-  "02-listening|7|-SeedFlowFixtures -OpenCapture -HoldListening -DriveListeningLevel"
+  # Ask is the home (2026-09-23): a bare seeded launch IS the oriented Ask — the day
+  # answer, the catch-up line, the chips — and it leads the set because it is what the
+  # product is now. The list is a sheet behind it, so the record's shot asks for it.
+  "01-home|6|-SeedFlowFixtures"
+  "02-tasks|6|-SeedFlowFixtures -OpenTasks"
+  "03-listening|7|-SeedFlowFixtures -OpenCapture -HoldListening -DriveListeningLevel"
   # The sentence matters. An earlier one ("…, and daycare forms are due friday") is a
   # shape the deterministic read gets WRONG — it returns one task with the other two
   # outcomes stuffed into a wait chip — and a store screenshot must not advertise a
   # wrong read. It is now an eval case (`RambleEvalSet`) instead of a picture. This one
   # reads correctly AND shows the thing the product is distinctive for: "Book flights"
   # comes back waiting on "Renew my passport", which nobody typed.
-  "03-reveal|30|-SeedFlowFixtures -OpenCapture \"renew my passport, book flights after it comes through, call mom back\""
-  "04-detail|10|-SeedFlowFixtures -OpenTaskDetail 0"
-  "05-ask|12|-SeedFlowFixtures -AskHousehold \"what deserves me today?\""
+  "04-reveal|30|-SeedFlowFixtures -OpenCapture \"renew my passport, book flights after it comes through, call mom back\""
+  "05-detail|10|-SeedFlowFixtures -OpenTaskDetail 0"
+  "06-ask|12|-SeedFlowFixtures -AskHousehold \"what deserves me today?\""
   # NOT Settings, though its "What leaves this device" card is the best argument the
   # product has. The screen opens on the profile, which renders the real name on the
   # machine taking the shot, above a reset receipt from whenever the fixtures were last
   # touched. A store asset must carry neither. Activity makes the same point a different
   # way — every AI act is on the record and reversible — and has no profile card.
-  "06-activity|8|-SeedFlowFixtures -OpenActivity"
+  "07-activity|8|-SeedFlowFixtures -OpenActivity"
 )
 
 build_once() {

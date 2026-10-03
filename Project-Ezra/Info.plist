@@ -24,5 +24,7 @@
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Ezra uses the microphone to transcribe what you say into a capture, entirely on your device.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Ezra turns what you say into text on your device, so it can understand your capture.</string>
 </dict>
 </plist>

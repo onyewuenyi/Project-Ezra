@@ -103,11 +103,17 @@ enum MyTasksHeader {
     /// which would turn the control into a miniature query builder and fight the tabs
     /// for width.
     static func filterSummary(status: TaskStatus?, category: String?) -> String? {
-        switch (status, category) {
-        case (nil, nil): return nil
-        case (let status?, nil): return status.label
-        case (nil, let category?): return category
-        case (_?, _?): return "2 filters"
+        filterSummary(status: status, category: category, attention: nil)
+    }
+
+    /// Three axes since 2026-09-23 (`TasksAttention`, the glance strip's deep-link):
+    /// one active axis shows its value, more than one shows the bounded count.
+    static func filterSummary(status: TaskStatus?, category: String?, attention: TasksAttention?) -> String? {
+        let values = [status?.label, category, attention?.label].compactMap { $0 }
+        switch values.count {
+        case 0: return nil
+        case 1: return values[0]
+        default: return "\(values.count) filters"
         }
     }
 
@@ -116,11 +122,20 @@ enum MyTasksHeader {
     /// an active filter is exactly what "all my tasks are gone" would look like. Nil when
     /// no filter is active (that emptiness is real, and gets the capture invitation).
     static func filteredEmptyMessage(status: TaskStatus?, category: String?) -> String? {
-        switch (status, category) {
-        case (nil, nil): return nil
-        case (let status?, nil): return "No tasks match “\(status.label)”."
-        case (nil, let category?): return "No tasks match “\(category)”."
-        case (_?, _?): return "No tasks match both filters."
+        filteredEmptyMessage(status: status, category: category, attention: nil)
+    }
+
+    static func filteredEmptyMessage(
+        status: TaskStatus?, category: String?, attention: TasksAttention?
+    )
+        -> String?
+    {
+        let values = [status?.label, category, attention?.label].compactMap { $0 }
+        switch values.count {
+        case 0: return nil
+        case 1: return "No tasks match “\(values[0])”."
+        case 2: return "No tasks match both filters."
+        default: return "No tasks match all \(values.count) filters."
         }
     }
 }
@@ -169,8 +184,19 @@ enum MyTasksSlices {
     /// resolved work is reachable by scrolling; picking the Done (or Canceled) filter
     /// is what makes it the only thing on screen.
     static func applyFilters(_ task: TaskItem, status: TaskStatus?, category: String?) -> Bool {
+        applyFilters(task, status: status, category: category, attention: nil, among: [])
+    }
+
+    /// The three-axis predicate. `among` is the population the attention axis reads
+    /// derived flags against (waiting is never stored); the two-axis wrapper passes none,
+    /// which only the attention arm needs.
+    static func applyFilters(
+        _ task: TaskItem, status: TaskStatus?, category: String?, attention: TasksAttention?,
+        among tasks: [TaskItem]
+    ) -> Bool {
         if let status, task.status != status { return false }
         if let category, task.category != category { return false }
+        if let attention, !attention.matches(task, among: tasks) { return false }
         return true
     }
 
@@ -181,11 +207,12 @@ enum MyTasksSlices {
     /// top, because `TaskRanking.stackOrder` forces it.
     static func assigned(
         tasks: [TaskItem], currentUserID: UUID?,
-        status statusFilter: TaskStatus? = nil, category: String? = nil
+        status statusFilter: TaskStatus? = nil, category: String? = nil, attention: TasksAttention? = nil
     ) -> [MyTasksSection] {
         let scoped = tasks.filter {
             $0.isMine(currentUserID: currentUserID)
-                && applyFilters($0, status: statusFilter, category: category)
+                && applyFilters(
+                    $0, status: statusFilter, category: category, attention: attention, among: tasks)
         }
         return sections(scoped: scoped, allTasks: tasks, statusFilter: statusFilter)
     }
@@ -195,9 +222,12 @@ enum MyTasksSlices {
     /// is why the sectioning is one function: two copies would let the ledger cap or the
     /// resolution order drift between "mine" and "ours".
     static func everyone(
-        tasks: [TaskItem], status statusFilter: TaskStatus? = nil, category: String? = nil
+        tasks: [TaskItem], status statusFilter: TaskStatus? = nil, category: String? = nil,
+        attention: TasksAttention? = nil
     ) -> [MyTasksSection] {
-        let scoped = tasks.filter { applyFilters($0, status: statusFilter, category: category) }
+        let scoped = tasks.filter {
+            applyFilters($0, status: statusFilter, category: category, attention: attention, among: tasks)
+        }
         return sections(scoped: scoped, allTasks: tasks, statusFilter: statusFilter)
     }
 
@@ -255,11 +285,11 @@ enum MyTasksSlices {
     /// Assigned's job); Created reads chronologically.
     static func createdEntries(
         tasks: [TaskItem], currentUserID: UUID?,
-        status: TaskStatus? = nil, category: String? = nil
+        status: TaskStatus? = nil, category: String? = nil, attention: TasksAttention? = nil
     ) -> [TaskLaneEntry] {
         let scoped = tasks.filter {
             $0.creatorID != nil && $0.creatorID == currentUserID
-                && applyFilters($0, status: status, category: category)
+                && applyFilters($0, status: status, category: category, attention: attention, among: tasks)
         }
         return laneEntries(from: scoped, allTasks: tasks)
             .sorted { $0.anchor.createdAt > $1.anchor.createdAt }

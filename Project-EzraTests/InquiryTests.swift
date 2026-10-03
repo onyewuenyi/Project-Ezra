@@ -30,7 +30,9 @@ struct StubScope: InquiryScope {
     }
     static let maxLines = 3
     var openerText: String? = nil
-    func opener() -> InquiryAnswer? { openerText.map { InquiryAnswer(text: $0, citedTaskIDs: shown.map(\.id)) } }
+    func opener() -> InquiryAnswer? {
+        openerText.map { InquiryAnswer(text: $0, citedTaskIDs: shown.map(\.id)) }
+    }
     static let prewarmPrefix = "QUESTION:"
 
     func floor(for question: String) -> InquiryAnswer? {
@@ -196,9 +198,13 @@ struct InquiryTests {
         #expect(first.messages(key: "k").count == 1)
         var moved = self.scope(fingerprint: 2)
         moved.openerText = "One thing deserves you first."
+        let seatedID = first.messages(key: "k")[0].id
         first.open(scope: moved)
         #expect(first.messages(key: "k").count == 1)
         #expect(first.messages(key: "k")[0].text == "One thing deserves you first.")
+        // A re-seated opener keeps its identity, so the rows animate instead of the
+        // block swapping (2026-09-25).
+        #expect(first.messages(key: "k")[0].id == seatedID)
         first.ask("Why?", scope: moved)
         await first.awaitPendingReplies(key: "k")
         var later = self.scope(fingerprint: 3)

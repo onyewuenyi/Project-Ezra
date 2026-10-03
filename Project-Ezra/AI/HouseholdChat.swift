@@ -73,6 +73,14 @@ struct HouseholdChatFacts: Sendable, Equatable {
         /// When a HUMAN last touched it (`TaskItem.humanTouchedAt`) — the staleness input,
         /// never `updatedAt`, which every sweep bumps. Defaults to `updatedAt` for fixtures.
         var humanTouchedAt: Date? = nil
+        /// The outcome this is a step of (`TaskItem.parentTaskID`), so the day answer
+        /// can let an umbrella speak for its steps (2026-09-23). Defaults for fixtures.
+        var parentID: UUID? = nil
+        /// How far this outcome's steps have got — zero total for a plain task.
+        var stepsDone: Int = 0
+        var stepsTotal: Int = 0
+        /// The steps' own display order, so "next" is the first open one by position.
+        var sortIndex: Int = 0
 
         var touchedAt: Date { humanTouchedAt ?? updatedAt }
 
@@ -110,20 +118,17 @@ struct HouseholdChatFacts: Sendable, Equatable {
     /// case `open`'s own order (overdue first, nearest due) stands in.
     var rankOrder: [UUID] = []
 
-    /// How many rows the day answer names. The Brief's "3–5 that matter", kept.
-    static let dayAnswerCap = 5
+    /// How many rows the day answer names: a hero and three under it (2026-09-23, the
+    /// calm home — five rows with five verbs was the loudest thing on the screen).
+    static let dayAnswerCap = 4
 
-    /// The day answer: the top of the stack with the blocked sunk, capped — for one
-    /// person when named, otherwise for everyone. Rank is the ONLY input; nothing here
-    /// re-decides what matters.
+    /// The day answer's rows: rank with the blocked sunk, then the answer's three
+    /// re-readings (`DayAnswer.seat`, 2026-09-23 — outcomes over steps, time pressure
+    /// ahead of judgment, decisions collapsed to their oldest), capped — for one person
+    /// when named, otherwise for everyone. Rank is still the only ORDER; the answer
+    /// re-seats what rank says, it never re-scores it.
     func dayAnswer(for person: Member?) -> [Line] {
-        let byID = Dictionary(uniqueKeysWithValues: open.map { ($0.id, $0) })
-        let ordered: [Line] = rankOrder.isEmpty ? open : rankOrder.compactMap { byID[$0] }
-        return Array(
-            ordered
-                .filter { !$0.isBlocked }
-                .filter { line in person.map { line.ownerID == $0.id } ?? true }
-                .prefix(Self.dayAnswerCap))
+        DayAnswer.seat(ranked(for: person), cap: Self.dayAnswerCap)
     }
 
     static let doneWindowDays = 7
@@ -158,6 +163,22 @@ struct HouseholdChatFacts: Sendable, Equatable {
         let titlesByID: [UUID: String] = Dictionary(
             tasks.compactMap { task in task.uuid.map { ($0, task.title) } },
             uniquingKeysWith: { first, _ in first })
+        // The parent edge, decoded ONCE per task: `stepProgress(among:)` per row would
+        // decode every task's relationships blob for every row — the O(n²) this function
+        // already paid once and fixed.
+        let parentByID: [UUID: UUID] = Dictionary(
+            tasks.compactMap { task in
+                guard let id = task.uuid, let parent = task.parentTaskID else { return nil }
+                return (id, parent)
+            }, uniquingKeysWith: { first, _ in first })
+        var stepsByParent: [UUID: (done: Int, total: Int)] = [:]
+        for task in tasks {
+            guard let id = task.uuid, let parent = parentByID[id] else { continue }
+            var entry = stepsByParent[parent] ?? (0, 0)
+            entry.total += 1
+            if task.status.isResolved { entry.done += 1 }
+            stepsByParent[parent] = entry
+        }
         let open = tasks.filter { !$0.status.isResolved }
             .map { task -> Line in
                 let active = TaskItem.activeBlockers(from: task.relationships, openIDs: openIDs)
@@ -178,7 +199,11 @@ struct HouseholdChatFacts: Sendable, Equatable {
                     externalWaits: waits,
                     effortMinutes: task.effortMinutes,
                     updatedAt: task.updatedAt,
-                    humanTouchedAt: task.humanTouchedAt)
+                    humanTouchedAt: task.humanTouchedAt,
+                    parentID: task.uuid.flatMap { parentByID[$0] },
+                    stepsDone: task.uuid.flatMap { stepsByParent[$0]?.done } ?? 0,
+                    stepsTotal: task.uuid.flatMap { stepsByParent[$0]?.total } ?? 0,
+                    sortIndex: Int(task.sortIndex))
             }
             .sorted { a, b in
                 // Overdue first, then nearest due, then most recently touched — the
@@ -252,7 +277,7 @@ struct HouseholdChatFacts: Sendable, Equatable {
             return named
         }
         if let you = members.first(where: \.isYou),
-            !words.isDisjoint(with: ["you", "me", "my", "i", "mine", "i'm", "myself"])
+            !words.isDisjoint(with: ["you", "me", "my", "i", "mine", "i'm", "i've", "i'd", "i'll", "myself"])
         {
             return you
         }
@@ -380,6 +405,15 @@ enum HouseholdChatFloor {
         /// model picked the most overdue task, because the slice never carries when a
         /// task was last touched. The app knows exactly.
         case stalest
+        /// "I've got 15 minutes" — the one thing a person says to the home about
+        /// themselves rather than the list (2026-09-23): unblocked work at or under the
+        /// effort ceiling, in rank order. A question the list genuinely cannot answer.
+        case quick
+        /// "Why does “X” deserve me first?" — the hero's long-press (2026-09-25). The
+        /// answer is the app's own: the reason the day answer gave the row, and what
+        /// comes after it. Asked of the model it answered "You do not know why"; the
+        /// ranking is the one thing about the household the app knows exactly.
+        case whyFirst
     }
 
     static func mentions(any phrases: [String], in lowered: String) -> Bool {
@@ -394,13 +428,31 @@ enum HouseholdChatFloor {
         // The orientation question is the ONE reasoning-shaped question the floor takes,
         // because its answer is not reasoning — it is the rank, which is already the
         // system's judgment. Checked before the reasoning gate for exactly that reason.
+        // "What deserves Maya today?" is the same question scoped to a named person —
+        // the home's named chip (2026-09-23); `member(named:)` supplies the subject.
         if has(
-            "what deserves me today", "what deserves me", "what matters today", "what matters most",
+            "what deserves me today", "what deserves me", "what deserves", "what matters today",
+            "what matters most",
             "what should i focus on", "what should i do first", "where do i start", "where should i start",
             "what's my day", "what is my day", "my day", "priorities", "what's important today",
             "what should i do today", "what do i do today", "what deserves my attention")
         {
             return .today
+        }
+        // The hero's question carries "why", so it sits before the reasoning gate: the
+        // answer is a fact the app holds, not a judgment.
+        if has("deserve me first", "deserves me first", "why this first", "why is this first", "why first") {
+            return .whyFirst
+        }
+        // The quick shape carries no reasoning word but reads like a statement, so it
+        // sits beside the day question, before the reasoning gate.
+        if has(
+            "15 minutes", "fifteen minutes", "ten minutes", "10 minutes", "20 minutes", "a few minutes",
+            "quick win", "quick wins", "something quick", "something small", "something short",
+            "anything quick", "anything small", "knock out", "quick ones", "quick things", "quick tasks",
+            "small things", "got 15", "have 15")
+        {
+            return .quick
         }
         if InquiryFloor.isReasoning(question) { return nil }
         // Time and outcome first — "what did we get done this week" must not fall
@@ -475,22 +527,15 @@ enum HouseholdChatFloor {
 
         switch shape {
         case .today:
-            let ranked = facts.dayAnswer(for: person)
-            guard !ranked.isEmpty else {
-                return HouseholdChatAnswer(
-                    text: whose.map { "Nothing is asking for \($0) today." }
-                        ?? "Nothing is asking for you today.",
-                    citedTaskIDs: [])
-            }
-            // The subject of the sentence IS the scope — never a hardcoded "you" with the
-            // scope bolted on after it. Written that way, an unscoped ask read "deserve you
-            // first for you" (the day question says "me", so it always resolves a person)
-            // and a scoped one read "deserve you first for Maya".
-            let subject = whose ?? "you"
-            let lead =
-                ranked.count == 1
-                ? "One thing deserves \(subject) first" : "\(ranked.count) things deserve \(subject) first"
-            return HouseholdChatAnswer(text: lead + " — in order.", citedTaskIDs: ranked.map(\.id))
+            // Composed, not recited (`DayAnswer`, 2026-09-23): the subject of the sentence
+            // IS the scope (never "deserve you first for you"), every row carries its
+            // reason, and the hour frames the lead. A person with nothing on still lives
+            // in a household with things on, so the quiet names the others' loads.
+            return DayAnswer.compose(facts: facts, person: person).answer
+        case .quick:
+            return DayAnswer.quickAnswer(facts: facts, person: person)
+        case .whyFirst:
+            return DayAnswer.whyFirstAnswer(question: question, facts: facts, person: person)
         case .done:
             let done = person == nil ? facts.done : facts.done.filter { $0.ownerName == person?.name }
             guard !done.isEmpty else {
@@ -809,45 +854,80 @@ enum HouseholdChatPrompt {
 
     static var maxLines: Int { HouseholdInquiryScope.maxLines }
 
-    /// The household at a glance, as tappable counts — each one IS a floor question,
-    /// so the glance and the ask are the same object. Only what is non-zero, in the
-    /// order a person triages: overdue · today · waiting · decisions · open · done.
+    /// The household at a glance, as tappable counts — each one opens the LIST with
+    /// that subset already filtered (`TasksPreset`, 2026-09-23). A count is inventory
+    /// vocabulary and "which ones?" is the list's job; asking a chat to recite the rows
+    /// was the same question twice, once as a number and once as a chip. Only what is
+    /// non-zero, in the order a person triages: overdue · today · in progress · waiting
+    /// · decisions · the others' loads · done. No "N open": a total is not a glance, and
+    /// the day answer ends with the way to the rest.
     struct SummaryItem: Equatable, Sendable {
         let label: String
-        let question: String
+        let preset: TasksPreset
+        /// What VoiceOver and the DEBUG seams say the count opens.
+        let opens: String
+        let kind: TelemetryGlanceKind
     }
 
     static func summary(for facts: HouseholdChatFacts) -> [SummaryItem] {
         var items: [SummaryItem] = []
         func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)" }
         if !facts.overdue.isEmpty {
-            items.append(.init(label: count(facts.overdue.count, "overdue"), question: "What's overdue?"))
+            items.append(
+                .init(
+                    label: count(facts.overdue.count, "overdue"),
+                    preset: TasksPreset(tab: .everyone, attention: .overdue), opens: "Overdue tasks",
+                    kind: .overdue))
         }
         if !facts.dueToday.isEmpty {
             items.append(
-                .init(label: count(facts.dueToday.count, "due today"), question: "What's due today?"))
+                .init(
+                    label: count(facts.dueToday.count, "due today"),
+                    preset: TasksPreset(tab: .everyone, attention: .dueToday), opens: "Tasks due today",
+                    kind: .dueToday))
         }
         if !facts.inProgress.isEmpty {
             items.append(
-                .init(label: count(facts.inProgress.count, "in progress"), question: "What's in progress?"))
+                .init(
+                    label: count(facts.inProgress.count, "in progress"),
+                    preset: TasksPreset(tab: .everyone, status: .doing), opens: "Tasks in progress",
+                    kind: .inProgress))
         }
         if !facts.blocked.isEmpty {
             items.append(
-                .init(label: count(facts.blocked.count, "waiting"), question: "What's waiting on something?"))
+                .init(
+                    label: count(facts.blocked.count, "waiting"),
+                    preset: TasksPreset(tab: .everyone, attention: .waiting),
+                    opens: "Tasks waiting on something", kind: .waiting))
         }
         if !facts.decisions.isEmpty {
             items.append(
                 .init(
                     label: count(
                         facts.decisions.count, facts.decisions.count == 1 ? "decision" : "decisions"),
-                    question: "What needs a decision?"))
+                    preset: TasksPreset(tab: .everyone, attention: .decisions),
+                    opens: "Tasks needing a decision", kind: .decisions))
         }
-        items.append(.init(label: count(facts.open.count, "open"), question: "How many tasks are open?"))
+        // The other caretakers' loads, by name — a number you notice is a number you
+        // can open (2026-09-23). Two at most; the strip is a glance, not a roster.
+        let loads = facts.members.filter { !$0.isYou }
+            .map { ($0, facts.openTasks(of: $0).count) }
+            .filter { $0.1 > 0 }
+            .sorted { $0.1 > $1.1 }
+            .prefix(2)
+        for (other, load) in loads {
+            items.append(
+                .init(
+                    label: "\(other.name) \(load)",
+                    preset: TasksPreset(tab: .everyone, attention: .ownedBy(other.id, name: other.name)),
+                    opens: "\(other.name)’s tasks", kind: .member))
+        }
         if !facts.done.isEmpty {
             items.append(
                 .init(
                     label: count(facts.done.count, "done this week"),
-                    question: "What did we get done this week?"))
+                    preset: TasksPreset(tab: .everyone, status: .done), opens: "Finished tasks",
+                    kind: .done))
         }
         return items
     }
@@ -918,6 +998,12 @@ enum HouseholdChatPrompt {
         case .countOpen, .unowned:
             out.append("What's overdue?")
             out.append("Who has the most on their plate?")
+        case .quick:
+            if listed { out.append("Which one should I do first?") }
+            if !facts.overdue.isEmpty { out.append("What's overdue?") }
+        case .whyFirst:
+            out.append(DayAnswer.quickChip)
+            if !facts.blocked.isEmpty { out.append("What could I do while I wait?") }
         case nil:
             // A model answer: bring the person back to the closed questions that
             // answer instantly, so the thread never dead-ends on prose.
@@ -940,11 +1026,38 @@ enum HouseholdChatPrompt {
     /// answers in two milliseconds with rows, which teaches what this surface is for
     /// better than any copy. Shaped to the household: the load question needs two
     /// people, the done question needs finished work.
-    static func starterQuestions(for facts: HouseholdChatFacts) -> [String] {
+    ///
+    /// `seated` is the home's case (2026-09-23): the day answer is already the first
+    /// line, so its own question is not offered under it, and the counts the strip
+    /// opens as lists are not offered as questions either — what remains are the
+    /// questions only a judgment answers.
+    static func starterQuestions(for facts: HouseholdChatFacts, seated: Bool = false) -> [String] {
         var questions: [String] = []
         // The orientation question leads whenever there is anything open — the Brief's
         // job, kept as a question, answered from rank in two milliseconds.
-        if !facts.open.isEmpty { questions.append("What deserves me today?") }
+        if !facts.open.isEmpty, !seated { questions.append("What deserves me today?") }
+        // The home is personal AND shared (2026-09-23): the same day question for the
+        // other caretaker, one chip, answered by rank in two milliseconds.
+        // The other caretaker whose plate is fullest, not the first name on the roster.
+        if let other = facts.members.filter({ !$0.isYou })
+            .max(by: { facts.openTasks(of: $0).count < facts.openTasks(of: $1).count }),
+            !facts.openTasks(of: other).isEmpty
+        {
+            questions.append("What deserves \(other.name) today?")
+        }
+        if seated {
+            // The home's judgment chips: what fits the time you have, what to do while
+            // the waits clear, what is still worth doing.
+            let you = facts.members.first(where: \.isYou)
+            if !DayAnswer.quick(facts: facts, person: you).isEmpty { questions.append(DayAnswer.quickChip) }
+            if !facts.blocked.isEmpty { questions.append("What could I do while I wait?") }
+            if facts.stalest.count >= 3 { questions.append("Which of these is still worth doing?") }
+            if questions.count < 3 { questions.append("What's coming up this week?") }
+            if questions.count < 3, facts.members.count > 1 {
+                questions.append("Who has the most on their plate?")
+            }
+            return Array(questions.prefix(3))
+        }
         if !facts.overdue.isEmpty { questions.append("What's overdue?") }
         if !facts.dueToday.isEmpty { questions.append("What's due today?") }
         if !facts.blocked.isEmpty { questions.append("What's waiting on something?") }
@@ -970,6 +1083,22 @@ struct HouseholdInquiryScope: InquiryScope {
     var key: String { Self.singletonKey }
     /// The stable block IS what the instructions hold, so it is the session key.
     var fingerprint: Int { facts.stableFingerprint }
+    var openerFingerprint: Int {
+        var hasher = Hasher()
+        hasher.combine(fingerprint)
+        hasher.combine(openers())
+        return hasher.finalize()
+    }
+    /// The unasked lines, in reading order (2026-09-23): the day answer, then the
+    /// person's own stall for started work the answer did not seat. The household's
+    /// NEWS — what the others did since this person last looked, what the day closed —
+    /// is not a line in the thread any more: the calm home renders it as one muted
+    /// sentence under the answer (`HouseholdChatView.newsLine`), with no rows.
+    func openers() -> [InquiryAnswer] {
+        let day = opener()
+        let shown = Set(day?.citedTaskIDs ?? [])
+        return [day, DayAnswer.stallOpener(facts: facts, excluding: shown)].compactMap { $0 }
+    }
     var instructions: String { HouseholdChatPrompt.instructions(for: facts) }
 
     static let changedNoun = "the household"
@@ -1027,6 +1156,115 @@ extension InquiryTurn where Scope == HouseholdInquiryScope {
         let scope = HouseholdInquiryScope(facts: facts)
         return Self(
             scope: scope, question: question, continuity: continuity, context: scope.context(for: question))
+    }
+}
+
+// MARK: - The capture offer
+
+/// The chat home's mode trap, answered with an OFFER (2026-09-23): on any chat home
+/// people type to-dos into the question box, and this product never guesses which door a
+/// sentence was for. So a line that reads like something to do — imperative, no
+/// question in it — is not sent to the model; the person is asked whether to add it,
+/// with "ask it anyway" one tap away. Conservative on purpose: a question mistaken for a
+/// task costs one tap; a task answered as conversation costs the task.
+enum CaptureOffer {
+    /// Openers that mean "I am telling you a to-do", stripped before the verb test.
+    static let intentPrefixes = [
+        "i need to ", "i have to ", "i've got to ", "i got to ", "need to ", "gotta ", "got to ",
+        "i should ", "i must ", "remember to ", "don't forget to ", "dont forget to ", "remind me to ",
+        "have to ", "must ",
+    ]
+    /// Words that open a QUESTION or an instruction to Ezra, never a to-do.
+    static let questionOpeners: Set<String> = [
+        "what", "what's", "whats", "who", "who's", "whos", "when", "when's", "where", "where's",
+        "why", "which", "how", "is", "are", "am", "can", "could", "should", "would", "will", "do",
+        "does", "did", "has", "have", "had", "was", "were", "any", "anything", "tell", "show",
+        "list", "give", "explain", "summarize", "summarise", "help",
+    ]
+    /// Action verbs that, at the head of a line, usually address Ezra rather than name
+    /// a task ("check what's overdue", "find the stuck ones").
+    static let askingVerbs: Set<String> = ["ask", "check", "look", "find", "figure", "see", "remind"]
+
+    static func looksLikeCapture(_ text: String) -> Bool {
+        var lowered = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lowered.isEmpty, !lowered.contains("?") else { return false }
+        for prefix in intentPrefixes where lowered.hasPrefix(prefix) {
+            lowered.removeFirst(prefix.count)
+            break
+        }
+        let words = lowered.split { !$0.isLetter && $0 != "'" }.map(String.init)
+        guard words.count >= 2, let first = words.first else { return false }
+        if questionOpeners.contains(first) { return false }
+        if askingVerbs.contains(first) { return false }
+        return Segmentation.actionVerbs.contains(first)
+    }
+}
+
+// MARK: - Since you last looked
+
+/// The home's second opener: what the OTHER caretakers did since this person last
+/// looked, as one sentence with the tasks as rows (2026-09-23). It is the Activity
+/// feed's information, said once where the person already is — never a badge, never a
+/// count asking to be visited (guardrail 1); the sentence only exists while there is
+/// something to say, and it is about people, not the system. Pure over `Change`s the
+/// view builds from `ChangeLogEntry`, so it is testable without a store.
+enum HouseholdCatchUp {
+    struct Change: Equatable, Hashable, Sendable {
+        let actorName: String
+        let action: String
+        let taskTitle: String
+        let taskID: UUID?
+        /// An assignment whose new owner is the person reading — "handed you".
+        var handedToYou: Bool = false
+    }
+
+    /// How many changes the sentence names before it counts the rest.
+    static let named = 3
+    /// The window on a first-ever look, so an install's first home does not recite a
+    /// month of someone else's trail.
+    static let firstLookWindowDays = 7
+
+    static func verb(for change: Change) -> String {
+        switch change.action {
+        case "completed": return "finished"
+        case "killed": return "cancelled"
+        case "decided": return "decided"
+        case "assigned": return change.handedToYou ? "handed you" : "reassigned"
+        case "split": return "split"
+        case "grouped": return "grouped"
+        case "archived": return "archived"
+        case "unblocked": return "unblocked"
+        case "merged", "mergedPair": return "merged"
+        case "linked": return "linked"
+        default: return "updated"
+        }
+    }
+
+    static func answer(_ changes: [Change]) -> InquiryAnswer? {
+        guard !changes.isEmpty else { return nil }
+        // "Handed you" leads: the one change that is about the reader.
+        let ordered = changes.sorted { $0.handedToYou && !$1.handedToYou }
+        let shown = Array(ordered.prefix(named))
+        // Grouped by actor, in first-appearance order, so one person's three acts read
+        // as one clause: "Maya finished A, took on B".
+        var byActor: [(String, [Change])] = []
+        for change in shown {
+            if let index = byActor.firstIndex(where: { $0.0 == change.actorName }) {
+                byActor[index].1.append(change)
+            } else {
+                byActor.append((change.actorName, [change]))
+            }
+        }
+        let clauses = byActor.map { actor, acts in
+            actor + " " + acts.map { "\(verb(for: $0)) “\($0.taskTitle)”" }.joined(separator: ", ")
+        }
+        var text = "Since you last looked, " + clauses.joined(separator: "; ")
+        let rest = changes.count - shown.count
+        if rest > 0 { text += ", and \(rest) more in Activity" }
+        text += "."
+        var seen = Set<UUID>()
+        let cited = shown.compactMap(\.taskID).filter { seen.insert($0).inserted }
+        return InquiryAnswer(text: text, citedTaskIDs: cited)
     }
 }
 

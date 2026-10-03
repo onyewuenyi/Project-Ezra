@@ -61,7 +61,7 @@ struct ComposerView: View {
     /// The learning loop's inputs: past corrections (+ tasks, for keyword context).
     @FetchRequest(sortDescriptors: []) private var correctionsResults: FetchedResults<Correction>
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
-    @FetchRequest(sortDescriptors: []) private var profiles: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profiles: FetchedResults<UserProfile>
     private var corrections: [Correction] { Array(correctionsResults) }
     private var allTasks: [TaskItem] { Array(allTasksResults) }
 
@@ -154,6 +154,12 @@ struct ComposerView: View {
     /// says the user can undo anything; this is where that was untrue.
     @State private var cardNotice: UndoNotice?
     @State private var committed = 0
+    /// Set by a successful commit (2026-09-26). The drafts used to be CLEARED there so
+    /// `parkIfUnfinished` would not park a duplicate on disappear, and the sheet then
+    /// spent its dismissal animation showing "Nothing actionable in that" over an empty
+    /// box — a flash of the wrong page between Create and the home. The guard now reads
+    /// this flag, and the reveal stays as the person left it while the sheet leaves.
+    @State private var sessionCommitted = false
     @State private var speech = SpeechCaptureService()
     /// True once dictation contributed to this capture — recorded on the Capture row.
     @State private var usedDictation = false
@@ -1785,10 +1791,25 @@ struct ComposerView: View {
                 }
                 .animation(Motion.fade, value: focused)
 
+            // The echo of what was said is the EDIT path, not the answer (2026-09-25,
+            // the importance audit): supporting size, secondary until focused, so the
+            // drafts below it read first. The oracle measures with the same font.
             TextEditor(text: $text)
                 .focused($focused)
-                .font(.bodyInput)
-                .foregroundStyle(Palette.primaryText)
+                .font(Self.transcriptFont)
+                .foregroundStyle(focused ? Palette.primaryText : Palette.secondaryText)
+                // A resting echo that is clipped fades out at its foot (2026-09-26): the
+                // editor sets lines tighter than the oracle's `Text`, so the whole-line
+                // snap left a sliced last line. A fade reads as "more" at any pitch.
+                .mask {
+                    VStack(spacing: 0) {
+                        Rectangle()
+                        if echoIsClipped {
+                            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                                .frame(height: Self.echoFadeHeight)
+                        }
+                    }
+                }
                 .scrollContentBackground(.hidden)
                 .padding(Spacing.sm)
                 .accessibilityLabel("What you said")
@@ -1801,7 +1822,29 @@ struct ComposerView: View {
 
     /// The measured natural height of the transcript, clamped to the page's budget.
     private var clampedTranscriptHeight: CGFloat {
-        fieldHeight(min: Self.transcriptMinHeight, max: Self.transcriptMaxHeight)
+        // At accessibility sizes the echo is held to about two lines (it scrolls inside):
+        // uncapped it took the whole first screen and put every draft — the thing the
+        // person came for — below the fold (2026-09-26). Focused, it gets its full room.
+        // And at every size (2026-09-26): a seven-item brain dump echoed five lines and
+        // left one and a half drafts above the fold. Unfocused, the echo is a reminder of
+        // what was said, about three lines; tapped, it gets its full editing room.
+        let ceiling =
+            focused
+            ? Self.transcriptMaxHeight
+            : dynamicTypeSize.isAccessibilitySize
+                ? Self.transcriptAccessibilityMaxHeight : Self.transcriptRestingMaxHeight
+        // At rest the echo fits its words: a one-line capture sat in an 88pt box that
+        // was mostly empty. The editing floor returns the moment it is tapped.
+        return fieldHeight(min: focused ? min(Self.transcriptMinHeight, ceiling) : 0, max: ceiling)
+    }
+    private static let transcriptAccessibilityMaxHeight: CGFloat = 120
+    private static let transcriptRestingMaxHeight: CGFloat = 96
+    private static let echoFadeHeight: CGFloat = 22
+
+    /// The resting echo holds less than the words: the foot fades.
+    private var echoIsClipped: Bool {
+        !focused
+            && transcriptHeight + Spacing.sm * 2 + Self.transcriptEditorInset > clampedTranscriptHeight + 1
     }
 
     /// Natural height for a growing field, between a floor and a ceiling. At the ceiling
@@ -1821,6 +1864,9 @@ struct ComposerView: View {
     /// at its ideal height and never drawn. `fixedSize` is what makes it honest; without
     /// it the measurement would be clamped by the very frame it exists to decide. The
     /// second, one-glyph measurement is the line height the ceiling snaps to.
+    /// One font for the transcript editor and the oracle that sizes it.
+    private static var transcriptFont: Font { .supporting }
+
     private var transcriptHeightOracle: some View {
         GeometryReader { proxy in
             let inner = proxy.size.width - Spacing.sm * 2 - Self.transcriptEditorHorizontalInset
@@ -1837,7 +1883,7 @@ struct ComposerView: View {
         of string: String, width: CGFloat, into report: @escaping (CGFloat) -> Void
     ) -> some View {
         Text(string)
-            .font(.bodyInput)
+            .font(Self.transcriptFont)
             .frame(width: max(1, width), alignment: .topLeading)
             .fixedSize(horizontal: false, vertical: true)
             .background {
@@ -2103,6 +2149,8 @@ struct ComposerView: View {
     }
 
     private func parkIfUnfinished(force: Bool = false) {
+        // A committed session has nothing unfinished, whatever its drafts still say.
+        guard !sessionCommitted else { return }
         guard
             !interpretation.drafts.isEmpty
                 || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2194,16 +2242,14 @@ struct ComposerView: View {
         // Success notification moved here (from the point of calling `commit`) so a
         // dropped save never plays the success haptic right before the failure alert.
         committed += 1
-        // Clearing is REQUIRED, not tidiness: `.onDisappear` runs `parkIfUnfinished`,
-        // and it keys off `drafts`/`text` — leaving them populated would park a phantom
-        // duplicate of the capture just committed.
+        // NOT cleared any more: the drafts and the words stay on screen while the sheet
+        // leaves, and `sessionCommitted` is what stops `parkIfUnfinished` parking a
+        // duplicate of the capture just committed. Every open is a fresh session
+        // (`ComposerSession`), so nothing here outlives the dismissal.
+        sessionCommitted = true
         parked = nil
-        interpretation = Interpretation()
-        removedDrafts = RemovedDraftSet()
-        lastRemoved = nil
         cardNotice = nil
         lastRun = nil  // spent: this receipt belongs to the capture just committed
-        text = ""
         loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         parse.cachedRules = nil  // likewise new corrections
         // Straight back to whatever the user was doing — capture is something you do

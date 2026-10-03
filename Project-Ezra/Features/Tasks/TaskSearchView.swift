@@ -18,7 +18,7 @@ struct TaskSearchView: View {
     @FetchRequest(sortDescriptors: [NSSortDescriptor(keyPath: \TaskItem.createdAt, ascending: false)])
     private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
 
     @State private var searchText = ""
     /// Raised on arrival. This sheet's ONLY purpose is typing, and unlike Ask — which
@@ -112,6 +112,13 @@ struct TaskSearchView: View {
                 // After the sheet's presentation settles, so the field is in place before
                 // the keyboard slides under it rather than both moving at once.
                 try? await Task.sleep(for: .milliseconds(350))
+                #if DEBUG
+                // `-OpenSearch "query"` (see `TasksHomeView`) prefills the field.
+                if let seed = UserDefaults.standard.string(forKey: "debug.searchSeed") {
+                    UserDefaults.standard.removeObject(forKey: "debug.searchSeed")
+                    searchText = seed
+                }
+                #endif
                 searchFocused = true
             }
             .toolbar {

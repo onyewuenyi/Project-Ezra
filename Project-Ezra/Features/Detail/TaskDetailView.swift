@@ -24,6 +24,11 @@ import CoreData
 import SwiftUI
 
 struct TaskDetailView: View {
+    #if DEBUG
+    /// `-PressPrimary` fires once per launch (see its call site).
+    @MainActor private static var pressedPrimaryOnce = false
+    #endif
+
     @ObservedObject var task: TaskItem
     /// True when this page is the one on screen. Neighbours stay mounted in the pager, so
     /// anything with a cost or a side effect (model prewarm, held keyboard focus) gates on it.
@@ -46,7 +51,7 @@ struct TaskDetailView: View {
     private var allTasks: [TaskItem] { Array(allTasksResults) }
     @FetchRequest(sortDescriptors: []) private var familyMembersResults: FetchedResults<FamilyMember>
     private var familyMembers: [FamilyMember] { Array(familyMembersResults) }
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     private var profiles: [UserProfile] { Array(profilesResults) }
     /// This task's own change-log history — the Activity feed (predicate built in init).
     @FetchRequest private var activityResults: FetchedResults<ChangeLogEntry>
@@ -318,9 +323,14 @@ struct TaskDetailView: View {
             // one page state no seam could reach, and synthetic taps are blocked on
             // this host. A short delay so the page has settled and the prewarm above
             // has had its head start. Never fires in a normal run.
-            if isActive, ProcessInfo.processInfo.arguments.contains("-PressPrimary"),
+            // Once per PROCESS, not per page (2026-09-26): a Mark done advances the
+            // pager and the next page's arrival pressed its own CTA too, so every frame
+            // sheet of a completion ended on a second, unrequested Start.
+            if isActive, !Self.pressedPrimaryOnce,
+                ProcessInfo.processInfo.arguments.contains("-PressPrimary"),
                 let action = task.recommendedAction(among: allTasks, currentUserID: currentUserID)
             {
+                Self.pressedPrimaryOnce = true
                 try? await Task.sleep(for: .milliseconds(600))
                 performPrimary(action)
             }
@@ -614,13 +624,25 @@ struct TaskDetailView: View {
 
     private var propertyCard: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
+            // **In order of importance (2026-09-25, the importance audit):** WHEN leads,
+            // because it is the one fact that makes a task pressing ("1 day overdue" was
+            // fourth, the same size as "~15m"); then WHO; then the state, which the pinned
+            // CTA already voices; then the urgency flag; then the estimate; last, the
+            // affordance to add a wait. Same chips, same editors, a reading order.
+            // And what is SET leads what is empty: "No due date", "Not urgent", "No
+            // estimate" are affordances, not facts, and on an unset task they took two of
+            // the grid's three rows ahead of the one real value. They trail, muted, in the
+            // same relative order.
             FlowLayout(spacing: Spacing.xs, lineSpacing: Spacing.xs) {
-                statusChip
+                if task.dueDate != nil { dueChip }
                 ownerChip
-                urgentChip
-                dueChip
+                statusChip
+                if task.isUrgent { urgentChip }
                 // No category chip: the kicker above the title is the category editor.
-                effortChip
+                if task.effortMinutes != nil { effortChip }
+                if task.dueDate == nil { dueChip }
+                if !task.isUrgent { urgentChip }
+                if task.effortMinutes == nil { effortChip }
                 addBlockerChip
             }
             // The inline picker is an EXPANSION of the card, not a mode: it opens from

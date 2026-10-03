@@ -32,14 +32,38 @@ struct ActivityDetailView: View {
 
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
 
     @State private var expanded: Set<UUID> = []
+    @State private var undoPulse = 0
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 header
+                // The page names the reversal, so it offers it (2026-09-26): "Undo brings
+                // it back to your list" sat over no button, and a person who opened a row
+                // to understand it had to go back to find the way out. The same seam and
+                // the same write as the row's own Undo.
+                if entry.isReversible, !entry.undone {
+                    Button {
+                        undoPulse += 1
+                        Motion.withMotion(Motion.snap) {
+                            entry.undone = true
+                            ChangeLogUndo.revert(entry, in: context)
+                        }
+                        context.saveChanges()
+                    } label: {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                            .font(.controlLabel)
+                            .foregroundStyle(Palette.accentFlat)
+                            .padding(.horizontal, Spacing.md)
+                            .frame(minHeight: LayoutMetrics.hitTarget)
+                            .background(Palette.elevatedSurface, in: Capsule())
+                    }
+                    .buttonStyle(.pressable)
+                    .accessibilityHint("Reverses this change")
+                }
                 eventSection
                 if let provenance {
                     runSection(provenance)
@@ -47,7 +71,11 @@ struct ActivityDetailView: View {
                     inputSection(provenance)
                     draftsSection(provenance)
                     resultSection(provenance)
-                } else {
+                } else if hasCapture {
+                    // Only a row that HAS a capture can be missing its receipt
+                    // (2026-09-26): this block said "this capture was committed before
+                    // run tracking shipped" under an archive, a completion, a hand-off —
+                    // rows with no capture at all.
                     notRecordedSection
                 }
             }
@@ -55,6 +83,7 @@ struct ActivityDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Palette.background)
+        .sensoryFeedback(.impact(weight: .light), trigger: undoPulse)
         .navigationTitle("Details")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -76,6 +105,14 @@ struct ActivityDetailView: View {
             let captureID = task(taskUUID)?.captureID
         else { return nil }
         return CaptureProvenanceStore.shared.provenance(forCapture: captureID)
+    }
+
+    /// Whether this row is about a capture at all — a `captured` row, or a task that
+    /// came from one.
+    private var hasCapture: Bool {
+        if entry.action == ChangeLogEntry.capturedAction { return true }
+        guard let taskUUID = entry.taskUUID else { return false }
+        return task(taskUUID)?.captureID != nil
     }
 
     private func task(_ uuid: UUID) -> TaskItem? {

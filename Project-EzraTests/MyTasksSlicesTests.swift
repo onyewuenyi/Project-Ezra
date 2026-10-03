@@ -157,6 +157,39 @@ struct MyTasksSlicesTests {
 
     // MARK: - Filters
 
+    @Test("The attention axis narrows by the derived flags and by one owner")
+    func attentionFilter() {
+        let overdue = TaskItem(
+            title: "Overdue", category: "Home", status: .todo,
+            dueDate: Date().addingTimeInterval(-2 * 86_400))
+        let today = TaskItem(title: "Today", category: "Home", status: .todo, dueDate: Date())
+        let decision = TaskItem(title: "Decision", category: "Home", status: .todo, needsDecision: true)
+        let owner = UUID()
+        let hers = TaskItem(title: "Hers", category: "Home", status: .todo, ownerID: owner)
+        let all = [overdue, today, decision, hers]
+        #expect(TasksAttention.overdue.matches(overdue, among: all))
+        #expect(!TasksAttention.overdue.matches(today, among: all))
+        #expect(TasksAttention.dueToday.matches(today, among: all))
+        #expect(TasksAttention.decisions.matches(decision, among: all))
+        #expect(!TasksAttention.decisions.matches(hers, among: all))
+        #expect(TasksAttention.ownedBy(owner, name: "Maya").matches(hers, among: all))
+        #expect(!TasksAttention.waiting.matches(overdue, among: all))
+        #expect(
+            MyTasksSlices.applyFilters(overdue, status: nil, category: nil, attention: .overdue, among: all))
+        #expect(
+            !MyTasksSlices.applyFilters(today, status: nil, category: nil, attention: .overdue, among: all))
+        // The summary and the empty message count the third axis with the other two.
+        #expect(MyTasksHeader.filterSummary(status: nil, category: nil, attention: .waiting) == "Waiting")
+        #expect(MyTasksHeader.filterSummary(status: .todo, category: nil, attention: .waiting) == "2 filters")
+        #expect(
+            MyTasksHeader.filterSummary(status: .todo, category: "Home", attention: .waiting) == "3 filters")
+        #expect(
+            MyTasksHeader.filteredEmptyMessage(
+                status: nil, category: nil, attention: .ownedBy(owner, name: "Maya"))
+                == "No tasks match “Maya’s”.")
+        #expect(TasksAttention.ownedBy(owner, name: "Maya").label == "Maya’s")
+    }
+
     @Test("applyFilters narrows by display status and category")
     func filters() {
         let work = TaskItem(title: "w", category: "Work", status: .todo)

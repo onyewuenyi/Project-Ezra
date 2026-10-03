@@ -12,27 +12,80 @@ The paragraph below this section is **historical**: it describes the system tab 
 the orb parked beside it, the measured constants that placement needed, and the Brief and
 Ask tabs. All of that is gone. What stands:
 
-- **`RootTabView` shows `TasksHomeView` directly.** No `TabView`. The Brief was cut (two
-  equal pillars — Ramble/Capture and the Advisor), and the Ask TAB lasted one day: a tab
-  is a place you go to talk, which was the condition of the scoped-conversation fence
-  closest to failing (`prev-docs/product-guardrails.md`). Ask is now a **sheet** summoned
-  from the Tasks header's `text.bubble` — the same glyph the task pager wears — so asking
-  is one gesture at every scope (F-12).
-- **The orb is bottom-trailing with plain padding.** With no bar to align to, the derived
-  offset (`overlayBaseFromBottom + diameter/2 − barCentreFromBottom`), the measured
-  62.0/52.2/34.0pt constants, and `tabBarMinimizeBehavior(.never)` are retired. The
-  diameter stays 62pt (it reads as one object with the orb inside it). It hides under
-  the keyboard and pauses when covered (`barOrbPaused`, now including the Ask sheet).
-- **Three sheets, one mount each:** the composer (`\.openCapture` / `\.resumeCapture`),
-  Activity (`\.openActivity`), Ask (`\.openAsk`). The last surface whose only mount lived
-  inside another surface's conditional container was silently deleted for three weeks;
-  the shell owns them so that cannot recur.
+- **Ask is the home; the Tasks list is a SHEET behind its header button (2026-09-23).**
+  The owner's swap, argued against and made (`docs/decisions.md`): `HouseholdChatView`
+  is the root of the shell's one `NavigationStack`, opened on the day answer whenever
+  anything is open, so the resting state is the ranked rows, not a blank chat — plus
+  the catch-up line ("Since you last looked, Maya finished …") on a shared household.
+  The `checklist` button presents `TasksSheet` (Done, or swipe down); Manage Household
+  pushes on whichever stack asked. The list was a pushed page for a few hours and Back
+  from it faulted — never a push. **`ShellSurfaces`** is the one host for the composer,
+  Activity, Settings, the receipt and the 62pt orb, mounted once at the root and once
+  inside the Tasks sheet, because a sheet cannot present over another from the same
+  presenter. Before this the list was the root and Ask a sheet summoned from its
+  `text.bubble` (2026-09-02 → 2026-09-23). No `TabView`: the Brief was cut (two equal
+  pillars — Ramble/Capture and the Advisor), and the Ask TAB lasted one day — a tab is
+  a place you go to talk, which was the condition of the scoped-conversation fence
+  closest to failing (`prev-docs/product-guardrails.md`).
+- **The home says what the list cannot (2026-09-23).** The day answer is composed by
+  `AI/DayAnswer.swift`: a reason under every row, time pressure seated ahead of
+  judgment with the decisions collapsed to their oldest, an outcome speaking for its
+  steps, the hour framing the lead ("first" / "still" / "Nothing more needs you
+  tonight."), then the person's own stall line, the evening's "Today, you finished …",
+  and the catch-up. The glance strip opens the Tasks sheet filtered (`TasksPreset`,
+  the list's new ATTENTION filter axis) and never asks a question; "N open" is gone and
+  the answer ends with "and N more in Tasks". The chips under a seated answer are
+  judgment questions ("I've got 15 minutes" is the `.quick` floor shape). The
+  parked-captures row and the grouping sweep's question mount on the home, not the
+  list. Home rows carry their verb in the trailing slot (glyph-only at accessibility
+  sizes; "Decide" opens the page) and a long-press hand-off. The empty home is one
+  gradient CTA into capture. The full rule, with the why, is in `CLAUDE.md` and
+  `docs/decisions.md`.
+- **The calm home (2026-09-23, later the same day).** The strip moved to the Tasks
+  sheet's header as its own glance (`TasksCounts`); the day answer is a hero row with
+  the page's one verb and three quiet rows under "Then, in order" (`dayAnswerCap` 4);
+  news is one muted sentence with no rows, tapping into Activity; the starters and
+  follow-ups sit inside the composer bar as one line of suggestions; Ezra's questions
+  sit below the answer; a capture committed from inside the Tasks sheet closes the sheet
+  and lands on the home with the answer re-seated under `Motion.settle`. Six kinds of
+  element, three numbers above the fold. `CLAUDE.md` holds the rule.
+- **The home's design audit (2026-09-25).** Stable opener identity so re-seats animate;
+  the advance on the hero's verb (fill, dim, haptic, hold, then the store moves); one
+  card on the page (containerless quiet rows, `Radius.card` hero, `Font.heroTitle`); one
+  accent (the verb); a staggered launch settle; a leading "Today" return on a thread;
+  "Just added" for what landed during this look and rank did not seat, washed and
+  scrolled into view; "Why this first?" on the hero's long-press; micro arrows on the
+  suggestions; kickers as VoiceOver headers. Measured on frame sheets. `CLAUDE.md` holds
+  the rule.
+- **Size follows importance (2026-09-25).** Hero title 22 and a 15pt verb, then the
+  ask field (17pt text, 52pt field, 52/34 orb) and suggestions (15pt medium, 44pt
+  lines), then rows at 16; the home's title is inline. `CLAUDE.md` holds the ranking.
+- **The orb is `CaptureOrbButton`, in two placements.** The home's composer bar carries
+  it as its trailing control (`ChatComposerBar.onCapture`, 44/28pt) inside the bar's own
+  row, so it rides the keyboard with nothing to collide with; the shell parks the 62/40pt
+  one bottom-trailing over every pushed page, hidden under the keyboard. Both pause on
+  `\.orbCovered` (a sheet, onboarding, the background). Send/Stop sit INSIDE the field
+  and appear with the first character. The derived offset the tab bar needed
+  (`overlayBaseFromBottom + diameter/2 − barCentreFromBottom`), the measured
+  62.0/52.2/34.0pt constants, and `tabBarMinimizeBehavior(.never)` are retired.
+- **One host per presentation context:** `ShellSurfaces` mounts the composer
+  (`\.openCapture` / `\.resumeCapture`), Activity (`\.openActivity`) and Settings
+  (`\.openSettings`) once at the root and once inside the Tasks sheet, each with its own
+  controller; the identity link and onboarding are root-only. Both "…" menus reach
+  Activity · Manage Household · Settings. Nothing is conditional: the last surface
+  whose only mount lived inside a conditional container was silently deleted for
+  three weeks.
 - **Long-press on the orb is gone** with Private Capture's second door (F-03). Privacy is
   a posture chip in the composer's capture bar, persisted, and said in `DataBoundary`.
-- **`-InitialTab` is a no-op**; `-AskHousehold` / `-HouseholdChatFixture` present the Ask
-  sheet; `-OpenPrivateCapture` is gone.
-- **What Tasks gained:** the Ask bubble in its toolbar, and `ParkedCapturesRow` under the
-  header (F-04) — unfinished captures findable without a nudge.
+- **Seams:** `-OpenTasks` presents the list sheet (and the shell presents it unasked
+  for every argument the list's own `.task` reads); `-DismissTasksAfter N` closes it
+  again; `-OpenRoster` pushes the roster on the home; `-OpenSettings` presents Settings
+  — over the list when a list seam is beside it; `-AskHousehold` /
+  `-HouseholdChatFixture` act on the home; `-OpenAsk` and `-InitialTab` are no-ops.
+- **What the swap is judged on:** `askAsked(scope:route:)` on a person's question and
+  `tasksOpened` on the button, against `captureStarted` per session.
+- **What Tasks keeps:** `[search][…]`, and `ParkedCapturesRow` under the header (F-04) —
+  unfinished captures findable without a nudge.
 
 ## Historical — the system tab bar and the orb beside it (2026-08-18 → 2026-09-02)
 

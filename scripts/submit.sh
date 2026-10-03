@@ -16,8 +16,14 @@
 # a wall of xcodebuild output buries that.
 #
 # Usage:
-#   scripts/submit.sh            # archive → export → validate (does not upload)
-#   scripts/submit.sh --upload   # …and upload to App Store Connect
+#   scripts/submit.sh                       # archive → export → validate (does not upload)
+#   scripts/submit.sh --upload              # …and upload to App Store Connect
+#   scripts/submit.sh --internal [--upload] # internal TestFlight: skips the privacy-URL gate
+#
+# `--internal` exists because internal TestFlight (App Store Connect users, no Beta App
+# Review) asks for no privacy policy, and the gate below would otherwise hold the first
+# build behind a web page. It skips THAT gate only; external testing and the App Store
+# need the link inside the app, and the script says so on the way past.
 #
 # Uploading needs an app-specific password in the keychain:
 #   xcrun notarytool store-credentials  # or set ASC_API_KEY / ASC_API_ISSUER
@@ -30,7 +36,14 @@ BUILD_DIR="${TMPDIR:-/tmp}/ezra-submit"
 ARCHIVE="$BUILD_DIR/Ezra.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
 UPLOAD=0
-[[ "${1:-}" == "--upload" ]] && UPLOAD=1
+INTERNAL=0
+for arg in "$@"; do
+  case "$arg" in
+    --upload) UPLOAD=1 ;;
+    --internal) INTERNAL=1 ;;
+    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
 
 say() { printf "\n\033[1m%s\033[0m\n" "$*"; }
 die() { printf "\n\033[1;31mBLOCKED: %s\033[0m\n" "$1" >&2; shift; for l in "$@"; do printf "  %s\n" "$l" >&2; done; exit 1; }
@@ -48,10 +61,23 @@ fi
 # The privacy policy link is a review requirement, and the app renders no link while
 # the URL is nil — deliberately, but that state must not reach a submission.
 if grep -qE '^\s*static let privacyPolicy: URL\? = nil' Project-Ezra/Models/SupportLinks.swift; then
-  die "No privacy policy URL is set." \
-      "Guideline 5.1.1(i) requires the link inside the app, and there is none." \
-      "Write and host the page, then set SupportLinks.privacyPolicy. Tracked in TODO.md."
+  if [[ "$INTERNAL" == "1" ]]; then
+    printf "\n\033[1;33mNo privacy policy URL — fine for INTERNAL TestFlight only.\n  External testing and the App Store need it (TODO.md).\033[0m\n"
+  else
+    die "No privacy policy URL is set." \
+        "Guideline 5.1.1(i) requires the link inside the app, and there is none." \
+        "Write and host the page, then set SupportLinks.privacyPolicy. Tracked in TODO.md." \
+        "For internal TestFlight only, re-run with --internal."
+  fi
 fi
+
+PBX=Project-Ezra.xcodeproj/project.pbxproj
+VERSION=$(grep -m1 -E 'MARKETING_VERSION = ' "$PBX" | sed -E 's/.*= ([^;]+);/\1/')
+BUILD=$(grep -m1 -E 'CURRENT_PROJECT_VERSION = ' "$PBX" | sed -E 's/.*= ([^;]+);/\1/')
+say "Shipping version $VERSION ($BUILD)."
+printf "  App Store Connect refuses a build number it has seen. Bump CURRENT_PROJECT_VERSION\n"
+printf "  (both configurations) before every upload after the first — Xcode will not do it,\n"
+printf "  on purpose (scripts/ExportOptions.plist).\n"
 
 say "Running the test suite…"
 xcodebuild test -project Project-Ezra.xcodeproj -scheme Project-Ezra \
@@ -109,6 +135,30 @@ IPA=$(find "$EXPORT_DIR" -name '*.ipa' | head -1)
 
 say "Built: $IPA"
 
+# ------------------------------------- what the EXPORTED signature must carry
+# Multiplayer lives or dies on these three, and none of them is visible in a green build:
+# a development `aps-environment` means CloudKit's silent pushes never reach a tester, a
+# missing container means sync is off, and `get-task-allow` means the export did not
+# re-sign at all.
+say "Auditing the exported signature…"
+UNZIP="$BUILD_DIR/ipa"
+rm -rf "$UNZIP" && mkdir -p "$UNZIP" && unzip -q "$IPA" -d "$UNZIP"
+SIGNED_APP=$(find "$UNZIP/Payload" -maxdepth 1 -name '*.app' | head -1)
+ENT="$BUILD_DIR/entitlements.plist"
+codesign -d --entitlements :- "$SIGNED_APP" > "$ENT" 2>/dev/null
+
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$ENT" 2>/dev/null)" == "production" ]] \
+  || die "aps-environment is not 'production' in the exported build." \
+         "CloudKit sync between testers depends on it. Check the App Store profile has Push."
+/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.icloud-container-identifiers' "$ENT" 2>/dev/null \
+  | grep -q "iCloud.amanze-studios.Project-Ezra" \
+  || die "The iCloud container is missing from the exported build's entitlements." \
+         "Enable iCloud (CloudKit, iCloud.amanze-studios.Project-Ezra) on the App ID."
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$ENT" 2>/dev/null)" == "true" ]]; then
+  die "The exported build still carries get-task-allow." "It was not re-signed for distribution."
+fi
+say "Signature: aps-environment production · iCloud container present · no get-task-allow."
+
 # ---------------------------------------------------------------- validate
 say "Validating with App Store Connect…"
 if xcrun altool --validate-app -f "$IPA" -t ios --apiKey "${ASC_API_KEY:-}" --apiIssuer "${ASC_API_ISSUER:-}" 2>&1 | tee /dev/stderr | grep -q "No errors"; then
@@ -123,3 +173,5 @@ if [[ "$UPLOAD" == "1" ]]; then
 fi
 
 say "Done. Remaining owner steps live in TODO.md — the CloudKit schema deployment is the one with no symptom."
+printf "  Testers sync against PRODUCTION. Until the schema is deployed there, every export fails\n"
+printf "  in silence; on a tester's phone, Console.app ▸ subsystem com.projectezra.app, category sync.\n"

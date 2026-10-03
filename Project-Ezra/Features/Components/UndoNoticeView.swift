@@ -111,14 +111,23 @@ private struct UndoNoticeModifier: ViewModifier {
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
             if let undo = notice.undoAction {
-                Button("Undo") {
+                Button {
                     undo()
                     self.notice = nil
+                } label: {
+                    Text("Undo")
+                        .font(.controlLabel)
+                        .foregroundStyle(Palette.accentFlat)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
-                .font(.controlLabel)
-                .foregroundStyle(Palette.accentFlat)
                 .buttonStyle(.pressableLink)
+                // The action never yields its width (2026-09-26): beside a long receipt
+                // it truncated to "Un…", and it is the only way back.
+                .fixedSize()
+                .layoutPriority(1)
             }
         }
         .padding(.horizontal, Spacing.md)

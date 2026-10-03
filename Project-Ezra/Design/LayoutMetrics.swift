@@ -18,6 +18,13 @@ enum LayoutMetrics {
     /// The minimum interactive tap target (HIG). Every tappable glyph/control reserves
     /// at least this, even when its visual glyph is smaller than the column.
     static let hitTarget: CGFloat = 44
+    /// The home's ask field and the orb beside it (2026-09-25, the importance audit): the
+    /// bar is the home's second most important object after the hero task, so it is
+    /// larger than a bare hit target — a one-line field 52pt tall, the orb 52pt with a
+    /// 34pt lens (the shell's 62/40 bezel ratio), the send disc 36pt inside the field.
+    static let composerField: CGFloat = 52
+    static let composerOrb: CGFloat = 34
+    static let composerInnerControl: CGFloat = 36
     /// Lines a related task's title may take on the detail page's rows — steps,
     /// blockers, dependents, the parent link. Two, not one (2026-09-17): at the
     /// accessibility text sizes a one-line row cut "Book flights for the trip" to "Book
@@ -85,5 +92,28 @@ extension View {
             padding(inset)
             .contentShape(Rectangle())
             .padding(-inset)
+    }
+
+    /// The glyph column (`recordGlyphColumn`, 28pt) scaled along the SAME text style as the
+    /// glyph it holds. The glyph tokens grow at accessibility sizes; a fixed 28pt frame
+    /// around them did not, and SwiftUI draws an oversized symbol outside its frame — the
+    /// home's hero glyph spilled out of the card and over the title (2026-09-29). At the
+    /// default content size this is exactly 28pt, so nothing moves for most people.
+    func glyphColumn(relativeTo style: Font.TextStyle, alignment: Alignment = .center) -> some View {
+        modifier(GlyphColumn(style: style, alignment: alignment))
+    }
+}
+
+private struct GlyphColumn: ViewModifier {
+    @ScaledMetric private var side: CGFloat
+    private let alignment: Alignment
+
+    init(style: Font.TextStyle, alignment: Alignment) {
+        _side = ScaledMetric(wrappedValue: LayoutMetrics.recordGlyphColumn, relativeTo: style)
+        self.alignment = alignment
+    }
+
+    func body(content: Content) -> some View {
+        content.frame(width: side, height: side, alignment: alignment)
     }
 }

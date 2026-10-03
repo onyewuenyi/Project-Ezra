@@ -19,7 +19,7 @@ import SwiftUI
 struct GroupProposalRow: View {
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     @State private var proposals = GroupProposals.shared
     @State private var asking: GroupProposal?
     @Binding var notice: UndoNotice?
@@ -59,11 +59,16 @@ struct GroupProposalRow: View {
                     }
                     Button("Not now") { proposals.dismissForNow(proposal) }
                 }
-                .accessibilityLabel(Self.question(proposal) + " " + proposal.memberTitles.joined(separator: ", "))
+                .accessibilityLabel(
+                    Self.question(proposal) + " " + proposal.memberTitles.joined(separator: ", ")
+                )
                 .accessibilityHint("Shows the tasks and asks")
             }
         }
-        .onAppear { seedIfRequested() }
+        // On a zero-size anchor, not the Group: with nothing to ask the Group is empty,
+        // an empty view never appears, and the seed that would give it something to ask
+        // never ran (2026-09-26, found when the row moved to the home).
+        .background { Color.clear.frame(width: 0, height: 0).onAppear { seedIfRequested() } }
         .onChange(of: proposals.pending.count) { _, _ in acceptIfRequested() }
         .confirmationDialog(
             asking.map(Self.question) ?? "", isPresented: askingPresented,

@@ -2,36 +2,34 @@
 //  RootTabView.swift
 //  Project-Ezra
 //
-//  The app shell: the SYSTEM tab bar (Brief · Tasks) with one app-owned control beside it
-//  in the same row — the circular Capture orb (`captureOrbButton`). The loop IS the
-//  navigation: you ramble in, you work the Tasks. Review is not a destination; first
-//  launch presents the onboarding transformation.
+//  The app shell. Since 2026-09-23 the HOME is Ask (`HouseholdChatView`, opened on the
+//  day answer) and the Tasks list is a SHEET behind the header's list button — the same
+//  grammar Ask had when the list was the home, swapped. The owner's call, made over the
+//  argument that a list answers a glance and a chat answers a question; the two
+//  telemetry events that argument turns on (`askAsked`, `tasksOpened`) landed with it.
+//  The list was a PUSHED page for a few hours first, and Back from it hit a fault on
+//  the owner's phone; the sheet is what was asked for and what the pre-swap shell had
+//  proven for three weeks. Before the swap the list was the root and Ask the sheet
+//  (2026-09-02 → 2026-09-23); before THAT a system tab bar held Brief · Tasks with the
+//  orb beside it (2026-08-18 → 2026-09-02). `docs/surfaces.md` keeps the archaeology.
 //
-//  The Brief was CUT on 2026-09-02 (two equal pillars: Ramble/Capture and the Advisor);
-//  its tab, sequence, seams and reminder are gone. Tasks is the floor of the tab range.
-//
-//  **The division of labour, and the rule for changing anything here:** the OS owns the
-//  tab bar — its rendering, selection, safe area and accessibility — and the app owns
-//  exactly one control, because iOS 27 publishes no way to place a custom view inline with
-//  an EXPANDED tab bar (`tabViewBottomAccessoryPlacement` is get-only, and `.inline` only
-//  happens once the bar minimizes). Positioning the orb ourselves is therefore the
-//  smallest custom chrome that can express "the orb is always beside the bar". Any change
-//  that would require modifying the native bar's visual hierarchy is the wrong approach.
+//  Two presentation contexts, one host each (`ShellSurfaces`): the root, whose
+//  composer / Activity / Settings serve the Ask home and whose capture door is the orb
+//  in the home's composer bar; and the Tasks sheet (`TasksSheet`), whose host parks
+//  the 62pt orb bottom-trailing over the list and presents the SAME surfaces from
+//  inside the sheet — because a sheet cannot be presented over another from the same
+//  presenter. Onboarding and the identity link stay root-only.
 //
 //  A fully custom bottom bar was built here and REVERTED (2026-08-29, same day): it drew
 //  Brief · Capture · Tasks in one hand-rolled glass capsule, which cost the OS's rendering
 //  and safe-area management and bought a composition the owner didn't want. Do not
-//  resurrect it.
+//  resurrect it. The home's composer bar is not that bar: it is the chat's own input,
+//  which every chat surface already had, with the orb beside it.
 //
 //  The Inbox and Household TABS were cut (product shape v2, 2026-08-18) — surfaces cut,
-//  systems relocated. The trust surface survives as `ActivityView`, a sheet this shell
-//  owns; multiplayer survives as substrate (the roster, born-owned tasks, the publish
-//  boundary at Confirm) with roster editing one tap deep in the Tasks "…" menu.
-//
-//  Activity is mounted HERE, once, on purpose. It is reachable from two places (the
-//  Tasks header and the Brief's held-depth tile) and belongs to neither; the last time a
-//  surface's only mount point lived inside another surface's conditional container, a
-//  change to that container silently deleted it for three weeks (`MyTasksHeader`).
+//  systems relocated. The trust surface survives as `ActivityView`; multiplayer survives
+//  as substrate (the roster, born-owned tasks, the publish boundary at Confirm) with
+//  roster editing one tap deep in either "…" menu.
 //
 
 import CoreData
@@ -42,9 +40,14 @@ import SwiftUI
 /// shell so deep views (empty states, cards) never need their own sheet plumbing.
 extension EnvironmentValues {
     @Entry var openCapture: () -> Void = {}
-    /// Ask about everything — the household inquiry, summoned as a sheet from where you
-    /// are (F-12), with the same bubble glyph the task pager uses for its own scope.
-    @Entry var openAsk: () -> Void = {}
+    /// Present the Tasks list — the record, one tap behind the Ask home's list button
+    /// (2026-09-23) — on a preset: the glance strip's counts open it filtered, the
+    /// button opens it plain (`.none`). A no-op while the list is already up.
+    @Entry var openTasks: (TasksPreset) -> Void = { _ in }
+    /// Push Manage Household. Reachable from both "…" menus, so the shell owns the push.
+    @Entry var openRoster: () -> Void = {}
+    /// Present Settings. Reachable from both "…" menus, so the shell owns the sheet.
+    @Entry var openSettings: () -> Void = {}
     /// Reopen a specific parked capture (the Today "captures waiting" line). Distinct
     /// from `openCapture`, which always begins a fresh one.
     @Entry var resumeCapture: (Capture) -> Void = { _ in }
@@ -53,15 +56,6 @@ extension EnvironmentValues {
     /// than a local sheet for the same reason `openCapture` is: the surface has one
     /// mount point, in the shell, and no screen owns it.
     @Entry var openActivity: () -> Void = {}
-}
-
-/// One presentation of the capture composer. Fresh id per open — every open is a new
-/// session by construction, and `sheet(item:)` hands this value to the content
-/// closure directly (see `RootTabView.composerSession` for why that's load-bearing).
-private struct ComposerSession: Identifiable {
-    let id = UUID()
-    let resuming: Capture?
-    var autoSubmit = false
 }
 
 struct RootTabView: View {
@@ -82,77 +76,37 @@ struct RootTabView: View {
         // so a returning user never sees the cover flash for a frame.
         _showOnboarding = State(initialValue: !UserDefaults.standard.bool(forKey: "hasOnboarded"))
     }
-    /// The Activity screen's one mount point. Deliberately not a tab and deliberately
-    /// not badged: the trust surface is something you go to when you want to check or
-    /// undo, never something that asks to be visited (guardrail 1, calm over
-    /// engagement — the unread TAB BADGE died with the tab, and good riddance; the
-    /// per-row unread dots survive inside, where they answer "what's new since I looked"
-    /// for someone who already chose to look).
-    @State private var showActivity = false
-    /// The presented composer session, item-based ON PURPOSE: with the paired
-    /// `isPresented` + `resumingCapture` shape, SwiftUI evaluated the sheet's content
-    /// closure once with the STALE nil resume target and re-evaluated with the real
-    /// one only after `ComposerView` had already mounted and run its restore — so a
-    /// resume silently opened a fresh composer (verified via the `-OpenCapture`
-    /// console seam). `sheet(item:)` hands the closure the value itself; the race is
-    /// unrepresentable. `resuming` nil = a fresh capture — opening the composer always
-    /// starts a NEW one, so being interrupted twice never overwrites the first thought.
-    @State private var composerSession: ComposerSession? = nil
-    @State private var showAsk = false
-    /// Private Capture — the long-press sibling of the capture orb. A Bool, not a
-    /// session type: the mode has no resume semantics (one thought, kept or not).
-    /// The transient "Added N tasks" receipt, shown after the composer closes.
-    @State private var commitNotice: UndoNotice? = nil
-    /// Whether the keyboard is up. The orb hides under it (`body`): the composer's
-    /// capture bar owns that space while a keyboard is showing.
-    @State private var keyboardUp = false
+    /// The ROOT context's surfaces — the Ask home's composer, Activity and Settings.
+    /// A controller rather than view state so the launch seams and the Siri hand-off
+    /// below can reach them; the Tasks sheet owns a second one.
+    @State private var surfaces = ShellSurfaceController()
+    /// The Tasks list, presented as a sheet from the home's list button (`\.openTasks`),
+    /// on the preset the caller named. Item-based, so a count tapped while nothing is
+    /// up opens straight onto its subset.
+    @State private var tasksPreset: TasksPreset?
+    private var showTasks: Bool { tasksPreset != nil }
+    /// Manage Household, pushed on the home's own stack from its "…" menu.
+    @State private var showRoster = false
 
     var body: some View {
-        // The orb belongs to the BAR, and the keyboard covers the bar. Both
-        // `.overlay` on the TabView and a ZStack sibling with `.ignoresSafeArea(.keyboard)`
-        // laid the orb out against the keyboard-reduced bounds — it rode up and sat on
-        // the Ask composer's Send button (measured twice, 2026-09-02) — so the fix is
-        // explicit: while the keyboard is up the orb is hidden and its timeline paused.
-        // An orb beside no bar means nothing; hiding it is the truthful state, not a
-        // workaround. Keyboard avoidance inside the tabs is untouched.
-        ZStack(alignment: .bottomTrailing) {
-            // ONE surface and one verb beside it. The tab bar went with the Brief and
-            // the Ask tab (F-12): Tasks is the record, the orb is capture, and Ask is a
-            // sheet summoned from the Tasks header — the same grammar as the task
-            // pager's Ask bubble, so asking is one gesture at every scope.
-            TasksHomeView()
-                // The tab bar used to supply the bottom inset the list scrolled clear
-                // of; with the bar gone the orb would sit over the last row. One inset,
-                // sized to the orb and its padding, so the list ends above it.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    Color.clear.frame(height: Self.captureButtonDiameter + Spacing.md * 2)
-                }
-            captureOrbButton
-                .opacity(keyboardUp ? 0 : 1)
-                .allowsHitTesting(!keyboardUp)
-                .animation(Motion.fade, value: keyboardUp)
+        ShellSurfaces(
+            controller: surfaces, showsOrb: false, coveredAbove: showOnboarding || showTasks,
+            openRoster: { showRoster = true },
+            openTasks: { preset in if tasksPreset == nil { tasksPreset = preset } }
+        ) {
+            NavigationStack {
+                HouseholdChatView()
+                    .navigationDestination(isPresented: $showRoster) { HouseholdRosterView() }
+            }
         }
-        .onReceive(
-            NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
-        ) { _ in keyboardUp = true }
-        .onReceive(
-            NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
-        ) { _ in keyboardUp = false }
-        .undoNotice($commitNotice, bottomInset: Spacing.xxl)
-        .environment(\.openCapture, { presentComposer(resuming: nil) })
-        .environment(\.resumeCapture, { capture in presentComposer(resuming: capture) })
-        .environment(\.openActivity, { showActivity = true })
-        .environment(\.openAsk, { showAsk = true })
-        .sheet(isPresented: $showAsk) { HouseholdChatView() }
-        // Item-based, so however the sheet closed (commit, discard, swipe) the session
-        // clears with it — the next open starts fresh unless \.resumeCapture re-arms it.
-        .sheet(item: $composerSession, onDismiss: { presentCommitNotice() }) { session in
-            ComposerView(resuming: session.resuming, autoSubmit: session.autoSubmit)
+        // A capture committed from inside the sheet closes the sheet and lands here; the
+        // merge pill it owes is spoken by THIS host on the way in (`landsOnHome`).
+        .sheet(item: $tasksPreset, onDismiss: { surfaces.presentCommitNotice(brain: brain) }) { preset in
+            TasksSheet(preset: preset)
         }
-        .sheet(isPresented: $showActivity) { ActivityView() }
         // The arriving caretaker's "which one is you?" — presented by `HouseholdSharing`
         // when an accepted share's household has landed and the phone cannot tell which
-        // member the person is. Mounted here, once, like the other three sheets.
+        // member the person is. Root-only; if the Tasks sheet is up it waits for it.
         .sheet(item: Bindable(HouseholdSharing.shared).pendingLink) { pending in
             IdentityLinkSheet(pending: pending)
         }
@@ -210,6 +164,7 @@ struct RootTabView: View {
             AdvisorCoverageDiagnostics.runIfRequested(in: context)
             #endif
             openActivityIfRequested()
+            await openTasksIfRequested()
             await openCaptureIfRequested()
             consumePendingCapture()
             askHouseholdIfRequested()
@@ -217,11 +172,13 @@ struct RootTabView: View {
     }
 
     /// Deterministic verification seam. `-AskHousehold "question"` sends one question
-    /// through the LIVE household store on the Ask tab (pair with `-InitialTab 2`), so
-    /// a floor answer's rows or the model's reply — or the honest failure line — is
-    /// screenshot-reachable without a keyboard. `-HouseholdChatFixture` seeds a canned
-    /// thread instead (a cited floor answer, a model answer, a reply in flight) for a
-    /// host with no model. Never fires in normal runs.
+    /// through the LIVE household store on the Ask home, so a floor answer's rows or
+    /// the model's reply — or the honest failure line — is screenshot-reachable without
+    /// a keyboard. `-HouseholdChatFixture` seeds a canned thread instead (a cited floor
+    /// answer, a model answer, a reply in flight) for a host with no model. `-OpenAsk`
+    /// is accepted and does nothing: Ask IS the home (2026-09-23) — a bare launch shows
+    /// the day answer, the glance strip, or the nothing-to-ask state on an empty store.
+    /// Never fires in normal runs.
     private func askHouseholdIfRequested() {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
@@ -231,17 +188,66 @@ struct RootTabView: View {
         if args.contains("-HouseholdChatFixture") {
             HouseholdChatStore.shared.seedFixture(
                 citing: Array(facts.overdue.prefix(3)).map(\.id))
-            showAsk = true
         }
         if let flag = args.firstIndex(of: "-AskHousehold"), args.indices.contains(flag + 1) {
             HouseholdChatStore.shared.ask(args[flag + 1], facts: facts)
-            showAsk = true
         }
-        // `-OpenAsk`: the sheet as a person would summon it — the day answer, the glance
-        // strip, or the nothing-to-ask state on an empty store.
-        if args.contains("-OpenAsk") { showAsk = true }
         #endif
     }
+
+    /// Deterministic verification seam. The Tasks list is a sheet since 2026-09-23, and
+    /// every seam the list's own `.task` reads (`-OpenTaskDetail`, the filter presets,
+    /// the deck page, the grouping row) fires only once the sheet is up — so the shell
+    /// presents it first for any of them, and for a bare `-OpenTasks`. `-OpenRoster`
+    /// pushes Manage Household on the HOME's stack; `-OpenSettings` — and the two
+    /// destructive seams Settings performs on arrival — present the root's sheet unless
+    /// the list is being shown, in which case `TasksSheet` presents its own over the
+    /// list. `-DismissTasksAfter <seconds>` closes the sheet again, so the return to the
+    /// home — the path that faulted as a push — stays re-measurable. Never fires in
+    /// normal runs.
+    private func openTasksIfRequested() async {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        let wantsTasks = args.contains(where: Self.tasksSurfaceArgs.contains)
+        if wantsTasks { tasksPreset = .plain }
+        // `-TasksPreset overdue|dueToday|inProgress|waiting|decisions|done` opens the
+        // sheet the way a glance-strip count does (2026-09-23) — the tap is blocked, the
+        // filtered state was not otherwise reachable.
+        if let flag = args.firstIndex(of: "-TasksPreset"), args.indices.contains(flag + 1) {
+            switch args[flag + 1] {
+            case "overdue": tasksPreset = TasksPreset(tab: .everyone, attention: .overdue)
+            case "dueToday": tasksPreset = TasksPreset(tab: .everyone, attention: .dueToday)
+            case "inProgress": tasksPreset = TasksPreset(tab: .everyone, status: .doing)
+            case "waiting": tasksPreset = TasksPreset(tab: .everyone, attention: .waiting)
+            case "decisions": tasksPreset = TasksPreset(tab: .everyone, attention: .decisions)
+            case "done": tasksPreset = TasksPreset(tab: .everyone, status: .done)
+            default: break
+            }
+        }
+        if args.contains("-OpenRoster") { showRoster = true }
+        if !wantsTasks, args.contains(where: Self.settingsArgs.contains) { surfaces.showSettings = true }
+        if wantsTasks, let flag = args.firstIndex(of: "-DismissTasksAfter"), args.indices.contains(flag + 1),
+            let seconds = Double(args[flag + 1])
+        {
+            try? await Task.sleep(for: .seconds(seconds))
+            tasksPreset = nil
+        }
+        #endif
+    }
+
+    #if DEBUG
+    /// The launch arguments the Tasks page reads in its own `.task`. Listed once, here,
+    /// so a seam added to the list cannot be added without the sheet that reaches it.
+    static let tasksSurfaceArgs = [
+        "-OpenTasks", "-OpenTaskDetail", "-OpenSearch", "-CompleteListRow", "-FilterStatus",
+        "-FilterCategory", "-MyTasksTab",
+        "-TasksPreset",
+        // Not the grouping seams (2026-09-26): the proposal row lives on the HOME since
+        // the calm pass, and opening the sheet over it hid the very row they seed.
+        "-DeckPage",
+    ]
+    static let settingsArgs = ["-OpenSettings", "-ClearAllTasks", "-ResetEverything"]
+    #endif
 
     /// Deterministic verification seam. Launch with `-OpenActivity` to present the
     /// Activity screen, which stopped being a tab in the v2 collapse and is now two taps
@@ -251,7 +257,7 @@ struct RootTabView: View {
     private func openActivityIfRequested() {
         #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("-OpenActivity") else { return }
-        showActivity = true
+        surfaces.showActivity = true
         #endif
     }
 
@@ -278,140 +284,31 @@ struct RootTabView: View {
         }
         // Let the launch render pass settle before presenting over it.
         try? await Task.sleep(for: .milliseconds(300))
-        presentComposer(resuming: target)
+        surfaces.presentComposer(resuming: target, brain: brain, in: context)
         #endif
-    }
-
-    /// The one way the composer is presented. Every entry point (the FAB, `openCapture`,
-    /// `resumeCapture`) warms the substrate, sets the resume target explicitly — a stale
-    /// one must never leak into a fresh capture — and clears any unconsumed commit
-    /// summary, so a seed-path commit can't fire a receipt on a later dismiss.
-    private func presentComposer(resuming capture: Capture?, autoSubmit: Bool = false) {
-        // Warm the model + retrieval substrate NOW: the sheet-presentation animation
-        // absorbs the cost, so the first parse doesn't pay it against the user's pause.
-        AppBrain.prewarmCapture(in: context)
-        brain.lastCommitSummary = nil
-        composerSession = ComposerSession(resuming: capture, autoSubmit: autoSubmit)
     }
 
     /// Words handed over by an App Intent (F-01) — "Hey Siri, tell Ezra…", the Action
     /// Button, Shortcuts. Parked as a `Capture` (the shape a dismissed composer leaves)
     /// and resumed with `autoSubmit`, so the person lands on the confirm card: nothing
-    /// said is retyped, nothing is created without the one human moment.
+    /// said is retyped, nothing is created without the one human moment. Presented from
+    /// the ROOT, so if the Tasks sheet is up it is closed first and the composer follows
+    /// once the dismissal has settled — presenting into a dismissal in progress is the
+    /// one shape SwiftUI drops on the floor.
     private func consumePendingCapture() {
         guard let pending = PendingCapture.shared.consume() else { return }
         let capture = Capture(rawText: pending.words, source: pending.source, in: context)
         capture.parkedDrafts = []
         context.insert(capture)
         context.saveChanges()
-        presentComposer(resuming: capture, autoSubmit: true)
-    }
-
-    /// Speak for a confirm that just happened, once — and ONLY about a MERGE.
-    ///
-    /// This used to be justified as "what the composer's ✓ receipt couldn't say", the
-    /// receipt having delivered the count. That receipt was removed on 2026-08-30 (it read
-    /// as an extra screen), so this pill is now the ONLY thing that speaks after a commit —
-    /// and it still deliberately says nothing about the count. The list the user just
-    /// landed on shows the new tasks; a merge is the one outcome it cannot show, because
-    /// the merged capture is folded into a task that was already there.
-    ///
-    /// Deliberately no Undo button: undoing a batch means deleting the created tasks AND
-    /// reversing each merge AND unwinding the blocker edges commit wrote onto OTHER
-    /// tasks — a half-honest version of that is worse than none, so per-item Undo stays
-    /// in Activity where it already works, and this notice claims nothing about it.
-    private func presentCommitNotice() {
-        guard let summary = brain.lastCommitSummary, !summary.isEmpty else { return }
-        brain.lastCommitSummary = nil  // consumed — a dismiss reports its own commit only
-        guard let message = summary.messageBeyondReceipt else { return }
-        commitNotice = UndoNotice(message: message)
-    }
-
-    // MARK: - The Capture orb
-
-    /// The persistent Capture action: a circular Liquid Glass button holding a live mini
-    /// `RambleOrb`, parked bottom-trailing IN THE SAME ROW as the system tab bar's capsule
-    /// — Linear's agent-button placement, which the two-tab collapse finally leaves room
-    /// for, and which this file's retired FAB comment wanted but deferred.
-    ///
-    /// It is the app's ONE piece of bottom chrome. The bar beside it is the OS's: iOS 27
-    /// publishes no way to put a custom control inline with an expanded tab bar
-    /// (`tabViewBottomAccessoryPlacement` is get-only and `.inline` only happens once the
-    /// bar minimizes), so positioning this button is the smallest custom chrome that can
-    /// express "the orb is always beside the bar".
-    ///
-    /// **Every line of the composition is load-bearing**, and all three ways to get it
-    /// wrong were made and caught in the simulator during the custom-bar pass:
-    ///
-    /// - **Glass is the BACKGROUND, never a wrapper.** `.glassChrome` draws as
-    ///   `content.overlay { glass }` and, on its flat (Reduce Transparency / Increase
-    ///   Contrast) path, REPLACES content with a filled shape. Wrapped around the orb it
-    ///   would put the orb under a glass sheet — and DELETE it under either setting.
-    /// - **No `GlassEffectContainer`.** A container groups its descendants into the glass
-    ///   rendering pass, which blurs them; the orb would smear. A container earns its
-    ///   place only when two glass elements must morph, and the system's bar is not in our
-    ///   view tree to morph with.
-    /// - **No tint, no coloured shadow, no dark well.** Glass is recessive chrome and the
-    ///   orb supplies the only saturation. The well the old CTA needed existed because the
-    ///   orb sat on `accentGradient` — the same two hues it is built from — and had no
-    ///   value separation; on neutral glass it has plenty.
-    private var captureOrbButton: some View {
-        Button {
-            // Byte-identical to the FAB's and the CTA's action. Opening from here always
-            // starts a NEW capture — a stale resume target from an earlier
-            // \.resumeCapture must not leak in (it could be committed or deleted by now).
-            presentComposer(resuming: nil)
-        } label: {
-            RambleOrb(
-                diameter: Self.captureOrbDiameter,
-                frameInterval: Motion.orbBarFrameInterval,
-                paused: barOrbPaused
-            )
-            .frame(width: Self.captureButtonDiameter, height: Self.captureButtonDiameter)
-            .background { Color.clear.glassChrome(in: Circle(), interactive: true) }
+        Task {
+            if showTasks {
+                tasksPreset = nil
+                try? await Task.sleep(for: .milliseconds(450))
+            }
+            surfaces.presentComposer(resuming: capture, autoSubmit: true, brain: brain, in: context)
         }
-        .buttonStyle(.pressable)
-        // The second orb's front door: long-press = Private Capture ("I know the
-        // thing", device-only), tap = Ramble ("let me dump this out") — the owner's
-        // entry-point decision, 2026-08-30. `simultaneousGesture` so the Button's
-        // tap keeps working untouched.
-        // `RambleOrb` is `.accessibilityHidden(true)` — it is atmosphere — so the button
-        // has no other label source.
-        .accessibilityLabel("Capture a task")
-        .padding(.trailing, Spacing.md)
-        .padding(.bottom, Spacing.md)
     }
-
-    /// Whether the bar orb's timeline should stop. It is mounted for the whole app
-    /// lifetime — unlike the capture beat's orb, which exists only while someone waits —
-    /// so it runs only while it can actually be seen.
-    ///
-    /// KNOWN GAP, pre-existing and not caused by the move to the native bar: this does not
-    /// cover `taskDetailSheet`, which is a `fullScreenCover` presented by `TasksHomeView`
-    /// rather than by this shell, so the orb keeps animating underneath a full-screen task
-    /// detail.
-    ///
-    /// **`.background`, not `!= .active`.** The stricter test also catches `.inactive`,
-    /// which is not "nobody is looking": it fires for the app switcher, Control Centre, an
-    /// incoming call — and, in the simulator, for the window merely not being key, which
-    /// left the orb frozen in every headless check (caught by sampling the orb's pixels
-    /// across a breath and finding them byte-identical, against a full-screen capture orb
-    /// that changed every frame). Those states are brief and mostly still visible, so the
-    /// saving was nil and the cost was an orb that looked dead.
-    private var barOrbPaused: Bool {
-        keyboardUp || composerSession != nil || showActivity || showOnboarding || showAsk
-            || scenePhase == .background
-    }
-
-    /// The Capture button's diameter, set to the system tab bar capsule's MEASURED height
-    /// so the two are the same size and read as one row rather than a bar with something
-    /// parked beside it. Grown from the retired FAB's 52pt on 2026-08-29.
-    private static let captureButtonDiameter: CGFloat = 62
-
-    /// The orb inside it, preserving the 11pt glass bezel the old 52/30 pairing had: the
-    /// bezel is what makes this read as a lens set into a button rather than a bare orb
-    /// floating next to the bar.
-    private static let captureOrbDiameter: CGFloat = 40
 
     /// **The one gate on every seeding seam, and the reason it is `#if DEBUG` rather
     /// than an argument check.**
@@ -555,6 +452,46 @@ struct RootTabView: View {
     }
     #endif
 
+}
+
+/// The Tasks list as the home presents it: its own stack (the roster pushes inside it),
+/// its own `ShellSurfaces` host (the orb bottom-trailing, and the composer, Activity and
+/// Settings presented from INSIDE the sheet — the root's would queue behind it), and a
+/// Done button on the list itself. Everything the list used to be as the root, one
+/// sheet up.
+struct TasksSheet: View {
+    var preset: TasksPreset = .plain
+    @State private var surfaces = ShellSurfaceController()
+    @State private var showRoster = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ShellSurfaces(
+            controller: surfaces, showsOrb: true,
+            openRoster: { showRoster = true },
+            openTasks: { _ in },
+            landsOnHome: { dismiss() }
+        ) {
+            NavigationStack {
+                TasksHomeView(preset: preset)
+                    .navigationDestination(isPresented: $showRoster) { HouseholdRosterView() }
+            }
+        }
+        // A page, not a form sheet, on iPad: the record surface wants the room.
+        .presentationSizing(.page)
+        .task {
+            #if DEBUG
+            // Settings over the LIST when both are asked for — the destructive seams
+            // want the rebuilt record behind them, and `-DismissAfterClear` closes
+            // Settings to show it.
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains(where: RootTabView.settingsArgs.contains) {
+                try? await Task.sleep(for: .milliseconds(400))
+                surfaces.showSettings = true
+            }
+            #endif
+        }
+    }
 }
 
 #Preview {

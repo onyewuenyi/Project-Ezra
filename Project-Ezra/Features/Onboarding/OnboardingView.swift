@@ -356,8 +356,12 @@ struct OnboardingView: View {
             // word itself ("screensh / ot"); each link gets the full width instead, which
             // is the same answer `ParkedCapturesRow` and the composer's control row give.
             let secondaryInputs = ViewThatFits(in: .horizontal) {
-                HStack(spacing: Spacing.lg) { screenshotLink; sampleLink }
-                VStack(alignment: .leading, spacing: Spacing.sm) { screenshotLink; sampleLink }
+                HStack(spacing: Spacing.lg) {
+                    screenshotLink; sampleLink
+                }
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    screenshotLink; sampleLink
+                }
             }
             secondaryInputs
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -399,11 +403,17 @@ struct OnboardingView: View {
                 Button {
                     Task { await transform() }
                 } label: {
+                    // Muted while there is nothing to show (2026-09-26): disabled over a
+                    // grey capsule, the label stayed full white and read as tappable.
                     Text("Show me")
                         .font(.ctaLabel)
-                        .foregroundStyle(Palette.onAccent)
+                        .foregroundStyle(canTransform ? Palette.onAccent : Palette.mutedText)
+                        .multilineTextAlignment(.center)
+                        .minimumScaleFactor(0.8)
+                        .padding(.horizontal, Spacing.lg)
+                        .padding(.vertical, Spacing.sm)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 54)
+                        .frame(minHeight: 54)
                         .background(
                             canTransform
                                 ? AnyShapeStyle(Palette.accentGradient)
@@ -477,8 +487,8 @@ struct OnboardingView: View {
             // diagnostics card. Nothing replaces it — the wait already has a heading and
             // the settling field, and a second line here would only be filling space.
             #if DEBUG
-                Text(brain.status.description)
-                    .metadataStyle()
+            Text(brain.status.description)
+                .metadataStyle()
             #endif
 
             // **A way out of the longest wait in the product (2026-09-20).** This screen
@@ -553,11 +563,19 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
                     ForEach(groupedDrafts, id: \.0) { category, items in
                         VStack(alignment: .leading, spacing: Spacing.xs) {
-                            HStack(spacing: Spacing.inline) {
+                            // A kicker, not a headline (2026-09-26, the importance audit):
+                            // the areas were 17pt blue headers over 14pt tasks, so the
+                            // grouping outranked the things a parent has to do. The row's
+                            // own chip still names and edits the area.
+                            HStack(spacing: Spacing.xxs) {
                                 Image(systemName: TaskCategory.symbol(for: category))
-                                    .foregroundStyle(Palette.accentFlat)
-                                Text(category).sectionHeaderStyle()
+                                    .font(.glyphCaption())
+                                Text(category.uppercased())
+                                    .font(.metadata)
+                                    .tracking(0.6)
                             }
+                            .foregroundStyle(Palette.mutedText)
+                            .accessibilityAddTraits(.isHeader)
                             ForEach(items) { draft in
                                 if let binding = binding(for: draft) {
                                     resultRow(binding)
@@ -586,8 +604,15 @@ struct OnboardingView: View {
                         .foregroundStyle(
                             drafts.isEmpty ? Palette.secondaryText : Palette.onAccent
                         )
+                        // Inset from the capsule and allowed to shrink a little
+                        // (2026-09-26): at accessibility sizes the label ran to the
+                        // capsule's edges. The capsule grows to a second line after that.
+                        .multilineTextAlignment(.center)
+                        .minimumScaleFactor(0.8)
+                        .padding(.horizontal, Spacing.lg)
+                        .padding(.vertical, Spacing.sm)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 54)
+                        .frame(minHeight: 54)
                         .background(
                             drafts.isEmpty
                                 ? AnyShapeStyle(Palette.secondarySurface)
@@ -644,7 +669,7 @@ struct OnboardingView: View {
                         }),
                     axis: .vertical
                 )
-                .font(.supporting)
+                .font(.taskTitle)
                 .foregroundStyle(Palette.primaryText)
 
                 if draft.wrappedValue.isJudgmentCall {

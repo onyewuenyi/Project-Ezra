@@ -41,7 +41,7 @@ struct TaskAdvisorChatView: View {
     /// — the same idiom every detail surface uses.
     @FetchRequest(sortDescriptors: []) private var allTasksResults: FetchedResults<TaskItem>
     private var allTasks: [TaskItem] { Array(allTasksResults) }
-    @FetchRequest(sortDescriptors: []) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
     private var currentUserID: UUID? { profilesResults.first?.linkedMemberID }
 
     @State private var store = TaskAdvisorChatStore.shared
@@ -75,8 +75,17 @@ struct TaskAdvisorChatView: View {
 
     /// Whether the opener has anything to say: a revealed reading, or a floor reading
     /// with content. A diagnosed stall counts (the fallback template speaks).
+    private var readingIsLoading: Bool {
+        if case .loading = advisorStore.state(for: task) { return true }
+        return false
+    }
+
     private var hasOpener: Bool {
-        AdvisorView.isVisible(
+        // A reading still being generated is not an opener yet (2026-09-25): counted
+        // as one, it reserved an empty band with a hairline under it above the thread
+        // for as long as the model took. It arrives with its own transition instead.
+        if case .loading = advisorStore.state(for: task) { return false }
+        return AdvisorView.isVisible(
             state: advisorStore.state(for: task), flagged: false,
             diagnosis: StallDetector.diagnose(task, among: allTasks))
     }
@@ -162,7 +171,10 @@ struct TaskAdvisorChatView: View {
                     // The keyboard rises only when there is nothing to read first: with a
                     // reading waiting, the person came to see it, and the keyboard would
                     // cover the move they came for.
-                    if !hasOpener { composing = true }
+                    // A reading still LOADING counts: it is coming, and a keyboard raised
+                    // now covers it when it lands (2026-09-26 — the regression the
+                    // no-empty-band change caused, found at accessibility sizes).
+                    if !hasOpener && !readingIsLoading { composing = true }
                     // Warm the session on these facts while they read or type.
                     if let scope = TaskInquiryScope(facts: facts) { InquiryService.shared.prewarm(scope) }
                 }
@@ -189,9 +201,15 @@ struct TaskAdvisorChatView: View {
                     if messages.isEmpty {
                         emptyState
                     } else {
-                        ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                        let thread = messages
+                        // The divider reads the PREVIOUS line from the same snapshot the ForEach was
+                        // built over, never the live store: the home re-seats its openers when the
+                        // household moves (a clear, a sync), the list shrinks mid-render, and an
+                        // index taken from the old snapshot trapped on the new list ("Index out of
+                        // range", measured on the clear-all path, 2026-09-23).
+                        ForEach(Array(thread.enumerated()), id: \.element.id) { index, message in
                             if ChatThreadRhythm.needsDivider(
-                                before: message, after: index > 0 ? messages[index - 1] : nil)
+                                before: message, after: index > 0 ? thread[index - 1] : nil)
                             {
                                 ChatTimeDivider(date: message.sentAt)
                             }
@@ -332,6 +350,9 @@ struct TaskAdvisorChatView: View {
         draft = ""
         withAnimation(reduceMotion ? nil : Motion.settle) {
             store.ask(question, task: task, among: allTasks)
+            // A person's question, and which rung answered it (2026-09-23).
+            Telemetry.log(
+                .askAsked(scope: .task, route: store.lastRoute(key: task.uuid) == .floor ? .floor : .model))
         }
     }
 }

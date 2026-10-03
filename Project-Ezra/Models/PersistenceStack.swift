@@ -199,6 +199,13 @@ enum PersistenceStack {
         container.persistentStoreCoordinator.persistentStore(for: sharedStoreURL)
     }
 
+    /// Whether `store` is the shared-database mirror — a household someone ELSE owns. Read
+    /// from the file name, so it answers from inside a save or a plain fetch with no
+    /// container in hand. An unsaved object has no store yet and is never shared.
+    static func isShared(_ store: NSPersistentStore?) -> Bool {
+        store?.url?.lastPathComponent == sharedStoreFileName
+    }
+
     // MARK: - Safety copies
 
     /// Where a store and its safety copies live.

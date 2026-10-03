@@ -41,7 +41,8 @@ final class Household: NSManagedObject {
         name: String? = nil, photoData: Data? = nil,
         in context: NSManagedObjectContext = PersistenceStack.scratch
     ) {
-        self.init(entity: NSEntityDescription.entity(forEntityName: "Household", in: context)!, insertInto: context)
+        self.init(
+            entity: NSEntityDescription.entity(forEntityName: "Household", in: context)!, insertInto: context)
         self.id = UUID()
         self.name = name
         self.photoData = photoData
@@ -84,10 +85,34 @@ final class Household: NSManagedObject {
 
     /// The working household, or nil when this install has none yet. Never creates —
     /// `HouseholdStoreAffinity` reads it from inside a save, where inserting is not allowed.
+    ///
+    /// **A household someone shared with this phone wins outright (2026-09-30).** A
+    /// participant's install bootstrapped a household of its own on first launch, and the
+    /// largest-roster rule alone let that one beat the household they were invited into —
+    /// two members each was enough — after which every new task landed in the private
+    /// store and the person never saw the shared plan. Joining IS choosing.
     static func existing(in context: NSManagedObjectContext) -> Household? {
         let request = NSFetchRequest<Household>(entityName: "Household")
-        guard let all = try? context.fetch(request), !all.isEmpty else { return nil }
-        return all.min { lhs, rhs in
+        guard let all = try? context.fetch(request) else { return nil }
+        return preferred(among: all) { PersistenceStack.isShared($0.objectID.persistentStore) }
+    }
+
+    /// This install's OWN household — the working one, never one someone shared with it.
+    /// Where a fresh identity is minted: a participant who has not yet said which member
+    /// they are must not appear in another person's household as a stranger called "You".
+    static func own(in context: NSManagedObjectContext) -> Household {
+        let request = NSFetchRequest<Household>(entityName: "Household")
+        let mine = ((try? context.fetch(request)) ?? [])
+            .filter { !PersistenceStack.isShared($0.objectID.persistentStore) }
+        return preferred(among: mine, isShared: { _ in false }) ?? Household(in: context)
+    }
+
+    /// The choice, as a pure function: a shared household first, then the larger roster,
+    /// then the older.
+    static func preferred(among all: [Household], isShared: (Household) -> Bool) -> Household? {
+        let shared = all.filter(isShared)
+        let pool = shared.isEmpty ? all : shared
+        return pool.min { lhs, rhs in
             let l = lhs.activeMembers.count, r = rhs.activeMembers.count
             if l != r { return l > r }
             return lhs.createdAt < rhs.createdAt

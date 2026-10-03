@@ -66,6 +66,22 @@ struct SubmissionGateTests {
         }
     }
 
+    /// The transcriber is `SpeechAnalyzer`, which asks no speech-recognition permission —
+    /// but upload processing reads framework linkage, not call sites, and a Speech-linked
+    /// binary with no reason is a rejection mailed after the upload. Declared, and held to
+    /// the microphone's rules (2026-09-30).
+    @Test("Speech recognition has a reason, in the product's words")
+    func speechRecognitionUsageIsDescribed() throws {
+        let reason = try #require(
+            try infoPlist()["NSSpeechRecognitionUsageDescription"] as? String,
+            "NSSpeechRecognitionUsageDescription is missing")
+        #expect(reason.count > 30)
+        #expect(reason.lowercased().contains("device"), "say that the words stay on the device")
+        for vendor in ["AI", "Gemini", "OpenAI", "model", "LLM"] {
+            #expect(!reason.contains(vendor), "the customer never hears \"\(vendor)\"")
+        }
+    }
+
     /// Guideline 5.1.1(i): an app that collects data links its privacy policy from inside
     /// the app. Until the page exists the app must render NO link — a 404 under "Privacy
     /// policy" is the first thing a reviewer taps, and it is worse than an absence.
