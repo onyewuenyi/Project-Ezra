@@ -38,48 +38,6 @@ struct SyncGateTests {
         return member
     }
 
-    // MARK: - The Brief's ownership filter
-
-    /// The two owners the filter has to tell apart, plus their tasks.
-    private func ownedPair(
-        in context: NSManagedObjectContext
-    )
-        -> (me: UUID?, mine: TaskItem, theirs: TaskItem)
-    {
-        let me = UserProfile.bootstrapIdentity(in: context)
-        let other = otherMember("Maya", in: context)
-        let mine = TaskItem(title: "Renew my passport", in: context)
-        mine.ownerID = me.uuid
-        let theirs = TaskItem(title: "Sort the insurance", in: context)
-        theirs.ownerID = other.uuid
-        context.saveChanges()
-        return (me.uuid, mine, theirs)
-    }
-
-    @Test("Before sync, the Brief keeps every task regardless of nominal owner")
-    func beforeSyncNothingIsFilteredOut() {
-        let context = context()
-        let (me, mine, theirs) = ownedPair(in: context)
-
-        // The pre-sync guarantee: work owned by someone with no device in the graph must
-        // NOT leave your briefing, or it lands nowhere anyone can act on it.
-        let candidates = TodayQueries.candidates(
-            from: [mine, theirs], currentUserID: me, syncIsLive: false, now: Date())
-        #expect(Set(candidates.compactMap(\.uuid)) == Set([mine, theirs].compactMap(\.uuid)))
-    }
-
-    @Test("Once sync is live, the Brief composes only MY day")
-    func afterSyncOthersWorkLeavesTheBriefing() {
-        let context = context()
-        let (me, mine, theirs) = ownedPair(in: context)
-
-        // The Brief is *my* execution; coordination is a different surface. This is the
-        // behaviour that has been waiting behind the gate, running for the first time.
-        let candidates = TodayQueries.candidates(
-            from: [mine, theirs], currentUserID: me, syncIsLive: true, now: Date())
-        #expect(candidates.compactMap(\.uuid) == [mine].compactMap(\.uuid))
-    }
-
     // MARK: - The publish boundary
 
     @Test("Before sync, nothing is ever published — even a task owned by someone else")

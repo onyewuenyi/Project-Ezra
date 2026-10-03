@@ -18,6 +18,14 @@
 
 import CoreData
 
+/// The capacity a day was planned at. Lives here, with its only remaining reader: the Brief
+/// that chose it is cut, but `CapacityLog` is a frozen-schema entity and keeps the field.
+enum Capacity: String, CaseIterable, Codable, Sendable {
+    case full
+    case steady
+    case light
+}
+
 @objc(CapacityLog)
 final class CapacityLog: NSManagedObject {
     /// Stable identity, mirroring the other models' UUID idiom.
