@@ -18,7 +18,7 @@ mkdir -p "$BUILD_DIR"; rm -rf "$BUILD_DIR/build.xcresult"
 read -r -a container <<< "$(xc_container)"
 set +e
 xcodebuild $action "${container[@]}" -scheme "$SCHEME" -destination "id=$udid" \
-  -derivedDataPath "$DD" -resultBundlePath "$BUILD_DIR/build.xcresult" "$@" > "$BUILD_DIR/build.log" 2>&1
+  -derivedDataPath "$DD" -resultBundlePath "$BUILD_DIR/build.xcresult" "$@" < /dev/null > "$BUILD_DIR/build.log" 2>&1
 rc=$?
 set -e
 cd "$AI_ROOT"
