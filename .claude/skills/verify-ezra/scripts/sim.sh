@@ -190,8 +190,14 @@ guard)
 
 crashes)
   exe=${1:?executable name}; since=${2:?epoch seconds}
-  find "$HOME/Library/Logs/DiagnosticReports" -name "${exe}*.ips" -newermt "@$since" 2>/dev/null \
-    -exec sh -c 'for f; do printf "%s  %s\n" "$(stat -f "%Sm" -t "%H:%M:%S" "$f")" "$f"; done' _ {} + | sort
+  # BSD find has no -newermt @epoch (it errored silently, so "no crashes" was never a real answer).
+  python3 - "$HOME/Library/Logs/DiagnosticReports" "$exe" "$since" <<'PY'
+import sys, pathlib, time
+d, exe, since = pathlib.Path(sys.argv[1]), sys.argv[2], float(sys.argv[3])
+for p in sorted(d.glob(f"{exe}*.ips")) if d.exists() else []:
+    if p.stat().st_mtime >= since:
+        print(time.strftime("%H:%M:%S", time.localtime(p.stat().st_mtime)), "", p)
+PY
   ;;
 
 shot)
