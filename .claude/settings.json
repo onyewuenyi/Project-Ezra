@@ -46,6 +46,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/bearings.py\"",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {
@@ -85,7 +96,9 @@
       "mcp__xcode__DeviceInteractionStartWorkspaceSession",
       "mcp__xcode__DeviceInteractionInstallAndRun",
       "mcp__xcode__DeviceInteractionSynthesize",
-      "mcp__xcode__DeviceInteractionEndSession"
+      "mcp__xcode__DeviceInteractionEndSession",
+      "Bash(git worktree list:*)",
+      "Bash(git fetch:*)"
     ],
     "ask": [
       "Bash(git push:*)",
@@ -96,7 +109,10 @@
       "mcp__xcode__AddInfoPlist",
       "mcp__xcode__XcodeRM",
       "mcp__xcode__XcodeNewTarget",
-      "Bash(gh pr merge:*)"
+      "Bash(gh pr merge:*)",
+      "Bash(scripts/ai/cloud.sh:*)",
+      "Bash(bash scripts/ai/cloud.sh:*)",
+      "Bash(gh pr comment:*)"
     ],
     "deny": [
       "Read(./.env)",

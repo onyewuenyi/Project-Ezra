@@ -47,3 +47,4 @@ GoogleService-Info.plist
 eval-reports/
 .claude/ios.local.env
 .claude/worktrees/
+__pycache__/

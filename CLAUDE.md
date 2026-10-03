@@ -36,13 +36,14 @@ xcodebuild test -project Project-Ezra.xcodeproj -scheme Project-Ezra \
 - Update `docs/cohort0-checklist.md` in the same change that changes a flow.
 - When a rule changes, change it in its `.claude/rules/` file and its long form in `docs/decisions.md`.
 
-<!-- ios-ai-kit:begin (managed by ios-ai-kit install.sh; edit .claude/ios.env, not this block) -->
+<!-- ios-ai-kit:begin (managed by ios-ai-kit install.py; edit .claude/ios.env, not this block) -->
 ## iOS loop (ios-ai-kit)
 
 - **Project:** Project-Ezra.xcodeproj · scheme `Project-Ezra` · app `amanze-studios.Project-Ezra` · iOS 27.0 · files: synchronized folders (a new .swift file in the target's folder compiles automatically).
 - **Build / test / gate** (each checkout gets its own simulator and `.build/dd`, automatically): `scripts/ai/build.sh` · `scripts/ai/test.sh [-only-testing:Target/Suite/test()]` · `/verify` (format, build with no new warnings, tests, launch-argument safety, blast radius, visual matrix). New machine: `scripts/ai/bootstrap.sh`. Anything odd: `scripts/ai/doctor.sh`.
 - **Hard rules:** never edit `*.pbxproj` by hand; never delete project files (disable instead); never change build settings unless the task says so; never print secrets; one logical change per build; drive simulators only through `scripts/ai/sim.sh` (by UDID, never `booted`).
 - **Every change reaches the default branch through a pull request, never a direct push** (the guard refuses one; GitHub's ruleset from `scripts/ai/protect-main.sh` is the lock): commit, then `scripts/ai/pr.sh` (it moves commits made on the default branch onto a new branch, pushes, and opens the PR with the `/verify` report). Never merge your own PR; the owner merges.
+- **Owning the work:** a non-trivial task follows its playbook (the `ios-loop` router). `/lead` (or `/loop /lead`) follows every open PR until it is merged, abandoned or taken back; `scripts/ai/cloud.sh` delegates work that needs no Xcode. `/interrogate` reviews a diff adversarially, `/reflect` turns a lesson into structure, `/friction` finds what keeps costing time, `/map` keeps the screen list honest.
 - **Apple's exported skills win** on any API question (`swiftui-specialist`, `swiftui-whats-new-27`, …). The loop, MCP-versus-shell, bug-fix, UI two-pass and parallel rules: the `ios-loop` skill.
 - **Cloud sessions have no Xcode:** never run `xcodebuild` or `simctl` there; say "not compiled with Xcode", list every unverified item, push only your own `claude/*` branch and open a PR (the cloud gate approves exactly that and refuses any other push or merge, with a reason; follow it, never retry around it); it merges only after `/verify` passes on a Mac.
 <!-- ios-ai-kit:end -->

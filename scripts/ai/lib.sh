@@ -15,6 +15,10 @@ BUILD_DIR="$AI_ROOT/.build"
 DD="$BUILD_DIR/dd"                      # per-checkout DerivedData: worktrees never share one
 EVIDENCE_ROOT="$BUILD_DIR/evidence"
 LOCAL_ENV="$AI_ROOT/.claude/ios.local.env"
+# Shared, uncommitted state for every worktree of this repo (verify history, the PR digest, cloud
+# delegations, healthcheck stamps): inside git's common dir, so `rm -rf .build` never wipes it.
+STATE_DIR="$(git -C "$AI_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$AI_ROOT/.git")/ios-ai"
+state_dir() { mkdir -p "$STATE_DIR" && echo "$STATE_DIR"; }
 
 die() { echo "ios-ai: $*" >&2; exit 1; }
 say() { echo "ios-ai: $*" >&2; }

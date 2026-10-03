@@ -50,8 +50,8 @@ if url=$(gh pr view "$branch" --json url,state -q 'select(.state=="OPEN") | .url
   echo "pr: updated $url"; exit 0
 fi
 report=$AI_ROOT/.build/verify/report.md
-committed=$(git log -1 --format=%ct)
-if [[ -f $report ]] && (( $(stat -f %m "$report") >= committed )); then
+# fresh = verify.sh stamped this exact commit on a clean tree (its first line)
+if [[ -f $report ]] && head -1 "$report" | grep -q "sha=$(git rev-parse HEAD) dirty=0"; then
   body=$(cat "$report")
 else
   body=$(printf '## Changes\n\n%s\n\n## Verification\n\n/verify has not run on this commit: run it before merging (cloud-authored branches run it on a Mac).\n' \

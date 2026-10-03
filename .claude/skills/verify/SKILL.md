@@ -7,6 +7,12 @@ argument-hint: "[--no-visual] [--no-tests] [screen names…]"
 
 # Verify
 
+**Job:** run every gate on the working tree and write the PR-ready report, with the visual sheets judged by eye.
+
+**Not my job:** merging · pushing to the default branch · fixing beyond three attempts per gate · calling a skipped gate passed · judging a sheet nobody looked at.
+
+**When there is nothing to report:** the gate table, all PASS, and the "Not verified here" list.
+
 1. Run `scripts/ai/verify.sh $ARGUMENTS`. It runs every gate even after a failure and writes `.build/verify/report.md`.
 2. For each failed gate, read `.build/verify/<gate>.txt`.
    - **Fix it** if it is in this change's scope, and re-run.
