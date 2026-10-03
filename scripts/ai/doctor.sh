@@ -47,9 +47,11 @@ if command -v gh >/dev/null && b=$(cd "$AI_ROOT" && gh repo view --json nameWith
   elif [[ $rules == *non_fast_forward* ]]; then warn "GitHub: '${b#* }' still accepts direct pushes: scripts/ai/protect-main.sh"
   else warn "GitHub: '${b#* }' is not protected (force push, deletion, direct push): scripts/ai/protect-main.sh"; fi
 fi
-if grep -qs '"ios-stack@[^"]*": *true' "$HOME/.claude/settings.json" "$AI_ROOT/.claude/settings.json" "$AI_ROOT/.claude/settings.local.json"; then
-  warn "the retired ios-stack plugin is still enabled: its hooks double the kit's (claude plugin uninstall ios-stack)"
-fi
+for f_scope in "$HOME/.claude/settings.json:user" "$AI_ROOT/.claude/settings.json:project" "$AI_ROOT/.claude/settings.local.json:local"; do
+  if grep -qs '"ios-stack@[^"]*": *true' "${f_scope%:*}"; then
+    warn "the retired ios-stack plugin is still enabled ($(basename "${f_scope%:*}")): its hooks double the kit's (claude plugin uninstall ios-stack --scope ${f_scope##*:})"
+  fi
+done
 [[ -f $AI_ROOT/.mcp.json ]] && grep -q mcpbridge "$AI_ROOT/.mcp.json" && ok ".mcp.json registers xcrun mcpbridge" || warn ".mcp.json has no Xcode server"
 # The session-start bearings read this cache (first line: when), so sessions see what is left.
 { date +%s; for l in ${seen[@]+"${seen[@]}"}; do echo "$l"; done; } > "$(state_dir)/doctor.txt" 2>/dev/null || true
