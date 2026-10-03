@@ -281,8 +281,11 @@ struct CaptureCommitTests {
         let entries = try context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))
         let linked = try #require(
             entries.first { $0.action == "linked" && $0.fieldChanged == "blockers" })
-        ChangeLogUndo.revert(linked, in: context)
+        // Mark, then revert: the order every undo path uses. Writing to an entry AFTER
+        // `revert` has read its strings snapshots them, and that is the Core Data fault
+        // `TestStore` documents (this test crashed 3/3 in the other order, 2026-10-03).
         linked.undone = true
+        ChangeLogUndo.revert(linked, in: context)
         #expect(!existing.hasActiveBlockers(among: TaskItem.fetchAll(in: context)))  // edge gone
         #expect(existing.lastUnblockedAt == nil)  // NOT fabricated by the undo
     }

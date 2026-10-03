@@ -257,7 +257,10 @@ struct HouseholdSharingTests {
             .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
         var offenders: [String] = []
         for url in files {
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            // One declaration per line even when swift-format wraps it after the colon
+            // (`…profilesResults:` / `FetchedResults<UserProfile>`, 2026-10-03).
+            let text = raw.replacing(/:\n\s+/, with: ": ")
             for line in text.split(separator: "\n")
             where line.contains("FetchedResults<UserProfile>") && !line.contains("UserProfile.chosenOrder") {
                 offenders.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")

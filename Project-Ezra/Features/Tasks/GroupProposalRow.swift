@@ -19,7 +19,8 @@ import SwiftUI
 struct GroupProposalRow: View {
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
-    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults:
+        FetchedResults<UserProfile>
     @State private var proposals = GroupProposals.shared
     @State private var asking: GroupProposal?
     @Binding var notice: UndoNotice?
@@ -140,9 +141,12 @@ struct GroupProposalRow: View {
                     : "Added \(proposal.memberTitles.count) tasks to “\(proposal.title)”")
                 : "Grouped \(proposal.memberTitles.count) tasks as “\(proposal.title)”",
             undoAction: {
+                // Mark, then revert, as every other undo path does: a write to an entry
+                // after `revert` read its strings is the snapshot fault `TestStore`
+                // documents (it crashed CaptureCommitTests 3/3 in this order, 2026-10-03).
                 for entry in entries {
-                    ChangeLogUndo.revert(entry, in: context)
                     entry.undone = true
+                    ChangeLogUndo.revert(entry, in: context)
                 }
                 context.saveChanges()
             })

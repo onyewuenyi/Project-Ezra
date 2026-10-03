@@ -16,9 +16,11 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.managedObjectContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(AppBrain.self) private var brain
 
-    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults:
+        FetchedResults<UserProfile>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \ChangeLogEntry.timestamp, ascending: false)])
@@ -154,8 +156,16 @@ struct SettingsView: View {
     /// the least-changed thing in Settings, and an 88pt photo over a 28pt name made it
     /// the page's largest object, pushing the digest and privacy sections below the
     /// fold. Same editors, row weight.
+    ///
+    /// At accessibility sizes the photo sits ABOVE the name: beside it, a surname longer
+    /// than the remaining width cannot wrap (one word) and was cut to "Charles Onyewuen"
+    /// (2026-10-02, the /verify AX5 sheet). Stacked, the name has the card's whole width.
     private var profileCard: some View {
-        HStack(spacing: Spacing.md) {
+        let layout =
+            dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: Spacing.sm))
+            : AnyLayout(HStackLayout(spacing: Spacing.md))
+        return layout {
             PhotosPicker(selection: $photoItem, matching: .images) {
                 AvatarView(profile: profile, size: 52)
             }

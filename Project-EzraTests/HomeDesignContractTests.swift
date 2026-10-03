@@ -143,6 +143,28 @@ struct HomeDesignContractTests {
         #expect(card.contains { $0.contains(".font(presentation == .hero ? .navTitle : .sectionHeader)") })
     }
 
+    /// At accessibility sizes a fixed-width neighbour must not squeeze the text that names
+    /// the thing (2026-10-03, the /verify AX5 sheet): the list row's WHEN moves under the
+    /// title ("Pay th…" beside "1d over"), and the profile photo stacks above the name (a
+    /// one-word surname cannot wrap and read "Charles Onyewuen").
+    @Test
+    func accessibilitySizesGiveTheNameTheWidth() throws {
+        let row = try code("Features/Tasks/TaskRow.swift")
+        #expect(
+            row.contains {
+                $0.contains("private var whenStacked: Bool { dynamicTypeSize.isAccessibilitySize }")
+            })
+        #expect(
+            row.contains { $0.contains("if whenStacked { whenLabel }") },
+            "stacked, the WHEN reads under the title")
+        #expect(row.contains { $0.contains("if !whenStacked { whenLabel") }, "and only there; never twice")
+        let settings = try code("Features/Settings/SettingsView.swift").joined(separator: "\n")
+        #expect(
+            settings.contains("dynamicTypeSize.isAccessibilitySize")
+                && settings.contains("AnyLayout(VStackLayout(alignment: .leading"),
+            "the profile stacks at accessibility sizes")
+    }
+
     @Test("A commit keeps the reveal on screen while the sheet leaves, and never parks a duplicate")
     func commitDoesNotFlashEmpty() throws {
         let composer = try code("Features/Capture/ComposerView.swift")
@@ -203,4 +225,26 @@ struct HomeDesignContractTests {
         #expect(home.contains { $0.contains("Telemetry.log(.captureLandedBelow") })
         #expect(home.contains { $0.contains("lookStartedAt = Date()") })
     }
+
+    /// Every undo marks the entry BEFORE reverting it. A write to a `ChangeLogEntry` after
+    /// `ChangeLogUndo.revert` has read its strings snapshots them, the Core Data fault
+    /// `TestStore` documents: `CaptureCommitTests.undoLinkedClearsUnblockStamp` crashed
+    /// 3/3 in the other order, and `GroupProposalRow`'s undo had it too (2026-10-03).
+    @Test
+    func undoMarksBeforeItReverts() throws {
+        let sites = [
+            "Features/Activity/ActivityView.swift", "Features/Activity/ActivityDetailView.swift",
+            "Features/Detail/TaskDetailView.swift", "Features/Tasks/GroupProposalRow.swift",
+        ]
+        for site in sites {
+            let lines = try code(site)
+            for (i, line) in lines.enumerated() where line.contains("ChangeLogUndo.revert(") {
+                let after = lines[(i + 1)..<min(i + 3, lines.count)]
+                #expect(
+                    !after.contains { $0.contains(".undone = true") },
+                    "\(site):\(i + 1) marks the entry undone after reverting it")
+            }
+        }
+    }
+
 }

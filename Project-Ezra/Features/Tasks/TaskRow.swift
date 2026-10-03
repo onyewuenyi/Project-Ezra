@@ -121,6 +121,34 @@ struct TaskRow: View {
         return RelativeAge.compact(at)
     }
 
+    /// At accessibility sizes the WHEN reads under the title, so the title keeps the row.
+    private var whenStacked: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    /// The row's WHEN: the due label on live work, the age on a resolved record. Only a
+    /// real date earns the ink (undated shows nothing), and overdue wears the one token
+    /// that means exactly that. One word to the eye, so it holds its width.
+    @ViewBuilder
+    private var whenLabel: some View {
+        if let due = dueLabel {
+            Text(due.text)
+                .font(.chipLabel)
+                .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        } else if let age = resolvedAge {
+            // A resolved row is a record, and a record says when. Same slot, the
+            // quietest register, in `RelativeAge`'s vocabulary ("2h ago") rather than
+            // the due label's ("Fri") so the two never read as the same claim.
+            Text(age)
+                .font(.chipLabel)
+                .foregroundStyle(Palette.mutedText)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
     var body: some View {
         HStack(spacing: Spacing.sm) {
             // The user's attention Signal surfaces as a leading mark here (the record
@@ -148,6 +176,7 @@ struct TaskRow: View {
                     .foregroundStyle(Palette.primaryText)
                     .lineLimit(LayoutMetrics.listTitleLines(for: dynamicTypeSize))
                     .truncationMode(.tail)
+                if whenStacked { whenLabel }
                 // Only when there is something to say. Reserving the line on every deck
                 // card was tried — a blank second line reads as a card missing its
                 // subtitle, the title floating above the glyph's centre — so a deck's
@@ -171,32 +200,10 @@ struct TaskRow: View {
 
             // WHEN, because position cannot carry it: ranking explains which row
             // outranks which, but two neighbours — one due today, one undated — read
-            // identically without this. Only a real date earns the ink (undated shows
-            // nothing), only live work (a resolved row is a record; its due is over),
-            // and overdue wears the one token that means exactly that.
-            // The WHEN token is one word to the eye — "1d over", "Sun", "2h ago" — and
-            // holds its width: at accessibility sizes, beside the avatar column, the
-            // HStack folded "1d over" into "1d" over "over" (2026-09-18). The title is
-            // the part that yields; it has two lines there for exactly this.
-            if let due = dueLabel {
-                Text(due.text)
-                    .font(.chipLabel)
-                    .foregroundStyle(due.isOverdue ? Palette.overdue : Palette.mutedText)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .recessed(isBlocked)
-            } else if let age = resolvedAge {
-                // A resolved row is a record, and a record says when. Same slot, the
-                // quietest register, in `RelativeAge`'s vocabulary ("2h ago") rather than
-                // the due label's ("Fri") so the two never read as the same claim.
-                Text(age)
-                    .font(.chipLabel)
-                    .foregroundStyle(Palette.mutedText)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
+            // identically without this. At accessibility sizes it moves under the title
+            // (`whenStacked`): beside it, the fixed-width "1d over" took half the row and
+            // squeezed a two-line title to "Pay th…" (2026-10-02, the /verify AX5 sheet).
+            if !whenStacked { whenLabel.recessed(isBlocked) }  // stacked, the title column recedes it
 
             trailingAvatar
         }
@@ -406,15 +413,15 @@ struct TaskRow: View {
         if isBlocked { parts.append(blockerSummary.map { "blocked, \($0)" } ?? "blocked") }
         if let stepProgress { parts.append(stepProgress.label) }
         // A subtitle that is only whitespace is a HEIGHT RESERVATION, not a sentence —
-            // `TaskDeckView` passes a single space to keep non-waiting cards the same
-            // height as waiting ones. Spoken verbatim it produced "Book flights, To do,
-            // due Friday, , " — a trailing empty component and a spurious pause on every
-            // card in any deck that contains a waiting member (2026-09-20).
-            if let subtitle, !isBlocked,
-                !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                parts.append(subtitle)
-            }
+        // `TaskDeckView` passes a single space to keep non-waiting cards the same
+        // height as waiting ones. Spoken verbatim it produced "Book flights, To do,
+        // due Friday, , " — a trailing empty component and a spurious pause on every
+        // card in any deck that contains a waiting member (2026-09-20).
+        if let subtitle, !isBlocked,
+            !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            parts.append(subtitle)
+        }
         if let ownerDisplayName {
             parts.append("owned by \(ownerDisplayName)")
         } else if task.ownerID == nil {
