@@ -124,6 +124,8 @@ def classify(pr: dict, ctx: dict) -> tuple[str, str, str]:
 
 
 def fetch(everyone: bool) -> dict:
+    if "github.com" not in git("remote", "get-url", "origin"):
+        raise RuntimeError("this repository has no GitHub remote, so there are no pull requests to follow")
     who = [] if everyone else ["--author", "@me"]
     raw = gh("pr", "list", "--state", "open", "--limit", "50", *who, "--json", FIELDS)
     if raw is None:
