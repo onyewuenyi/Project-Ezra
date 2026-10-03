@@ -20,7 +20,16 @@ Two or three sessions at most. `claude --worktree <name>` or `scripts/ai/worktre
 
 ## Cloud sessions
 
-`claude --cloud "<task>"` for work that needs no Xcode: docs, scripts and CI config, String Catalog edits, audits and log triage, mechanical refactors, Foundation-only package logic. One-time: `/web-setup` (or install the Claude GitHub App). The cloud branch merges only after `/verify` passes on a Mac; label the PR `cloud-authored`. Recurring chores: `/schedule`.
+`claude --cloud "<task>"` for work that needs no Xcode: docs, scripts and CI config, String Catalog edits, audits and log triage, mechanical refactors, Foundation-only package logic. The cloud branch merges only after `/verify` passes on a Mac; label the PR `cloud-authored`. Recurring chores: `/schedule`.
+
+A cloud session has nobody to answer a permission prompt, so the **cloud gate** (`.claude/hooks/cloud-gate.py`, a `PermissionRequest` hook) answers in your place there, and only there: it approves a command made only of `git add/commit`, a push of explicit `claude/*` branches to `origin`, `gh pr create`, and read-only filters; it refuses everything else with a reason the session reads and follows. Locally it is silent and you get the prompt as before. It never overrides a deny rule and never grants anything beyond the one call. Prefix and on/off: `CLOUD_BRANCH_PREFIX` / `CLOUD_PUBLISH` in `.claude/ios.env`. The Stop hook's build check is skipped there (no Xcode); the report says "not compiled with Xcode" instead.
+
+### First run in a new repo (owner, once)
+
+1. Open Claude Code in the repo once and accept "Do you trust the files in this folder?": until then the committed permission rules are ignored.
+2. `/web-setup` (or install the Claude GitHub App) so cloud sessions can clone and push.
+3. `scripts/ai/protect-main.sh`: GitHub itself refuses force pushes and deletion of the default branch, for every actor; the gate is enforced only inside Claude Code. Add `--require-pr` when nobody pushes to the default branch directly. `scripts/ai/doctor.sh` reports which is in place.
+4. Cloud tasks run in the **Default** permission mode; Auto mode is not needed for them to finish.
 
 ## Rollout
 

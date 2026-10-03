@@ -90,7 +90,8 @@ Every change goes through the same loop, one logical change per build. Your clai
 - never run `xcodebuild` or `simctl`;
 - say "not compiled with Xcode";
 - list every unverified item;
-- push a branch.
+- commit, push your own branch with `git push -u origin claude/<name>` (explicit remote and branch), and open a PR with `gh pr create`.
+- Nobody is there to answer a permission prompt, so the cloud gate answers: it approves exactly that publish shape, and refuses anything else (pushing to the default branch, force, delete, merge, `rm -rf`, an edit that needs approval) with a reason. Follow the reason; never retry the same thing in another form. Anything you could not do goes in the report as not done.
 
 **Back on the Mac:** that branch runs `/verify` before it merges.
 

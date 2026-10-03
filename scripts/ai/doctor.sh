@@ -27,5 +27,10 @@ if [[ -d $HOME/.claude/skills/swiftui-specialist ]]; then
   [[ $want == "$have" ]] && ok "Apple's Xcode skills exported ($have)" || warn "Apple's skills were exported from '$have', Xcode is '$want': scripts/ai/bootstrap.sh re-exports"
 else warn "Apple's Xcode skills not exported: scripts/ai/bootstrap.sh"; fi
 if pgrep -xq Xcode; then ok "Xcode is running (the Xcode MCP tools can connect)"; else warn "Xcode is not running: the MCP path (previews, device interaction) is off; every step still works from the shell"; fi
+if command -v gh >/dev/null && b=$(cd "$AI_ROOT" && gh repo view --json nameWithOwner,defaultBranchRef -q '.nameWithOwner + " " + .defaultBranchRef.name' 2>/dev/null); then
+  rules=$(gh api "repos/${b% *}/rules/branches/${b#* }" -q '[.[].type] | join(",")' 2>/dev/null || echo "?")
+  if [[ $rules == *non_fast_forward* && $rules == *deletion* ]]; then ok "GitHub refuses force pushes and deletion of '${b#* }' ($rules)"
+  else warn "'${b#* }' on GitHub is not protected against force push/deletion: scripts/ai/protect-main.sh (the cloud gate is only enforced inside Claude Code)"; fi
+fi
 [[ -f $AI_ROOT/.mcp.json ]] && grep -q mcpbridge "$AI_ROOT/.mcp.json" && ok ".mcp.json registers xcrun mcpbridge" || warn ".mcp.json has no Xcode server"
 exit $bad

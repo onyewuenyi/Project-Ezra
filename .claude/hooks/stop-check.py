@@ -5,10 +5,12 @@ Runs scripts/ai/check.sh (format lint + incremental build on this change; cached
 an unchanged tree costs nothing). On failure it exits 2 with a short summary on stderr, so Claude
 continues and fixes it, or says plainly why it cannot. Never blocks twice in a row
 (stop_hook_active), never blocks without code changes, never blocks on its own errors.
+Silent in a cloud session (CLAUDE_CODE_REMOTE=true) and wherever xcodebuild is missing.
 Off for a session: IOS_AI_STOP_CHECK=0. Time budget: IOS_AI_STOP_TIMEOUT seconds (default 240).
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +22,10 @@ def main() -> int:
     except Exception:
         return 0
     if ev.get("stop_hook_active") or os.environ.get("IOS_AI_STOP_CHECK", "1") == "0":
+        return 0
+    # A cloud session (or any machine without Xcode) cannot build: its report says "not compiled
+    # with Xcode" instead, and the branch runs /verify on a Mac before it merges.
+    if os.environ.get("CLAUDE_CODE_REMOTE") == "true" or not shutil.which("xcodebuild"):
         return 0
     root = Path(ev.get("cwd") or os.getcwd())
     try:
