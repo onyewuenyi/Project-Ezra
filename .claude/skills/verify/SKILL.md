@@ -23,5 +23,6 @@ argument-hint: "[--no-visual] [--no-tests] [screen names…]"
    - a filled-in **Not verified here** list (device-only behavior, anything a gate skipped).
 
    That text is the PR description's verification section.
+5. **Propose it.** When every gate passed (or each failure was accepted) and the work is committed, run `scripts/ai/pr.sh`: it opens the PR with this report as its body, or updates the open one. Never push to the default branch and never merge; the owner does.
 
 A change is done only when every gate passes, or each failure is explained and accepted by the person asking.

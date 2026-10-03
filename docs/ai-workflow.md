@@ -24,16 +24,23 @@ Two or three sessions at most. `claude --worktree <name>` or `scripts/ai/worktre
 
 A cloud session has nobody to answer a permission prompt, so the **cloud gate** (`.claude/hooks/cloud-gate.py`, a `PermissionRequest` hook) answers in your place there, and only there: it approves a command made only of `git add/commit`, a push of explicit `claude/*` branches to `origin`, `gh pr create`, and read-only filters; it refuses everything else with a reason the session reads and follows. Locally it is silent and you get the prompt as before. It never overrides a deny rule and never grants anything beyond the one call. Prefix and on/off: `CLOUD_BRANCH_PREFIX` / `CLOUD_PUBLISH` in `.claude/ios.env`. The Stop hook's build check is skipped there (no Xcode); the report says "not compiled with Xcode" instead.
 
-### First run in a new repo (owner, once)
+### First run (the steps only a person can take)
 
-1. Open Claude Code in the repo once and accept "Do you trust the files in this folder?": until then the committed permission rules are ignored.
-2. `/web-setup` (or install the Claude GitHub App) so cloud sessions can clone and push.
-3. `scripts/ai/protect-main.sh`: GitHub itself refuses force pushes and deletion of the default branch, for every actor; the gate is enforced only inside Claude Code. Add `--require-pr` when nobody pushes to the default branch directly. `scripts/ai/doctor.sh` reports which is in place.
-4. Cloud tasks run in the **Default** permission mode; Auto mode is not needed for them to finish.
+`scripts/ai/doctor.sh` reports each one it can see, with its fix.
+
+1. **Trust the folder:** run `claude` in the repo once and choose Yes on "Do you trust the files in this folder?". Until then the committed permission rules are ignored. Claude Code has no flag for it.
+2. **GitHub CLI:** `brew install gh && gh auth login`.
+3. **Lock the default branch (owner, once per repo):** `scripts/ai/protect-main.sh`. GitHub then refuses direct pushes, force pushes and deletion for everyone; changes arrive only through pull requests.
+4. **Cloud sessions:** `/web-setup` in Claude Code, or install the Claude GitHub App on the repo. Cloud tasks run in the Default permission mode; Auto is not needed.
+5. **Optional, for previews and device interaction:** Xcode ▸ Settings ▸ Intelligence ▸ Xcode Tools on; approve the agent the first time `/verify` opens the project.
+
+## How a change reaches the default branch
+
+Always through a pull request. Commit (on any branch, even the default one), run `/verify`, then `scripts/ai/pr.sh`: it moves commits made on the default branch onto a new `claude/<topic>` branch, pushes it, and opens the PR with the `/verify` report as its body (a second run updates the same PR). The owner reviews and merges on GitHub. The guard hook refuses a direct push with this instruction, and GitHub's ruleset refuses it for everyone.
 
 ## Rollout
 
-1. Pilot: one developer, one feature through the loop. Gate: `/verify` passes, no hand edits to `.pbxproj`.
+1. Pilot: one developer, one feature through the loop. Gate: `/verify` passes, no hand edits to `.pbxproj`, the change merged through a PR.
 2. Team: everyone runs `bootstrap.sh`. Gate: the smoke test passes on every Mac.
 3. Parallelism and auto mode: two worktrees and one cloud task each; review `/insights` for permission-prompt data. Gate: no cross-worktree interference, every cloud branch passed `/verify`.
 4. Lock in: pin the minimum Xcode (`MIN_XCODE` in `.claude/ios.env`) and Claude Code versions; re-run `/doctor prompt-audit` after each upgrade.

@@ -26,6 +26,7 @@ Every change goes through the same loop, one logical change per build. Your clai
    - Run `python3 scripts/ai/blast-radius.py <files>` to list every screen the change reaches, and verify those, not just the one you edited.
 8. **Gate.** `/verify` runs every gate. "Done" means it passed, and the report lists what was not verified.
 9. **Commit.** One commit per logical change. The message says why, not only what.
+10. **Propose.** Run `scripts/ai/pr.sh`. It never pushes to the default branch: commits made there move onto a new branch, which it pushes and opens as a PR, with `/verify`'s report as the body when it is fresh. A second run after more commits updates the same PR. Leave the merge to the owner.
 
 ## Xcode MCP or shell
 

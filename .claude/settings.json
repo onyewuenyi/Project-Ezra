@@ -95,7 +95,8 @@
       "mcp__xcode__AddEntitlement",
       "mcp__xcode__AddInfoPlist",
       "mcp__xcode__XcodeRM",
-      "mcp__xcode__XcodeNewTarget"
+      "mcp__xcode__XcodeNewTarget",
+      "Bash(gh pr merge:*)"
     ],
     "deny": [
       "Read(./.env)",

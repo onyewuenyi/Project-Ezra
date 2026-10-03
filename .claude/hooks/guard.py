@@ -9,9 +9,13 @@
 - simctl erase/delete all: destroys every simulator, including other sessions' (ask).
 - Editing a committed Core Data model version: a shipped version edited in place cannot
   migrate users' stores; add a new version instead (ask).
+- git push to the default branch (explicitly, via HEAD:<default>, or a bare push while on it):
+  every change reaches it through a pull request, so push a branch and open one with
+  scripts/ai/pr.sh (deny). GitHub's ruleset (scripts/ai/protect-main.sh) is the hard lock.
 """
 import json
 import re
+import shlex
 import subprocess
 import sys
 
@@ -32,7 +36,50 @@ def booted_count() -> int:
         return 0
 
 
+def git_out(*args: str) -> str:
+    try:
+        return subprocess.run(["git", *args], capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        return ""
+
+
+def default_branch() -> str:
+    ref = git_out("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")  # refs/remotes/origin/main
+    return ref.rsplit("/", 1)[-1] if ref else "main"
+
+
+def pushes_default(cmd: str) -> str | None:
+    """The default branch's name when this command pushes to it, else None."""
+    if not re.search(r"\bgit\b[^;&|]*\bpush\b", cmd):
+        return None
+    base = default_branch()
+    for part in re.split(r"&&|\|\||;|\||\n", cmd):
+        try:
+            words = shlex.split(part)
+        except ValueError:
+            words = part.split()
+        if "push" not in words or "git" not in words[: words.index("push")]:
+            continue
+        args = words[words.index("push") + 1:]
+        pos = [a for a in args if not a.startswith("-")]
+        refs = pos[1:]
+        if not refs:  # a bare push follows the current branch's upstream
+            if git_out("rev-parse", "--abbrev-ref", "HEAD") == base or "--all" in args or "--mirror" in args:
+                return base
+            continue
+        for r in refs:
+            dst = r.lstrip("+").split(":")[-1]
+            if dst in (base, f"refs/heads/{base}") or (dst == "HEAD" and git_out("rev-parse", "--abbrev-ref", "HEAD") == base):
+                return base
+    return None
+
+
 def bash(cmd: str) -> None:
+    base = pushes_default(cmd)
+    if base:
+        decide("deny", f"Every change reaches '{base}' through a pull request, never a direct push. Commit on a "
+                       "branch, then run scripts/ai/pr.sh: it moves commits made on the default branch onto a new "
+                       "branch, pushes it, and opens the PR with the /verify report.")
     if "xcodebuild" in cmd:
         for dest in re.findall(r"-destination\s+(?:'([^']*)'|\"([^\"]*)\"|(\S+))", cmd):
             d = next(x for x in dest if x)
