@@ -5,7 +5,7 @@ description: Drive Project Ezra on the iOS 27 simulator the way a user does and 
 
 # Verify Ezra
 
-Read this whole file before driving the app. Then read the feature file for what you are verifying (`features/README.md` is the index). The authoritative list of launch seams is the **Verification launch arguments** table in the repo's `CLAUDE.md`; this skill links to it rather than copying it, so there is one place to update.
+Read this whole file before driving the app. Then read the feature file for what you are verifying (`features/README.md` is the index). The authoritative list of launch seams is `seams.md` in this skill (moved verbatim from CLAUDE.md on 2026-10-02); the table below is the short version, so `seams.md` is the one place to update.
 
 All commands run from the repo root.
 
@@ -68,9 +68,10 @@ There are **no deep links** (no `CFBundleURLTypes`; `SceneDelegate` only receive
 | `-HomeHour N`, `-PressHomeVerb`, `-AskHousehold "q"`, `-SendAsk "t"`, `-DraftAsk "t"`, `-FocusAsk`, `-HouseholdChatFixture`, `-SeedGroupProposal`, `-AcceptGroupProposal` | the Ask home | `features/ask-home.md` |
 | `-OpenSettings`, `-ClearAllTasks`, `-ResetEverything` (+`-DismissAfterClear`), `-OpenActivity`, `-OpenActivityDetail N`, `-OpenRoster` | Settings, destructive paths, Activity, household | `features/settings-activity.md` |
 | `-OnboardingIntro`, `-OnboardingResult` | onboarding screens | fresh install only — `features/onboarding.md` |
-| `-RambleEval`, `-HouseholdChatEval`, … `-EvalToFile` | the evals | CLAUDE.md table; reports land in the container's `Documents/` |
+| `-OnDeviceSegment` | not an eval: the runtime enable for the boundary pass (`OnDeviceSegmenter.isRoutingEnabled`) | dogfooding only |
+| `-RambleEval`, `-HouseholdChatEval`, … `-EvalToFile` | the evals | `seams.md`; reports land in the container's `Documents/` |
 
-Seams in source but NOT in CLAUDE.md's table (2026-09-29): `-SeedEvalCorpus` (seed the corpus into an EMPTY store), `-CaptureRepeats`, `-QuickRepeats`, `-EvalCaseLimit`, `-ReverseEvalOrder` (eval knobs), and `-InitializeCloudKitSchema` — **never pass that one**: it writes the schema to the real CloudKit development container.
+Seams in source but NOT in `seams.md` (2026-09-29): `-SeedEvalCorpus` (seed the corpus into an EMPTY store), `-CaptureRepeats`, `-QuickRepeats`, `-EvalCaseLimit`, `-ReverseEvalOrder` (eval knobs), and `-InitializeCloudKitSchema` — **never pass that one**: it writes the schema to the real CloudKit development container.
 
 ```bash
 $S launch $U $B -SeedFlowFixtures -OpenTasks
@@ -81,7 +82,7 @@ Arguments containing spaces or apostrophes: pass them as separate, quoted shell 
 
 ## Evidence
 
-- Screenshots: `$S shot $U $EV/<feature>-<state>-<size>.png` at `large` and `accessibility-extra-extra-extra-large` (`$S size $U <category>`). CLAUDE.md asks every surface pass for `accessibility-extra-large` too; five of six defects on 2026-09-18 lived only there. Relaunch after changing the size — a running app reflows, but a seam fires only at launch.
+- Screenshots: `$S shot $U $EV/<feature>-<state>-<size>.png` at `large` and `accessibility-extra-extra-extra-large` (`$S size $U <category>`). `.claude/rules/surfaces.md` asks every surface pass for `accessibility-extra-large` too; five of six defects on 2026-09-18 lived only there. Relaunch after changing the size — a running app reflows, but a seam fires only at launch.
 - Wait before the shot: a seeded home is up in ~4 s; a capture reveal on the real model needs up to 30 s. Screenshot too early and you prove the orb, not the result.
 - Motion: `$S record $U $EV/<name>.mov <secs> &` BEFORE the launch that triggers it, then `$S frames $EV/<name>.mov $EV/<name>-sheet.png`. The first ~1.3 s of black is simulator process spawn, not the app.
 - Crashes: `T0=$(date +%s)` before the run, `$S crashes Project-Ezra $T0` after. Some faults (a SwiftUI `Index out of range` SIGTRAP) leave **no `.ips`** — pair it with `$S alive $U $B` after the action.
