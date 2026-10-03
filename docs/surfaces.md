@@ -1,4 +1,4 @@
-# Surfaces — navigation, My Tasks, the task detail, the Brief
+# Surfaces — navigation, the Ask home, the Tasks sheet, the task detail
 
 Extracted verbatim from `CLAUDE.md` on 2026-09-02, when that file crossed its size
 limit. **CLAUDE.md keeps the invariants; this file keeps the reasoning, the measured
