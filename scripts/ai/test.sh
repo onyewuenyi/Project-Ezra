@@ -4,6 +4,7 @@
 # usage: test.sh [-only-testing:Target/Suite[/test] …]
 source "$(dirname "$0")/lib.sh"
 udid=$(ensure_sim)
+wait_dd
 mkdir -p "$BUILD_DIR"; rm -rf "$BUILD_DIR/tests.xcresult"
 read -r -a container <<< "$(xc_container)"
 read -r -a extra <<< "$TEST_FLAGS"

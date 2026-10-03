@@ -85,6 +85,31 @@ def touches_app(pr: dict) -> bool:
     return any(APP_FILE.search(f.get("path", "")) for f in files)
 
 
+def changed_between(a: str, b: str) -> list[str] | None:
+    """Files changed from commit a to commit b; None when git cannot tell (a commit not fetched), which
+    never counts as "no app code changed"."""
+    try:
+        r = subprocess.run(["git", "diff", "--name-only", a, b], capture_output=True, text=True, timeout=15)
+    except Exception:
+        return None
+    return r.stdout.splitlines() if r.returncode == 0 else None
+
+
+def verified_at(pr: dict, rows: list, diff=changed_between) -> tuple[str | None, bool]:
+    """(commit, verified) for a PR: its head passed /verify, or the newest verified commit on it is
+    followed only by commits that touch no app code (docs, scripts, CI), which cannot change what
+    /verify checked."""
+    head = pr.get("headRefOid", "")
+    if history.verified(head, rows):
+        return head, True
+    for c in reversed(pr.get("commits") or []):
+        oid = c.get("oid")
+        if oid and oid != head and history.verified(oid, rows):
+            names = diff(oid, head)
+            return oid, names is not None and not any(APP_FILE.search(n) for n in names)
+    return None, False
+
+
 def classify(pr: dict, ctx: dict) -> tuple[str, str, str]:
     """(bucket, action, why) for one open PR. ctx: now, stale_days, me, verified, threads, behind,
     unpushed, cloud_authored, lead (the lead.json state)."""
@@ -119,7 +144,11 @@ def classify(pr: dict, ctx: dict) -> tuple[str, str, str]:
     if touches_app(pr) and not ctx.get("verified"):
         who = "cloud-authored" if ctx.get("cloud_authored") else "app code"
         return "needs-work", "verify", f"{who}, not verified at {str(pr.get('headRefOid', ''))[:7]}"
-    proof = "verified at " + str(pr.get("headRefOid", ""))[:7] if ctx.get("verified") else "no app code changed"
+    vs, head = str(ctx.get("verified_sha") or ""), str(pr.get("headRefOid", ""))
+    if ctx.get("verified"):
+        proof = f"verified at {vs[:7]}" + ("" if vs == head else f", later commits touch no app code")
+    else:
+        proof = "no app code changed"
     return "needs-you", "merge-ready", f"{proof}, mergeable, no open threads"
 
 
@@ -131,6 +160,7 @@ def fetch(everyone: bool) -> dict:
     if raw is None:
         raise RuntimeError("the GitHub CLI could not list pull requests (gh auth login?)")
     prs = json.loads(raw)
+    git("fetch", "-q", "origin", timeout=60)  # PR commits, so verified-at-an-earlier-commit can be checked
     for pr in prs:
         extra = gh("pr", "view", str(pr["number"]), "--json", "files,commits")
         try:
@@ -180,17 +210,20 @@ def cloud_rows(sd: Path) -> list[dict]:
     return rows
 
 
-def digest(data: dict, cfg: dict, lead: dict, verify_rows: list, cloud: list, unpushed: dict, now: float) -> dict:
+def digest(data: dict, cfg: dict, lead: dict, verify_rows: list, cloud: list, unpushed: dict, now: float,
+           diff=changed_between) -> dict:
     stale = float(cfg.get("LEAD_STALE_DAYS") or 3)
     no_pr_hours = float(cfg.get("LEAD_NO_PR_HOURS") or 6)
     items, healthy = [], 0
     cloud_urls = {c["url"] for c in cloud}
     for pr in data["prs"]:
         link = session_link(pr)
+        verified_sha, verified_ok = verified_at(pr, verify_rows, diff)
         ctx = {
             "now": now, "stale_days": stale, "me": data.get("me"), "lead": lead,
             "threads": data.get("threads", {}).get(pr.get("number")),
-            "verified": history.verified(pr.get("headRefOid", ""), verify_rows),
+            "verified": verified_sha is not None and verified_ok,
+            "verified_sha": verified_sha,
             "unpushed": unpushed.get(pr.get("headRefName", ""), 0),
             "cloud_authored": bool(link) or link in cloud_urls
             or any(lb.get("name") == "cloud-authored" for lb in pr.get("labels") or []),

@@ -114,7 +114,7 @@ def text_of(content) -> str:
 
 def scan(files: list[Path], since: float) -> dict:
     s = {"bad": 0, "lines": 0, "sessions": set(), "bash": defaultdict(set), "bash_n": Counter(),
-         "rejected": Counter(), "hooks": Counter(), "stop_fail": 0, "errors": defaultdict(set), "big": Counter(),
+         "rejected": Counter(), "hooks": Counter(), "hook_cmds": defaultdict(list), "stop_fail": 0, "errors": defaultdict(set), "big": Counter(),
          "rereads": Counter(), "compactions": 0, "out_tokens": 0}
     for f in files:
         try:
@@ -175,7 +175,11 @@ def scan(files: list[Path], since: float) -> dict:
                                 s["rejected"][f"{name}: {what}"] += 1
                             m = HOOK.match(txt)
                             if m:
-                                s["hooks"][f"{m.group(1)} {m.group(2)}: {m.group(3).strip()[:110]}"] += 1
+                                key = f"{m.group(1)} {m.group(2)}: {m.group(3).strip()[:110]}"
+                                s["hooks"][key] += 1
+                                snippet = " ".join(cmd.split())[:70]
+                                if snippet and snippet not in s["hook_cmds"][key]:
+                                    s["hook_cmds"][key].append(snippet)
                             if len(txt) > 20000:
                                 s["big"][prefix(cmd) or name] += 1
                             if "build.sh" in cmd or "xcodebuild" in cmd:
@@ -208,7 +212,9 @@ def proposals(s: dict, root: Path, rows: list[dict], waste: bool) -> list[dict]:
                         "proposal": "a deny or ask rule, or a playbook line saying why not", "target": ".claude/settings.json or a playbook"})
     for reason, n in s["hooks"].items():
         if n >= 3:
-            out.append({"kind": "guard", "evidence": f"{n} refusals: {reason}",
+            seen = s["hook_cmds"].get(reason, [])[:3]
+            examples = ("; refused: " + " | ".join(f"`{c}`" for c in seen)) if seen else ""
+            out.append({"kind": "guard", "evidence": f"{n} refusals: {reason}{examples}",
                         "proposal": "fix what keeps walking into it (a script, a doc, a default), not the hook",
                         "target": "the step or doc that prompts the refused command"})
     if s["stop_fail"] >= 3:

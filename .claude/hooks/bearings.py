@@ -44,6 +44,11 @@ def main() -> None:
     if branch == base and ahead.isdigit() and int(ahead):
         lines.append(f"{ahead} commit(s) on {base} are not on origin: scripts/ai/pr.sh moves them to a branch and "
                      "opens the PR (never push to the default branch).")
+    merged = branch not in (base, "HEAD") and ahead == "0" and \
+        git("rev-parse", "--verify", "-q", f"origin/{base}", cwd=root) != ""
+    if merged:
+        lines.append(f"{branch} has nothing that is not already on {base} (merged or empty): start the next change "
+                     f"with `git switch -c claude/<topic> origin/{base}`.")
     dirty = [l for l in git("status", "--porcelain", "--untracked-files=no", cwd=root).splitlines() if l.strip()]
     if dirty:
         lines.append(f"{len(dirty)} uncommitted path(s): stage by path, another session may share this checkout.")

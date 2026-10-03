@@ -46,18 +46,25 @@ fi
 (( dry )) && { echo "pr: would push $branch and open a PR against $base"; exit 0; }
 out=$(git push -q -u origin "$branch" 2>&1) || die "push failed: $out"
 
-if url=$(gh pr view "$branch" --json url,state -q 'select(.state=="OPEN") | .url' 2>/dev/null) && [[ -n $url ]]; then
-  echo "pr: updated $url"; exit 0
-fi
 report=$AI_ROOT/.build/verify/report.md
 # fresh = verify.sh stamped this exact commit on a clean tree (its first line)
 if [[ -f $report ]] && head -1 "$report" | grep -q "sha=$(git rev-parse HEAD) dirty=0"; then
-  body=$(cat "$report")
+  body=$(cat "$report"); fresh=1
 else
-  body=$(printf '## Changes\n\n%s\n\n## Verification\n\n/verify has not run on this commit: run it before merging (cloud-authored branches run it on a Mac).\n' \
-    "$(git log --reverse --format='- %s' "origin/$base..HEAD")")
+  body=$(printf '<!-- ios-ai-kit pr -->\n## Changes\n\n%s\n\n## Verification\n\n/verify has not run on this commit: run it before merging (cloud-authored branches run it on a Mac).\n' \
+    "$(git log --reverse --format='- %s' "origin/$base..HEAD")"); fresh=0
 fi
 [[ -n ${CLAUDECODE:-} ]] && body+=$'\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+
+if url=$(gh pr view "$branch" --json url,state -q 'select(.state=="OPEN") | .url' 2>/dev/null) && [[ -n $url ]]; then
+  # The description follows the code only where the kit wrote it (its hidden marker): delete the
+  # marker line to keep a description you wrote. A fresh /verify report replaces a stale one or the "has not run" placeholder.
+  old=$(gh pr view "$branch" --json body -q .body 2>/dev/null || true)
+  if (( fresh )) && [[ $old == *"<!-- ios-ai-kit"* ]] && [[ $old != *"sha=$(git rev-parse HEAD)"* ]]; then
+    gh pr edit "$branch" --body "$body" >/dev/null 2>&1 && { echo "pr: updated $url (description: the /verify report for $(git rev-parse --short HEAD))"; exit 0; }
+  fi
+  echo "pr: updated $url"; exit 0
+fi
 if (( ahead > 1 )) && [[ -z $title ]]; then title=$(printf '%s' "$branch" | sed -E "s#^[^/]*/##; s/-[0-9a-f]{7,}$//; s/-/ /g"); fi
 out=$(gh pr create --base "$base" --head "$branch" --title "${title:-$first}" --body "$body" ${draft[@]+"${draft[@]}"} 2>&1) \
   || die "gh pr create failed: $out"

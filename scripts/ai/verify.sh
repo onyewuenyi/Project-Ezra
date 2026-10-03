@@ -38,7 +38,7 @@ gate() {  # gate <n> <name> <command…>; output to $rep/<name>.txt, last line i
 }
 skipped() { rows+=("| $1 | $2 | SKIPPED | | $3 |"); record "$2" SKIPPED 0 "$3"; echo "$1  $2  SKIPPED ($3)"; }
 seams() { python3 "$AI_DIR/debug-fences.py" $SOURCE_DIRS; }
-reach() { python3 "$AI_DIR/blast-radius.py" --src "${SOURCE_DIRS%% *}"; }
+reach() { python3 "$AI_DIR/blast-radius.py" --diff "$(base_commit)" --src "${SOURCE_DIRS%% *}"; }
 gate 1 format "$AI_DIR/format.sh" --lint
 gate 2 build "$AI_DIR/build.sh"
 if [[ $notests == 1 ]]; then skipped 3 tests --no-tests; else

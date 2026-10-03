@@ -33,7 +33,7 @@ Always through a pull request. Commit (on any branch, even the default one), run
 
 ## The lead: work is done when it is merged
 
-`/lead` reads every open PR you authored and sorts it: **needs you** (ready to merge, stalled, review requested, fixes waiting to be pushed, a cloud task that never opened a PR), **needs work** (conflicts, failing checks, review threads, app code not verified at its head), healthy (counted, never listed), done (reported once). It does the needs-work itself on each PR's own branch (`scripts/ai/worktree.sh pr <n>`): runs `/verify` on cloud-authored PRs, merges the base to resolve conflicts, fixes checks and threads. It never merges, closes, force-pushes or posts outside the terminal; `LEAD_COMMENT`, `LEAD_PUSH` and `LEAD_REBASE` in `.claude/ios.env` opt in. For a workday cadence leave a session running `/loop /lead`: it paces itself (about 10 minutes while checks run, 60 when all is healthy) and stays quiet unless something needs you. `python3 scripts/ai/prs.py` prints the same digest by hand; `--abandon N` and `--take-back N` tell the lead to let a PR go.
+`/lead` reads every open PR you authored and sorts it: **needs you** (ready to merge, stalled, review requested, fixes waiting to be pushed, a cloud task that never opened a PR), **needs work** (conflicts, failing checks, review threads, app code not verified at its head), healthy (counted, never listed), done (reported once). It does the needs-work itself on each PR's own branch (`scripts/ai/worktree.sh pr <n>`): runs `/verify` on cloud-authored PRs, merges the base to resolve conflicts, fixes checks and threads. It never merges, closes, force-pushes or posts outside the terminal; `LEAD_COMMENT`, `LEAD_PUSH` and `LEAD_REBASE` in `.claude/ios.env` opt in. For a workday cadence leave a session running `/loop /lead`: it paces itself (about 10 minutes while checks run, 60 when all is healthy) and stays quiet unless something needs you. `python3 scripts/ai/prs.py` prints the same digest by hand; `--abandon N` and `--take-back N` tell the lead to let a PR go. Merged or closed PRs give back their worktree and simulator: `scripts/ai/worktree.sh prune` (the lead runs it).
 
 ## Delegating and parallel work
 
@@ -43,7 +43,8 @@ A cloud session has nobody to answer a permission prompt, so the **cloud gate** 
 
 ## Healthchecks
 
-- **Session start:** a few lines only when something is off: commits on the default branch that never went through a PR, uncommitted work, HEAD unverified or failing, PRs that need you, doctor warnings, a stale healthcheck. Silent otherwise.
+- **Session start:** a few lines only when something is off: commits on the default branch that never went through a PR, a branch already merged (start the next change from main), uncommitted work, HEAD unverified or failing, PRs that need you, doctor warnings, a stale healthcheck. Silent otherwise.
+- **Status line** (opt-in, this Mac: `python3 <kit>/install.py . --statusline`): the branch, HEAD's verify state and the PRs that need you, always under the prompt.
 - **`/friction`** (weekly; `/lead` runs it quietly each weekday): what keeps costing sessions time, from this repo's transcripts and verify history: commands no rule allows, rejected calls, repeated hook refusals, recurring compiler errors, flaky tests, slowing gates, and on Mondays oversized outputs and token use. You pick which proposals to apply; each lands with a test, through a PR.
 
 ## Rollout
