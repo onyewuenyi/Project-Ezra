@@ -8,7 +8,8 @@
 #   then pushes it (-u origin) and opens the PR (or reports the existing one, now updated)
 #
 # The body is /verify's report when it is fresh for this commit, else the commit list and a line
-# saying /verify has not run on it. Uncommitted changes stop it: commit what belongs in the PR first.
+# saying /verify has not run on it. Uncommitted files are named and left alone (a shared checkout
+# may hold another session's work); only commits go into the PR.
 # usage: pr.sh [--title "…"] [--draft] [--dry-run]
 source "$(dirname "$0")/lib.sh"
 set +e -uo pipefail  # every failure below is handled and named
@@ -21,7 +22,8 @@ die() { echo "pr: $*"; exit 1; }
 command -v gh >/dev/null || die "needs the GitHub CLI: brew install gh && gh auth login"
 gh auth status >/dev/null 2>&1 || die "the GitHub CLI is not signed in: gh auth login"
 git remote get-url origin >/dev/null 2>&1 || die "no 'origin' remote"
-[[ -z $(git status --porcelain --untracked-files=no) ]] || die "uncommitted changes: commit what belongs in this PR (or stash the rest), then run again"
+dirty=$(git status --porcelain --untracked-files=no | cut -c4-)
+[[ -z $dirty ]] || echo "pr: not in this PR (uncommitted, left as they are): $(echo $dirty)"
 git fetch -q origin || die "could not fetch origin"
 base=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null); base=${base##*/}
 [[ -n $base ]] || { git remote set-head origin --auto >/dev/null 2>&1; base=$(git symbolic-ref --quiet refs/remotes/origin/HEAD); base=${base##*/}; }
