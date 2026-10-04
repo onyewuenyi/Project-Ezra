@@ -148,6 +148,9 @@ struct RootTabView: View {
             // Campaign 5 / WS4: the boundary pass on the GA runtime — P-A segment and
             // P-D artifact acceptance, the two questions the routing decision turns on.
             await FMPrimitives.runIfRequested(brain: brain)
+            // The cloud's removed tail (2026-10-04): long dumps and chatty speech, read on
+            // the device only — the population the corpus held no rows for.
+            await DumpEval.runIfRequested(brain: brain)
             // The one model judgment that destroys user data — scored before the runtime
             // changes underneath its 0.85 confidence gate.
             await EmbeddingDiagnostics.runIfRequested()
