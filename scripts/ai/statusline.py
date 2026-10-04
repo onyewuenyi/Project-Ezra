@@ -32,13 +32,16 @@ def line(cwd: str) -> str:
     ahead = git("rev-list", "--count", f"origin/{base}..HEAD", cwd=cwd)
     sd = state_dir(cwd)
     sha = git("rev-parse", "HEAD", cwd=cwd)
-    run = history.last_run(sha, history.rows(sd / "verify.tsv"))
+    rows_all = history.rows(sd / "verify.tsv")
+    run = history.last_run(sha, rows_all)
     gates = [r for r in run or [] if not r["gate"].startswith("fail:")]
     failed = [r["gate"] for r in gates if r["result"] == "FAIL"]
     if failed:
         parts.append(f"{RED}✗ {'/'.join(failed)} failed{RESET}")
-    elif gates and gates[0]["dirty"] == "0":
+    elif history.verified(sha, rows_all):
         parts.append(f"{GREEN}✓ verified {sha[:7]}{RESET}")
+    elif run and any(r["gate"] == "visual" and r["result"] == "JUDGE" for r in run) and gates[-1]["result"] != "PASS" or (run and {r["gate"]: r["result"] for r in gates}.get("visual") == "JUDGE"):
+        parts.append(f"{YELLOW}◐ sheets await a judge{RESET}")
     elif branch != base or (ahead.isdigit() and int(ahead)):
         parts.append(f"{DIM}○ not verified{RESET}")
     if branch == base and ahead.isdigit() and int(ahead):

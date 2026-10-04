@@ -15,7 +15,7 @@ action=build; [[ -n $update ]] && { action="clean build"; say "recording the war
 udid=$(ensure_sim)
 wait_dd
 mkdir -p "$BUILD_DIR"; rm -rf "$BUILD_DIR/build.xcresult"
-read -r -a container <<< "$(xc_container)"
+xc_container; container=("${XC_CONTAINER[@]}")
 set +e
 xcodebuild $action "${container[@]}" -scheme "$SCHEME" -destination "id=$udid" \
   -derivedDataPath "$DD" -resultBundlePath "$BUILD_DIR/build.xcresult" "$@" < /dev/null > "$BUILD_DIR/build.log" 2>&1
@@ -28,7 +28,7 @@ if [[ -d $BUILD_DIR/build.xcresult ]]; then
     say "no warning baseline existed: recorded today's $(grep -cv -e '^#' -e '^$' "$AI_ROOT/.claude/ios-warnings.txt" || true) warning(s) in .claude/ios-warnings.txt (commit it; review with your team). Only NEW warnings fail from now on."
   fi
 else
-  grep -E "error:|BUILD FAILED" "$BUILD_DIR/build.log" | head -20
+  grep -E "error:|BUILD FAILED" "$BUILD_DIR/build.log" | head -20 || true
   echo "build: failed before a result bundle was written · log: .build/build.log"
   rc=1
 fi

@@ -17,16 +17,18 @@ out="$EVIDENCE_ROOT/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$out"
 S() { "$AI_DIR/sim.sh" "$@"; }
 S install >/dev/null; S statusbar >/dev/null
 fail=0; t0=$(date +%s); xcode_down=""
-while IFS='|' read -r name args f3 f4; do
-  name=$(echo "$name" | xargs); args=$(echo "${args:-}" | xargs)
+trim() { local v=$1; v=${v#"${v%%[![:space:]]*}"}; v=${v%"${v##*[![:space:]]}"}; printf '%s' "$v"; }
+while IFS='|' read -r name args f3 f4 || [[ -n $name ]]; do
+  name=$(trim "$name")
+  [[ -z $name || $name == \#* ]] && continue   # before any parsing: a comment may hold an apostrophe
+  args=$(trim "${args:-}")
   expects=(); for f in "${f3:-}" "${f4:-}"; do
-    f=$(echo "$f" | xargs)
+    f=$(trim "$f")
     case $f in
-      expect:*) IFS=';' read -r -a xs <<< "${f#expect:}"; for x in "${xs[@]}"; do x=$(echo "$x" | xargs); [[ -n $x ]] && expects+=(--expect "$x"); done ;;
-      absent:*) IFS=';' read -r -a xs <<< "${f#absent:}"; for x in "${xs[@]}"; do x=$(echo "$x" | xargs); [[ -n $x ]] && expects+=(--absent "$x"); done ;;
+      expect:*) IFS=';' read -r -a xs <<< "${f#expect:}"; for x in ${xs[@]+"${xs[@]}"}; do x=$(trim "$x"); [[ -n $x ]] && expects+=(--expect "$x"); done ;;
+      absent:*) IFS=';' read -r -a xs <<< "${f#absent:}"; for x in ${xs[@]+"${xs[@]}"}; do x=$(trim "$x"); [[ -n $x ]] && expects+=(--absent "$x"); done ;;
     esac
   done
-  [[ -z $name || $name == \#* ]] && continue
   if (( $# )) && ! printf '%s\n' "$@" | grep -qx "$name"; then continue; fi
   for v in default dark ax5; do
     case $v in

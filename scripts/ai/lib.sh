@@ -28,7 +28,8 @@ _load_env() {  # KEY=value lines; ignore comments; never override an exported va
   [[ -f $f ]] || return 0
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line =~ ^[[:space:]]*# || ! $line == *=* ]] && continue
-    key=${line%%=*}; key=${key//[[:space:]]/}
+    key=${line%%=*}; key=${key//[[:space:]]/}; key=${key#export}
+    [[ $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     [[ -n ${!key+x} ]] && continue
     export "$key=${line#*=}"
   done < "$f"
@@ -43,12 +44,13 @@ _load_env "$AI_ROOT/.claude/ios.env"
 : "${TEST_FLAGS:=}"
 : "${SOURCE_DIRS:=.}"
 : "${BASE_LAUNCH_ARGS:=}"
-[[ -n ${SCHEME:-} ]] || die "SCHEME is not set: run the kit's install.sh, or set it in .claude/ios.env"
+[[ -n ${SCHEME:-} ]] || die "SCHEME is not set: run ios-ai-kit's install.py on this repo, or set it in .claude/ios.env"
 
 # The -project/-workspace pair every xcodebuild call needs.
+# Sets the array XC_CONTAINER; use "${XC_CONTAINER[@]}" (paths with spaces survive).
 xc_container() {
-  if [[ -n ${WORKSPACE:-} ]]; then echo "-workspace" "$AI_ROOT/$WORKSPACE"
-  elif [[ -n ${PROJECT:-} ]]; then echo "-project" "$AI_ROOT/$PROJECT"
+  if [[ -n ${WORKSPACE:-} ]]; then XC_CONTAINER=(-workspace "$AI_ROOT/$WORKSPACE")
+  elif [[ -n ${PROJECT:-} ]]; then XC_CONTAINER=(-project "$AI_ROOT/$PROJECT")
   else die "neither PROJECT nor WORKSPACE is set in .claude/ios.env"; fi
 }
 
@@ -132,5 +134,5 @@ changed_files() {  # committed on this branch + uncommitted + untracked, relativ
 
 app_path() {  # the built .app for the simulator, from this checkout's DerivedData
   find "$DD/Build/Products" -maxdepth 2 -name '*.app' -path '*iphonesimulator*' -not -path '*Tests*' -print 2>/dev/null \
-    | while read -r a; do [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$a/Info.plist" 2>/dev/null) == "${APP_BUNDLE_ID:-}" ]] && echo "$a"; done | head -1
+    | while read -r a; do if [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$a/Info.plist" 2>/dev/null) == "${APP_BUNDLE_ID:-}" ]]; then echo "$a"; fi; done | head -1
 }

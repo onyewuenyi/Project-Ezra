@@ -19,6 +19,7 @@ usage: friction.py [--since 7d] [--json] [--waste] [--transcripts DIR]
 Stamps $STATE_DIR/friction.last on every run. If more than a fifth of the transcript lines cannot be
 read, it says the format changed and proposes nothing, rather than guess.
 """
+import calendar
 import json
 import os
 import re
@@ -112,7 +113,7 @@ def text_of(content) -> str:
     return ""
 
 
-def scan(files: list[Path], since: float) -> dict:
+def scan(files: list[Path], since: float, root: Path | None = None) -> dict:
     s = {"bad": 0, "lines": 0, "sessions": set(), "bash": defaultdict(set), "bash_n": Counter(),
          "rejected": Counter(), "hooks": Counter(), "hook_cmds": defaultdict(list), "stop_fail": 0, "errors": defaultdict(set), "big": Counter(),
          "rereads": Counter(), "compactions": 0, "out_tokens": 0}
@@ -137,10 +138,15 @@ def scan(files: list[Path], since: float) -> dict:
                 ts = d.get("timestamp")
                 if isinstance(ts, str):
                     try:
-                        if time.mktime(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")) < since:
+                        if calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")) < since:
                             continue
                     except ValueError:
                         pass
+                cwd = d.get("cwd")
+                if root is not None and isinstance(cwd, str) and cwd and not (
+                        Path(cwd).resolve() == root.resolve()
+                        or str(Path(cwd).resolve()).startswith(str(root.resolve() / ".claude/worktrees") + "/")):
+                    continue  # a sibling repo whose mangled name extends this one, or a worktree elsewhere
                 s["sessions"].add(sid)
                 t, msg = d.get("type"), d.get("message") or {}
                 if t == "system" and d.get("subtype") == "compact_boundary":
@@ -183,8 +189,9 @@ def scan(files: list[Path], since: float) -> dict:
                             if len(txt) > 20000:
                                 s["big"][prefix(cmd) or name] += 1
                             if "build.sh" in cmd or "xcodebuild" in cmd:
-                                for e in re.findall(r"^error[^\n]*?: (.{8,160})$", txt, re.M):
-                                    norm = re.sub(r"'[^']*'|\"[^\"]*\"|\d+", "_", e)
+                                for e in re.findall(r"^error [^\n]*?: (.{8,300})$|: error: (.{8,300})$", txt, re.M):
+                                    e = e[0] or e[1]
+                                    norm = re.sub(r"\d+", "_", e)  # keep the identifier: two typos are two errors
                                     s["errors"][norm].add(sid)
         for path, k in reads.items():
             if k > 5:
@@ -265,7 +272,7 @@ def main(argv: list[str]) -> int:
     since = time.time() - (int(m.group(1)) * (86400 if m.group(2) == "d" else 3600) if m else 7 * 86400)
     root = repo_root()
     files = transcripts(root, args[args.index("--transcripts") + 1] if "--transcripts" in args else None)
-    s = scan(files, since)
+    s = scan(files, since, root)
     sd = state_dir(root, create=True)
     (sd / "friction.last").touch()
     if s["lines"] and s["bad"] / s["lines"] > 0.2:

@@ -6,7 +6,7 @@ source "$(dirname "$0")/lib.sh"
 udid=$(ensure_sim)
 wait_dd
 mkdir -p "$BUILD_DIR"; rm -rf "$BUILD_DIR/tests.xcresult"
-read -r -a container <<< "$(xc_container)"
+xc_container; container=("${XC_CONTAINER[@]}")
 read -r -a extra <<< "$TEST_FLAGS"
 set +e
 xcodebuild test "${container[@]}" -scheme "$SCHEME" -destination "id=$udid" \
@@ -20,7 +20,7 @@ if [[ -d $BUILD_DIR/tests.xcresult ]]; then
     echo "tests: note: the test host restarted after an unexpected exit; read .build/test.log before trusting a pass or a fail"
   fi
 else
-  grep -E "error:|TEST FAILED|BUILD FAILED" "$BUILD_DIR/test.log" | head -20
+  grep -E "error:|TEST FAILED|BUILD FAILED" "$BUILD_DIR/test.log" | head -20 || true
   echo "tests: failed before a result bundle was written · log: .build/test.log"; rc=1
 fi
 exit $rc

@@ -7,7 +7,7 @@ A slowness is a number before it is a fix.
    - `os_signpost` intervals + `xcrun xctrace record --template 'Time Profiler' --launch -- <app>` (or `--attach`) on a device
    - `XCTest` `measure(metrics: [XCTClockMetric(), XCTMemoryMetric(), XCTApplicationLaunchMetric()])`
    - a probe test that times the pure function at realistic scale (e.g. 240 items)
-3. **Bracket the instrument** (`principles.md`, Bracket the instrument): make it read a known-slow and a known-fast case correctly before trusting it.
+3. **Bracket the instrument** (`principles.md`, Explain the number): make it read a known-slow and a known-fast case correctly before trusting it.
 4. **Profile, then hypothesize.** Read the heaviest stack in the trace. Common iOS causes: work in `body` (formatters, sorting, fetches), O(n²) derivations per row, main-actor I/O, a `@Published` that invalidates the whole tree, images decoded on the main thread, Core Data faults fired in a loop.
 5. **Change one thing, re-measure the same way**, and keep a table: hypothesis, change, before, after, kept or reverted.
 6. **Pin the win** with a performance test or a probe that fails when it regresses beyond a stated budget.

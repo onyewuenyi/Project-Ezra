@@ -16,7 +16,7 @@ else echo "already exported for $want"; fi
 step "3/4 this checkout's simulator"
 echo "simulator: $(ensure_sim)"
 step "4/4 smoke test"
-read -r -a container <<< "$(xc_container)"
+xc_container; container=("${XC_CONTAINER[@]}")
 xcodebuild -list "${container[@]}" >/dev/null || die "xcodebuild -list failed"
 echo "xcodebuild -list: ok"
 "$AI_DIR/build.sh" || die "the build has errors or new warnings (see above; full log in .build/build.log)"
