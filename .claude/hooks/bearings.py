@@ -59,6 +59,9 @@ def main() -> None:
     if run and any(r["result"] == "FAIL" and not r["gate"].startswith("fail:") for r in run):
         failed = ", ".join(r["gate"] for r in run if r["result"] == "FAIL" and not r["gate"].startswith("fail:"))
         lines.append(f"The last /verify on HEAD {sha[:7]} FAILED ({failed}): .build/verify/report.md.")
+    elif run and {r["gate"]: r["result"] for r in run if not r["gate"].startswith("fail:")}.get("visual") == "JUDGE":
+        lines.append(f"The last /verify on HEAD {sha[:7]} captured visual sheets nobody has judged: look at them (or run "
+                     "ui-verify), then scripts/ai/history.py judge PASS|FAIL.")
     elif not run and branch != base and ahead.isdigit() and int(ahead):
         lines.append(f"HEAD {sha[:7]} on {branch} has not been verified: /verify before scripts/ai/pr.sh.")
 

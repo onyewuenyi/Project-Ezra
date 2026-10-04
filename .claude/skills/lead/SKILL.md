@@ -15,16 +15,16 @@ disable-model-invocation: true
 
 ## Each pass
 
-1. **Digest.** `python3 scripts/ai/prs.py --json` (a PR number argument: work only on that one). It buckets every open PR the owner authored:
+1. **Digest.** `python3 scripts/ai/prs.py --json` (given a PR number, keep only that item of the JSON). The `LEAD_*` settings below are read from `.claude/ios.env`. It buckets every open PR the owner authored:
    - `needs-you`: merge-ready, stalled, review requested, push-ready, cloud task with no PR. These are the owner's decisions; report them, never act on them.
    - `needs-work`: yours, in this order: `resolve` → `verify` → `fix-checks` → `address-threads` → `update-branch`.
    - `healthy`: count only. `done`: report once.
 2. **Steer the existing branch, never a fresh one.** For each needs-work PR: `scripts/ai/worktree.sh pr <n>` (its own worktree and simulator; reused if it exists), then work there:
-   - `verify`: run `scripts/ai/verify.sh` in that worktree (the `/verify` gates). A pass records the PR's head as verified, so the next digest reports it merge-ready. A failure becomes the work: fix it there, or, if the fix needs no Xcode and the PR came from a cloud session, `scripts/ai/cloud.sh --branch <head> "<the fix, with the failing output>"`.
+   - `verify`: in that worktree run `scripts/ai/verify.sh`, then the `ui-verify` agent on every JUDGE sheet it printed, then `python3 scripts/ai/history.py judge PASS|FAIL "<what was seen>"`. Only the judged pass records the PR's head as verified, so the next digest reports it merge-ready; a capture nobody looked at never does. A failure becomes the work: fix it there, or, if the fix needs no Xcode and the PR came from a cloud session, `scripts/ai/cloud.sh --branch <head> "<the fix, with the failing output>"`.
    - `resolve` / `update-branch`: merge the base into the branch (`git merge origin/<base>`), fix conflicts, `scripts/ai/check.sh`. Never rebase unless `LEAD_REBASE=1`: a rebase needs a force push, which every layer refuses.
    - `fix-checks`: read the failing check's log (`gh pr checks <n>`, `gh run view --log-failed`), reproduce locally, fix at the root.
    - `address-threads`: read the threads (`gh pr view <n> --comments`), make the change each asks for, and list any you disagree with for the owner instead of changing them.
-   - Commit each fix in the PR's worktree. **Do not push** unless `LEAD_PUSH=1`: `git push` asks for approval, and an unanswered prompt stalls `/loop`. Unpushed fixes appear in the next digest as `push-ready` under needs-you.
+   - Commit each fix in the PR's worktree. **Do not push** unless `LEAD_PUSH=1`: a plain `git push` asks for approval, and an unanswered prompt stalls `/loop`. Unpushed fixes appear in the next digest as `push-ready` under needs-you. With `LEAD_PUSH=1`, push through `scripts/ai/pr.sh` run inside the worktree: it is an allowed script, it can only push a non-default branch, and it updates the open PR.
    - Post the verify report on the PR (`gh pr comment <n> --body-file .build/verify/report.md`) only with `LEAD_COMMENT=1` or the owner's yes.
 3. **Report**, in this order, only the sections that have something:
    - **Needs you:** each item with its one action (`gh pr merge <n>` for merge-ready; `scripts/ai/prs.py --abandon <n>` or `--take-back <n>` for stalled; `git -C <worktree> push` for push-ready; open the session link for a cloud task with no PR).
@@ -32,7 +32,7 @@ disable-model-invocation: true
    - **Done:** merged or abandoned since last time.
    - The healthy count.
    Then `python3 scripts/ai/prs.py --mark-seen`, and `scripts/ai/worktree.sh prune` when something was done (merged or closed PRs give back their worktree, simulator and DerivedData; one with uncommitted or unpushed work is kept and named).
-4. **Once per weekday** (first pass of the day): `python3 scripts/ai/friction.py --quiet --since 1d`; Mondays add `--waste`. Add its output as one line only if it proposes something (`/friction` to act on it).
+4. **Once per weekday** (first pass of the day): `python3 scripts/ai/friction.py --since 1d`; Mondays add `--waste`. Add its output as one line only if it proposes something (`/friction` to act on it).
 
 ## Pacing under /loop
 

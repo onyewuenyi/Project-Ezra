@@ -160,6 +160,11 @@ def fetch(everyone: bool) -> dict:
     if raw is None:
         raise RuntimeError("the GitHub CLI could not list pull requests (gh auth login?)")
     prs = json.loads(raw)
+    if not everyone:  # a teammate's PR that asks for your review is yours to act on too
+        extra = json.loads(gh("pr", "list", "--state", "open", "--limit", "50", "--search", "review-requested:@me",
+                              "--json", FIELDS) or "[]")
+        seen = {p["number"] for p in prs}
+        prs += [p for p in extra if p["number"] not in seen]
     git("fetch", "-q", "origin", timeout=60)  # PR commits, so verified-at-an-earlier-commit can be checked
     for pr in prs:
         extra = gh("pr", "view", str(pr["number"]), "--json", "files,commits")
@@ -174,8 +179,8 @@ def fetch(everyone: bool) -> dict:
     repo = (gh("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner") or "").strip()
     if "/" in repo and prs:
         owner, name = repo.split("/", 1)
-        q = ("query($o:String!,$n:String!){repository(owner:$o,name:$n){pullRequests(states:OPEN,first:50)"
-             "{nodes{number reviewThreads(first:100){nodes{isResolved}}}}}}")
+        q = ("query($o:String!,$n:String!){repository(owner:$o,name:$n){pullRequests(states:OPEN,first:100,"
+             "orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number reviewThreads(first:100){nodes{isResolved}}}}}}")
         data = gh("api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"n={name}")
         try:
             for node in json.loads(data or "{}")["data"]["repository"]["pullRequests"]["nodes"]:
@@ -225,7 +230,7 @@ def digest(data: dict, cfg: dict, lead: dict, verify_rows: list, cloud: list, un
             "verified": verified_sha is not None and verified_ok,
             "verified_sha": verified_sha,
             "unpushed": unpushed.get(pr.get("headRefName", ""), 0),
-            "cloud_authored": bool(link) or link in cloud_urls
+            "cloud_authored": link in cloud_urls
             or any(lb.get("name") == "cloud-authored" for lb in pr.get("labels") or []),
         }
         bucket, action, why = classify(pr, ctx)
@@ -246,15 +251,23 @@ def digest(data: dict, cfg: dict, lead: dict, verify_rows: list, cloud: list, un
                           "sha": None, "bucket": "done", "action": c["state"].lower(), "why": c["state"].lower(),
                           "session": session_link(c)})
     bodies = " ".join((p.get("body") or "") for p in data["prs"] + data.get("closed", []))
+    heads = {p.get("headRefName") for p in data["prs"] + data.get("closed", [])}
+    resolved = set(lead.get("cloud_resolved", []))
     for c in cloud:
-        if c["url"] not in bodies and c["branch"] not in {p.get("headRefName") for p in data["prs"] + data.get("closed", [])} \
-                and (now - c["ts"]) / 3600 > no_pr_hours:
+        if c["url"] in resolved:
+            continue
+        if c["url"] in bodies or c["branch"] in heads:
+            resolved.add(c["url"])  # its PR exists: never ask about it again, even once it leaves the window
+            continue
+        if (now - c["ts"]) / 3600 > no_pr_hours:
             items.append({"number": None, "title": c["task"][:80], "url": c["url"], "head": c["branch"], "sha": None,
                           "bucket": "needs-you", "action": "no-pr",
                           "why": f"cloud task started {(now - c['ts']) / 3600:.0f}h ago, no PR yet: open the session",
                           "session": c["url"]})
     order = {"needs-you": 0, "needs-work": 1, "done": 2}
     items.sort(key=lambda i: (order[i["bucket"]], i["number"] or 0))
+    if resolved != set(lead.get("cloud_resolved", [])):
+        lead["cloud_resolved"] = sorted(resolved)
     return {"generated": now, "items": items, "healthy": healthy}
 
 
@@ -307,6 +320,8 @@ def main(argv: list[str]) -> int:
             return 0
     d = digest(data, env(), lead, history.rows(sd / "verify.tsv"), cloud_rows(sd), unpushed_by_branch(), now)
     write_atomic(sd / "prs.json", json.dumps(d, indent=1))
+    if "cloud_resolved" in lead:
+        write_atomic(lead_path, json.dumps(lead, indent=1))
     news = any(i["bucket"] == "done" for i in d["items"])  # finished work is always worth one line
     quiet_and_same = "--quiet" in args and signature(d) == lead.get("seen_sig") and not news
     if "--json" in args:

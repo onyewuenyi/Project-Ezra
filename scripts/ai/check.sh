@@ -10,13 +10,13 @@ relevant=$(changed_files | grep -E '\.(swift|xcdatamodel|plist|xcstrings|entitle
 # A build or test already running here reports its own result; a second build would only fail on
 # the locked build database and block the turn for nothing.
 if dd_busy; then echo "check: skipped, a build or test is already running in this checkout and will report its own result"; exit 0; fi
-hash=$( (printf '%s\n' "$relevant"; printf '%s\n' "$relevant" | while IFS= read -r f; do [[ -f $f ]] && shasum "$f"; done) | shasum | cut -c1-16)
+hash=$( (printf '%s\n' "$relevant"; printf '%s\n' "$relevant" | while IFS= read -r f; do if [[ -f $f ]]; then shasum "$f"; fi; done) | shasum | cut -c1-16)
 [[ -f $BUILD_DIR/check.pass && $(cat "$BUILD_DIR/check.pass") == "$hash" ]] && { echo "check: this exact change already passed"; exit 0; }
-swift=$(printf '%s\n' "$relevant" | grep '\.swift$' | grep -v '^scripts/ai/' | while IFS= read -r f; do [[ -f $f ]] && echo "$f"; done || true)
+swift=()
+while IFS= read -r f; do [[ $f == *.swift && $f != scripts/ai/* && -f $f ]] && swift+=("$f"); done <<< "$relevant"
 rc=0
-if [[ -n $swift ]]; then
-  # shellcheck disable=SC2086
-  "$AI_DIR/format.sh" --lint $swift || rc=1
+if (( ${#swift[@]} )); then
+  "$AI_DIR/format.sh" --lint "${swift[@]}" || rc=1
 fi
 "$AI_DIR/build.sh" || rc=1
 if [[ ${CHECK_TESTS:-0} == 1 && $rc == 0 ]]; then "$AI_DIR/test.sh" || rc=1; fi

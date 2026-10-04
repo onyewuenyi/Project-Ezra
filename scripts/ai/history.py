@@ -8,9 +8,13 @@ Columns: ts run_id sha branch dirty gate result secs summary. A gate row per gat
   history.py verified [sha] exit 0 if the latest clean-tree run on that commit passed every gate
   history.py flips [n]      tests that failed AND passed on the same commit within the last n runs
   history.py stats [n]      per-gate median seconds over the last n runs
+  history.py judge PASS|FAIL ["what was seen"]   record the verdict on the latest run's visual
+                            sheets (captured as JUDGE by verify.sh); the run counts as verified only
+                            after a PASS here. Also stamps .build/verify/report.md.
 Imported by prs.py, friction.py and bearings.py, so the format is parsed in one place.
 """
 import statistics
+import time
 import subprocess
 import sys
 from collections import defaultdict
@@ -60,8 +64,12 @@ def verified(sha: str, rs: list[dict] | None = None) -> bool:
     if not run or run[0]["dirty"] != "0":
         return False
     gates = [r for r in run if not r["gate"].startswith("fail:")]
-    return bool(gates) and all(r["result"] in ("PASS", "SKIPPED") for r in gates) \
-        and any(r["result"] == "PASS" for r in gates)
+    # The LAST row per gate decides: a visual JUDGE row is superseded by the judge's PASS or FAIL.
+    final = {r["gate"]: r["result"] for r in gates}
+    # Format, build and tests must each have PASSED: a --no-tests run is not verified app code.
+    # Seams, reach and visual may be SKIPPED (no screens file) but never FAIL or JUDGE.
+    return bool(final) and all(v in ("PASS", "SKIPPED") for v in final.values()) \
+        and all(final.get(g) == "PASS" for g in ("format", "build", "tests") if g in final or g == "tests")
 
 
 def test_flips(n: int = 50, rs: list[dict] | None = None) -> dict[str, int]:
@@ -117,6 +125,40 @@ def main(argv: list[str]) -> int:
     if cmd == "flips":
         for t, k in sorted(test_flips(int(arg or 50)).items(), key=lambda x: -x[1]):
             print(f"{k}\t{t}")
+        return 0
+    if cmd == "judge":
+        verdict = (arg or "").upper()
+        if verdict not in ("PASS", "FAIL"):
+            print("history: judge PASS|FAIL [\"what was seen\"]")
+            return 2
+        summary = argv[3] if len(argv) > 3 else "judged"
+        sha = head()
+        run = last_run(sha)
+        if not run:
+            print("history: no /verify run on HEAD to judge")
+            return 1
+        if run[0]["dirty"] != "0":
+            print("history: the latest run on HEAD was on a dirty tree; commit, re-run /verify, then judge")
+            return 1
+        final = {r["gate"]: r["result"] for r in run if not r["gate"].startswith("fail:")}
+        if final.get("visual") != "JUDGE":
+            print("history: the latest run captured no sheets to judge (visual skipped, failed, or already judged)")
+            return 1
+        r0 = run[0]
+        line = "\t".join([str(int(time.time())), r0["run_id"], sha, r0["branch"], "0", "visual", verdict, "0",
+                           summary.replace("\t", " ").replace("\n", " ")[:200]])
+        with open(state_dir() / "verify.tsv", "a") as f:
+            f.write(line + "\n")
+        report = Path(".build/verify/report.md")
+        try:
+            text = report.read_text()
+            if f"sha={sha}" in text.splitlines()[0]:
+                text = text.replace("result=JUDGE", f"result={verdict}", 1).replace("| visual | JUDGE |", f"| visual | {verdict} |", 1)
+                text += f"\n**Visual verdict:** {verdict}. {summary}\n"
+                report.write_text(text)
+        except OSError:
+            pass
+        print(f"history: visual {verdict} recorded for {sha[:7]}" + ("; this commit is now verified" if verified(sha) else ""))
         return 0
     if cmd == "stats":
         for g, m in sorted(gate_stats(int(arg or 20)).items()):

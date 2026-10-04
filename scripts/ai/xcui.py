@@ -129,7 +129,11 @@ def main() -> int:
 
     # Launch our build with the screen's arguments, the same way the screenshots do.
     sim = ["/bin/bash", a.sim, "launch", *shlex.split(a.args)]
-    subprocess.run(sim, capture_output=True, text=True)
+    launched = subprocess.run(sim, capture_output=True, text=True)
+    if launched.returncode != 0:  # the app did not start: nothing on screen is the app's, so nothing was observed
+        print(f"xcui: launch failed ({(launched.stderr or launched.stdout).strip()[:200]}); nothing was observed")
+        b.close()
+        return 3
     time.sleep(a.wait)
     try:
         key = start()

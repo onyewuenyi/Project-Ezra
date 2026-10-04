@@ -41,7 +41,9 @@ guard)
   xcrun simctl launch --terminate-running-process "$udid" "$APP_BUNDLE_ID" ${base[@]+"${base[@]}"} >/dev/null; sleep "${1:-4}"
   if "$BASH" "$0" alive; then echo "guard ok: a plain launch is alive after ${1:-4}s"
   else die "guard FAILED: a plain launch died. The simulator runtime or the build is broken; nothing measured now is about your change. Try: xcrun simctl shutdown $udid && xcrun simctl boot $udid"; fi ;;
-shot) udid=$(u); mkdir -p "$(dirname "$1")"; xcrun simctl io "$udid" screenshot "$1" >/dev/null 2>&1; echo "$1" ;;
+shot) udid=$(u); mkdir -p "$(dirname "$1")"
+  xcrun simctl io "$udid" screenshot "$1" >/dev/null 2>&1 || die "screenshot failed on $udid: is it booted? (xcrun simctl bootstatus $udid; sim.sh guard)"
+  echo "$1" ;;
 size) xcrun simctl ui "$(u)" content_size "$1"; echo "content size: $1" ;;
 appearance) xcrun simctl ui "$(u)" appearance "$1"; echo "appearance: $1" ;;
 statusbar)
@@ -74,5 +76,5 @@ destroy)
   xcrun simctl shutdown "$SIM_UDID" 2>/dev/null || true; xcrun simctl delete "$SIM_UDID" 2>/dev/null || true
   grep -v '^SIM_UDID=' "$LOCAL_ENV" > "$LOCAL_ENV.tmp" 2>/dev/null || true; mv "$LOCAL_ENV.tmp" "$LOCAL_ENV"
   echo "deleted simulator $SIM_UDID" ;;
-*) sed -n '2,22p' "$0"; exit 2 ;;
+*) sed -n '2,19p' "$0"; exit 2 ;;
 esac

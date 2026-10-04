@@ -37,10 +37,13 @@ if [[ $branch == "$base" || $branch == HEAD ]]; then
   prefix=${BRANCH_PREFIX:-${CLOUD_BRANCH_PREFIX:-claude/}}
   slug=$(printf '%s' "$first" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//')
   new="${prefix}${slug:-change}-$(git rev-parse --short HEAD)"
-  echo "pr: $ahead commit(s) on $base move to $new; $base goes back to origin/$base"
+  [[ $branch == "$base" ]] && echo "pr: $ahead commit(s) on $base move to $new; $base goes back to origin/$base" \
+    || echo "pr: $ahead commit(s) on a detached HEAD move to $new"
   if (( dry )); then echo "pr: --dry-run, nothing changed"; exit 0; fi
   git switch -q -c "$new" || die "could not create $new"
-  git branch -q -f "$base" "origin/$base" || die "could not move $base back to origin/$base (your commits are safe on $new)"
+  if [[ $branch == "$base" ]]; then  # a detached HEAD never touches the default branch
+    git branch -q -f "$base" "origin/$base" || die "could not move $base back to origin/$base (your commits are safe on $new)"
+  fi
   branch=$new
 fi
 (( dry )) && { echo "pr: would push $branch and open a PR against $base"; exit 0; }
