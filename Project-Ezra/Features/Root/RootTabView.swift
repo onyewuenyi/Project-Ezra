@@ -151,6 +151,8 @@ struct RootTabView: View {
             // The cloud's removed tail (2026-10-04): long dumps and chatty speech, read on
             // the device only — the population the corpus held no rows for.
             await DumpEval.runIfRequested(brain: brain)
+            // The redesign's experiment: the model judges each clause the read already made.
+            await CardJudgeEval.runIfRequested(brain: brain)
             // The one model judgment that destroys user data — scored before the runtime
             // changes underneath its 0.85 confidence gate.
             await EmbeddingDiagnostics.runIfRequested()
