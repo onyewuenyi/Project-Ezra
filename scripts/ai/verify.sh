@@ -61,6 +61,7 @@ else
     sed -i '' '$d' "$hist" 2>/dev/null || true  # replace the PASS row this gate just recorded
     record visual JUDGE 0 "sheets captured, not yet judged: scripts/ai/history.py judge PASS|FAIL"
     judge=1
+    printf '%-2s %-7s %-5s %s\n' 6 visual JUDGE "sheets captured; look, then scripts/ai/history.py judge PASS|FAIL"
   fi
 fi
 if [[ $release == 1 ]]; then gate 7 release "$AI_DIR/release.sh"; fi
