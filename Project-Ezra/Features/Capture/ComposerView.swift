@@ -194,6 +194,9 @@ struct ComposerView: View {
     @State private var judgeHeadStart: (text: String, task: Task<CaptureJudge.Reading, Never>)?
     /// What the judge set aside at the reveal, and how many of those the person added
     /// back — the false-drop meter, counted for the receipt at Create.
+    /// The outcome the grouping judge named for THIS card set (`CaptureFlow.outcomeTitle`),
+    /// keyed by the card ids it was named for so an edited set never wears a stale name.
+    @State private var modelOutcome: (ids: [UUID], title: String)?
     @State private var judgeLeftOutCount = 0
     @State private var judgeRestoredCount = 0
     /// The durable row behind this session. Created at PARSE time, not commit time, so
@@ -867,6 +870,7 @@ struct ComposerView: View {
         }
         Motion.withMotion(Motion.heroSettle) { phase = .confirm }
         announceReveal()
+        nameTheOutcome()
     }
 
     /// Wait out whatever is left of the orb's minimum presence, if anything.
@@ -1498,7 +1502,9 @@ struct ComposerView: View {
             // When the capture NAMED its outcome ("Lagos trip: …"), the button carries the
             // name and one tap groups — the person's own words, read back, never a guess
             // (ungroup and tap again to rename through the alert). Otherwise the alert.
-            let named = CaptureFlow.suggestedOutcomeTitle(from: text)
+            let named =
+                CaptureFlow.suggestedOutcomeTitle(from: text)
+                ?? modelOutcome.flatMap { $0.ids == interpretation.drafts.map(\.id) ? $0.title : nil }
             Button {
                 if let named {
                     Motion.withMotion(Motion.settle) { groupTitle = named }
@@ -1525,6 +1531,29 @@ struct ComposerView: View {
                 named == nil
                     ? "Names an outcome these tasks become the steps of"
                     : "Makes these tasks the steps of that outcome")
+        }
+    }
+
+    /// After the reveal, ask the on-device grouping judge whether the whole card set serves
+    /// one outcome, and if it names one every card belongs to, the group button offers it
+    /// for one tap. Only the button's label changes — never a card — and only while the
+    /// set is still the one that was named.
+    private func nameTheOutcome() {
+        modelOutcome = nil
+        let drafts = interpretation.drafts
+        guard drafts.count >= CaptureFlow.minCardsToName, PrivateCaptureEngine.modelAvailable(),
+            CaptureFlow.suggestedOutcomeTitle(from: text) == nil
+        else { return }
+        let shown = drafts.map { OpenTaskSnapshot(id: $0.id, title: $0.title, category: $0.category) }
+        // The words of the cards, never of a left-out line: an email's sign-off ("see you
+        // at the fall picnic") named three unrelated school tasks "Fall picnic".
+        let spoken = drafts.map { $0.provisionalSource ?? $0.title }.joined(separator: " ")
+        Task {
+            guard let judgment = await CaptureFlow.judgeOutcome(spoken: spoken, shown: shown),
+                let title = CaptureFlow.outcomeTitle(for: judgment, shown: shown, spoken: spoken),
+                interpretation.drafts.map(\.id) == shown.map(\.id)
+            else { return }
+            Motion.withMotion(Motion.fade) { modelOutcome = (shown.map(\.id), title) }
         }
     }
 

@@ -24,6 +24,7 @@
 //
 
 import Foundation
+import FoundationModels
 
 enum CaptureFlow {
 
@@ -128,6 +129,61 @@ enum CaptureFlow {
         guard !rest.isEmpty, (1...6).contains(words.count) else { return nil }
         return lead
     }
+
+    /// The outcome the on-device grouping judge names for a whole capture — "Thanksgiving",
+    /// "Lagos trip" — offered as the group button's one-tap label (2026-10-04). Accepted
+    /// only through the grouping sweep's own validator (shown titles only, a 1–6 word
+    /// name that is not a member) and only when EVERY card is a member: the button groups
+    /// all of them, so a name that fits some is not offered. Nil otherwise.
+    ///
+    /// **The name must be in their words** (`spoken` — the words of the KEPT cards, never
+    /// a left-out line): only the words of it they said survive. Without the capture as context the judge named
+    /// a Thanksgiving list "Family trip" — a confident name for an outcome nobody
+    /// mentioned.
+    static func outcomeTitle(
+        for judgment: GroupJudgment, shown: [OpenTaskSnapshot], spoken: String
+    ) -> String? {
+        guard shown.count >= minCardsToName,
+            let proposal = GroupingSweep.validated(judgment, shown: shown),
+            Set(proposal.memberIDs) == Set(shown.map(\.id))
+        else { return nil }
+        // Keep only the words of the name they said, in order: "Thanksgiving
+        // preparations" is "Thanksgiving". A name with none of their words is refused.
+        let said = Set(outcomeWords(spoken.lowercased()))
+        let kept = proposal.title.split(whereSeparator: \.isWhitespace).filter { word in
+            let key = outcomeWords(String(word).lowercased())
+            return !key.isEmpty && key.allSatisfy { said.contains($0) }
+        }
+        guard kept.contains(where: { $0.count >= 3 }) else { return nil }
+        let title = kept.joined(separator: " ")
+        return title.prefix(1).uppercased() + title.dropFirst()
+    }
+
+    private static func outcomeWords(_ text: String) -> [String] {
+        text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map {
+            $0.hasSuffix("s") && $0.count > 3 ? String($0.dropLast()) : String($0)
+        }
+    }
+
+    /// The grouping judge, asked about a capture's cards WITH the words they came from —
+    /// the sweep's instructions and answer type, so its validator applies unchanged.
+    static func judgeOutcome(spoken: String, shown: [OpenTaskSnapshot]) async -> GroupJudgment? {
+        let lines = shown.map { "- \($0.title)" }.joined(separator: "\n")
+        let prompt =
+            "The person said: \"\(spoken)\"\n\nIt became these items:\n\(lines)\n\n"
+            + "Are these steps toward one shared outcome? If so, name it in their words."
+        let result = await ModelRun.perform(.groupingSweep, deadline: ModelDeadline.seconds(for: .background))
+        {
+            let session = LanguageModelSession(instructions: GroupingSweep.judgeInstructions)
+            return try await session.respond(to: prompt, generating: GroupJudgment.self).content
+        }
+        if case .success(let judgment) = result { return judgment }
+        return nil
+    }
+
+    /// Fewer cards than this get the plain "Group as one outcome" button: two errands are
+    /// rarely a project, and a name the person must read costs more than it saves.
+    static let minCardsToName = 3
 
     /// assumed and editable; only the existence of the task is the person's call.
     ///

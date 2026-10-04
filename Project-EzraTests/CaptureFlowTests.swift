@@ -78,4 +78,40 @@ struct CaptureFlowTests {
             }
         }
     }
+
+    // MARK: - Naming the outcome (2026-10-04)
+
+    private func shown(_ titles: [String]) -> [OpenTaskSnapshot] {
+        titles.map { OpenTaskSnapshot(id: UUID(), title: $0, category: "Home") }
+    }
+
+    @Test("A name every card belongs to, in the person's words, is offered — trimmed to the words they said")
+    func outcomeNamedInTheirWords() {
+        let cards = shown(["Order the turkey", "Buy extra chairs", "Make a seating chart"])
+        let judgment = GroupJudgment(
+            belongsTogether: true, confidence: 0.9, outcomeTitle: "Thanksgiving preparations",
+            memberTitles: cards.map(\.title))
+        let spoken = "for thanksgiving I need to order the turkey buy extra chairs make a seating chart"
+        #expect(CaptureFlow.outcomeTitle(for: judgment, shown: cards, spoken: spoken) == "Thanksgiving")
+    }
+
+    @Test(
+        "A name they never said, a name that fits only some cards, or fewer than three cards: nothing offered"
+    )
+    func outcomeRefusals() {
+        let cards = shown(["Order the turkey", "Buy extra chairs", "Make a seating chart"])
+        let spoken = "order the turkey, buy extra chairs, make a seating chart"
+        let invented = GroupJudgment(
+            belongsTogether: true, confidence: 0.95, outcomeTitle: "Family trip",
+            memberTitles: cards.map(\.title))
+        #expect(CaptureFlow.outcomeTitle(for: invented, shown: cards, spoken: spoken) == nil)
+        let partial = GroupJudgment(
+            belongsTogether: true, confidence: 0.95, outcomeTitle: "Turkey",
+            memberTitles: ["Order the turkey", "Buy extra chairs"])
+        #expect(CaptureFlow.outcomeTitle(for: partial, shown: cards, spoken: spoken) == nil)
+        let two = Array(cards.prefix(2))
+        let pair = GroupJudgment(
+            belongsTogether: true, confidence: 0.95, outcomeTitle: "Turkey", memberTitles: two.map(\.title))
+        #expect(CaptureFlow.outcomeTitle(for: pair, shown: two, spoken: spoken) == nil)
+    }
 }

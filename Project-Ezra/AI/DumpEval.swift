@@ -218,6 +218,7 @@ enum DumpEval {
         var exact = 0
         var lost = 0
         var titledTotal = 0
+        var outcomesNamed: [String] = []
         var foldedTotal = 0
         var latencies: [Int] = []
         for dump in corpus {
@@ -248,6 +249,25 @@ enum DumpEval {
                 print(
                     "    · \(draft.title.prefix(40)) — context: \(draft.context ?? "-") · split offered: \(draft.mightBeSeveral == true)"
                 )
+            }
+            // Outcome naming (2026-10-04): only "thanksgiving-6" is one outcome.
+            if drafts.count >= CaptureFlow.minCardsToName {
+                let shown = drafts.map { OpenTaskSnapshot(id: $0.id, title: $0.title, category: $0.category) }
+                var named = "—"
+                // Grounded in the KEPT cards' words, as the composer does.
+                let kept = drafts.map { $0.provisionalSource ?? $0.title }.joined(separator: " ")
+                if let judgment = await CaptureFlow.judgeOutcome(spoken: dump.text, shown: shown) {
+                    named =
+                        CaptureFlow.outcomeTitle(for: judgment, shown: shown, spoken: kept).map {
+                            "“\($0)”"
+                        }
+                        ?? "none"
+                    print(
+                        "    judge: together=\(judgment.belongsTogether) conf=\(judgment.confidence) title=\(judgment.outcomeTitle) members=\(judgment.memberTitles.count)/\(shown.count)"
+                    )
+                    if named != "none" { outcomesNamed.append("\(dump.name): \(named)") }
+                }
+                print("    outcome name offered: \(named)")
             }
             if !reading.leftOut.isEmpty {
                 print("    left out: \(reading.leftOut.map { String($0.prefix(60)) })")
@@ -296,6 +316,7 @@ enum DumpEval {
         print(
             "dumps · titles rewritten by the model and accepted: \(titledTotal) · background lines folded: \(foldedTotal)"
         )
+        print("dumps · outcome names offered (only thanksgiving-6 is one outcome): \(outcomesNamed)")
         print(
             "ramble · piece count right: \(before)/\(total) → \(after)/\(total) · broke \(broke) · left a task out \(wronglyLeftOut)"
         )
