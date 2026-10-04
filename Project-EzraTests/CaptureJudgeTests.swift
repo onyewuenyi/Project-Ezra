@@ -278,6 +278,9 @@ struct CaptureJudgeTests {
         let errands = CaptureJudge.apply(
             [0: several], to: ["Mom's birthday is next week so I need a card and a gift", "pay the bill"])
         #expect(errands.pieces.first?.mightBeSeveral == true)
+        let single = CaptureJudge.apply(
+            [0: several], to: ["drop the kids at school early because of the assembly", "pay the bill"])
+        #expect(single.pieces.first?.mightBeSeveral == false, "one errand with a reason is not several")
     }
 
     @Test("A long one-line remark may be set aside; a short line never is")

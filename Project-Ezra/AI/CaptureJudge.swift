@@ -449,7 +449,14 @@ enum CaptureJudge {
                 } else {
                     // A Split is offered only where there is something to split: a piece
                     // with no action in it ("Hi families, a few reminders") holds no to-dos.
-                    keep(Piece(clause: clause, mightBeSeveral: mentionsAnAction(clause)))
+                    // And only where the read sees a second outcome too: on the phone (24A437)
+                    // the model called one task in five "several" ("drop the kids at school
+                    // early because of the assembly"), and a Split on a single errand is noise.
+                    keep(
+                        Piece(
+                            clause: clause,
+                            mightBeSeveral: mentionsAnAction(clause)
+                                && showsASecondOutcome(opening(of: clause))))
                 }
             default:
                 let todo = answer?.todo.flatMap { $0.isEmpty ? nil : $0 }

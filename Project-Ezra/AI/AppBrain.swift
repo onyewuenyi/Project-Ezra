@@ -398,9 +398,13 @@ final class AppBrain {
             switch route {
             case .local:
                 return nil
-            case .cloud where CloudModel.isReachable(for: .ramble):
-                return FoundationModelsEngine(sessionSource: .cloud)
             case .cloud:
+                // **Capture reads on the device only (2026-10-04).** This arm used to build
+                // the cloud-sourced `FoundationModelsEngine` when a provider was
+                // reachable; it is gone, so no capture path can open a cloud session
+                // whatever the gate says (`CloudOffTests` greps for it). What follows is
+                // the earlier offline answer, which is now the only one.
+                //
                 // A cloud route with no reachable provider is not an error — it is the
                 // routing answer for "offline" AND for "the last calls all failed"
                 // (`CloudHealth`), and it now degrades STRAIGHT to the deterministic

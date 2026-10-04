@@ -537,21 +537,9 @@ struct LaunchSeams {
             print("\n— on-device FM: no on-device model on this host")
         }
 
-        if args.contains("-WithCloud") {
-            guard CloudModel.isAvailable else {
-                print("\n— cloud: no provider configured")
-                print("=== END CAPTURE COMPARE ===")
-                return
-            }
-            await compareArm("cloud (the semantic authority)") {
-                let engine = FoundationModelsEngine(sessionSource: .cloud)
-                let intents = try await engine.triage(
-                    rawText: text, context: TriageContext(), onPartial: nil)
-                return IntentResolver.resolve(intents)
-            }
-        } else {
-            print("\n— cloud: skipped (pass -WithCloud to spend a call)")
-        }
+        // The cloud arm was removed with capture's cloud path (2026-10-04): capture
+        // reads on the device only, so there is no paid rung to compare against.
+        print("\n— cloud: removed from capture (reads on the device only)")
         print("=== END CAPTURE COMPARE ===")
         #endif
     }
