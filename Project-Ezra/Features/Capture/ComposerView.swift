@@ -1648,12 +1648,19 @@ struct ComposerView: View {
                 return
             }
             let original = interpretation.drafts[at]
+            // The date stays with the part that said it; the others are undated.
+            let dateOwner = CaptureJudge.partOwningDate(parts, source: source)
             let replacements = parts.enumerated().map { offset, title -> TaskDraft in
                 var part = original
                 part.id = UUID()
                 part.title = title
                 part.aiOriginal?.title = title
                 part.mightBeSeveral = nil
+                if offset != dateOwner {
+                    part.dueDate = nil
+                    part.dueReason = nil
+                    part.aiOriginal?.dueDate = nil
+                }
                 if offset > 0 {
                     part.context = nil
                     part.edgeProposals = []

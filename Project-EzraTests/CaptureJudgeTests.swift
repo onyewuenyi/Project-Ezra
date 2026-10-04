@@ -295,4 +295,19 @@ struct CaptureJudgeTests {
         #expect(reading.clauses.isEmpty)
         #expect(CaptureJudge.doubtfulIndices(in: ["the thing with the insurance people"]).isEmpty)
     }
+
+    @Test("After a split, the date stays with the part that said it")
+    func splitKeepsTheDateWhereItWasSaid() {
+        #expect(
+            CaptureJudge.partOwningDate(
+                ["Wash the soccer uniform", "Refill the prescription"],
+                source: "wash the soccer uniform before saturday and refill the prescription") == 0)
+        #expect(
+            CaptureJudge.partOwningDate(
+                ["Refill the prescription", "Wash the soccer uniform"],
+                source: "refill the prescription and wash the soccer uniform before saturday") == 1)
+        #expect(
+            CaptureJudge.partOwningDate(
+                ["Get a card", "Get a gift"], source: "I need a card and a gift") == nil)
+    }
 }

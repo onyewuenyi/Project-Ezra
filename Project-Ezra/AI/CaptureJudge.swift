@@ -662,6 +662,39 @@ enum CaptureJudge {
         }
     }
 
+    private static let timePattern = try? NSRegularExpression(
+        pattern: IntentResolver.timeExpressionPattern, options: [.caseInsensitive])
+
+    /// Which part of a split owns the card's date: the part whose stretch of the person's
+    /// words holds the date phrase ("wash the soccer uniform BEFORE SATURDAY and refill
+    /// the prescription" → the uniform). Each part's stretch runs from where its first
+    /// content word appears to where the next part's does. Nil when there is no date
+    /// phrase or a part cannot be placed — then no part keeps the date, rather than all.
+    static func partOwningDate(_ parts: [String], source: String) -> Int? {
+        let lowered = source.lowercased()
+        guard let timePattern,
+            let match = timePattern.firstMatch(
+                in: lowered, range: NSRange(lowered.startIndex..., in: lowered)),
+            let dateRange = Range(match.range, in: lowered)
+        else { return nil }
+        var starts: [String.Index] = []
+        var floor = lowered.startIndex
+        for part in parts {
+            let anchor = words(part).dropFirst().first {
+                !titleGlue.contains($0.lowercased()) && $0.count >= 3
+            }
+            guard let anchor,
+                let found = lowered.range(of: anchor.lowercased(), range: floor..<lowered.endIndex)
+            else { return nil }
+            starts.append(found.lowerBound)
+            floor = found.upperBound
+        }
+        for index in starts.indices.reversed() where dateRange.lowerBound >= starts[index] {
+            return index
+        }
+        return 0
+    }
+
     static func validatedSplit(_ todos: [String], source: String) -> [String]? {
         let parts = todos.compactMap { validatedTodo($0, source: source, currentTitle: "") }
         guard parts.count >= 2, parts.count == todos.count, parts.count <= 6 else { return nil }
