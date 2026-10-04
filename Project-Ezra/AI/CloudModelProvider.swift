@@ -117,6 +117,23 @@ extension CloudModelProvider {
 enum CloudModel {
     static var provider: any CloudModelProvider.Type = GeminiProvider.self
 
+    /// **The cloud rung is OFF — the product reads on the device only (2026-10-04).**
+    /// Ezra is free, and a free product cannot carry a per-call bill; the zero-cloud
+    /// `-RambleEval` baseline held every floor on the deterministic reader alone
+    /// (segmentation 52/53 golden · 23/26 real, 96% kept local, false-keep 0), and the
+    /// Advisor, Ask and both sweeps were on-device already.
+    ///
+    /// ONE constant at the one gate, so nothing can half-switch it: `isAvailable` and
+    /// everything built on it — capture routing, the Advisor's rung choice, both privacy
+    /// sentences — read this first, and `AppDelegate` never configures Firebase while it
+    /// is false, so there is no App Check handshake and no network behind the seam either.
+    /// It replaces "off because a gitignored plist happened to be missing", which any
+    /// archive made on a machine that has the file would have silently reversed.
+    ///
+    /// Turning it back on is this line plus a measured reason; the provider, the budget
+    /// and the breaker are all still here until the removal pass deletes them.
+    static let isEnabled = false
+
     /// Availability of the currently-installed provider, asked fresh. Safe to call on
     /// any device — see the protocol's warning about construction.
     ///
@@ -126,7 +143,7 @@ enum CloudModel {
     /// even during an outage) and for a receipt recording how a build was set up. It is
     /// the WRONG question for "should this call be made now" — a configured provider
     /// failing every request reports `true` forever. Use `isReachable` for that.
-    static var isAvailable: Bool { provider.isAvailable }
+    static var isAvailable: Bool { isEnabled && provider.isAvailable }
 
     /// Whether the cloud rung should actually be asked right now: configured **and** not
     /// currently tripped by `CloudHealth`.
