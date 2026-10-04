@@ -217,17 +217,22 @@ enum DumpEval {
         print("name            exp  cards  recall  left out  judged  split  ms")
         var exact = 0
         var lost = 0
+        var titledTotal = 0
+        var foldedTotal = 0
         var latencies: [Int] = []
         for dump in corpus {
             let started = Date()
             let reading = await CaptureJudge.read(clauses: Segmentation.items(from: dump.text)) {
-                await CaptureJudge.modelVerdict($0)
+                await CaptureJudge.modelAnswer($0)
             }
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             latencies.append(ms)
-            let drafts = AppBrain.drafts(fromClauses: reading.clauses)
+            let (drafts, retitled) = CaptureJudge.drafts(from: reading)
+            titledTotal += retitled
+            foldedTotal += reading.folded
             let titles = drafts.map(\.title)
-            let found = recall(dump.expected, in: titles)
+            // A folded report is the card's context, still on the card: it counts.
+            let found = recall(dump.expected, in: drafts.map { $0.title + " " + ($0.context ?? "") })
             if drafts.count == dump.expected.count { exact += 1 }
             lost += dump.expected.count - found
             print(
@@ -238,8 +243,11 @@ enum DumpEval {
                     + " \(String(reading.leftOut.count).padding(toLength: 9, withPad: " ", startingAt: 0)) "
                     + "\(String(reading.judged).padding(toLength: 7, withPad: " ", startingAt: 0)) "
                     + "\(String(reading.resplit).padding(toLength: 6, withPad: " ", startingAt: 0)) \(ms)")
-            if drafts.count != dump.expected.count {
-                print("    cards: \(titles.map { String($0.prefix(60)) })")
+            print("    cards: \(titles.map { String($0.prefix(60)) })")
+            for draft in drafts where draft.context != nil || draft.mightBeSeveral == true {
+                print(
+                    "    · \(draft.title.prefix(40)) — context: \(draft.context ?? "-") · split offered: \(draft.mightBeSeveral == true)"
+                )
             }
             if !reading.leftOut.isEmpty {
                 print("    left out: \(reading.leftOut.map { String($0.prefix(60)) })")
@@ -256,7 +264,7 @@ enum DumpEval {
             let intents = evalCase.expectedIntents ?? evalCase.expected.count
             let clauses = Segmentation.items(from: evalCase.utterance)
             let started = Date()
-            let reading = await CaptureJudge.read(clauses: clauses) { await CaptureJudge.modelVerdict($0) }
+            let reading = await CaptureJudge.read(clauses: clauses) { await CaptureJudge.modelAnswer($0) }
             latencies.append(Int(Date().timeIntervalSince(started) * 1000))
             total += 1
             let wasRight = clauses.count == intents
@@ -284,6 +292,9 @@ enum DumpEval {
         print("\n── judge pipeline · summary ──")
         print(
             "dumps · exact card count: \(localExact)/\(corpus.count) → \(exact)/\(corpus.count) · expected outcomes missing from cards: \(lost)"
+        )
+        print(
+            "dumps · titles rewritten by the model and accepted: \(titledTotal) · background lines folded: \(foldedTotal)"
         )
         print(
             "ramble · piece count right: \(before)/\(total) → \(after)/\(total) · broke \(broke) · left a task out \(wronglyLeftOut)"

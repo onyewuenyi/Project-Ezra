@@ -136,6 +136,15 @@ struct TaskDraft: Identifiable, Hashable, Codable {
     /// has no key and must still decode. It doubles as the provisional flag: a
     /// model-authored draft never carries one.
     var provisionalSource: String? = nil
+    /// A line of the capture the judge read as BACKGROUND for this task ("The
+    /// pediatrician called" before "call back about the vaccine form") — shown under the
+    /// title at Confirm and kept as the task's notes, never a card of its own
+    /// (`CaptureJudge`, 2026-10-04). Optional so parked drafts persisted before it decode.
+    var context: String? = nil
+    /// The judge read this card as SEVERAL things and the app could not split it safely:
+    /// the card offers a Split the person can tap (`CaptureJudge.modelSplit`). Optional
+    /// for the same decoding reason.
+    var mightBeSeveral: Bool? = nil
 
     /// True while this card is the instant deterministic reading rather than a model
     /// parse's. Derived, never stored: `DraftMerge.adopt` starts from the fresh
@@ -315,6 +324,8 @@ struct TaskDraft: Identifiable, Hashable, Codable {
             in: context
         )
         task.workIntent = workIntent  // a pure field write — NEVER touches needsDecision
+        // The background line the person said beside this task travels with it.
+        if let note = self.context, !note.isEmpty { task.notes = note }
         task.confirmedAt = now  // creation IS the confirm; there is no later transition
         return task
     }

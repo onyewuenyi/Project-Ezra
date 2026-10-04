@@ -598,6 +598,11 @@ struct ComposerView: View {
     private static let nothingFoundHint =
         "Nothing actionable in that yet. Try phrasing it as something to do — “call the dentist”, “decide about the gym” — and it'll take shape here."
 
+    /// The capture as a whole read as nothing to do (`CaptureJudge`), so it waits in the
+    /// left-out row rather than becoming a card.
+    private static let nothingToDoHint =
+        "That reads like a remark rather than something to do, so it's left out below. Tap it to keep it as a task."
+
     // MARK: - The Ramble arc: submit → understand → reveal
 
     /// Which stage of the arc is on screen. The whole point of the phase machine is the
@@ -714,19 +719,19 @@ struct ComposerView: View {
                     reading = await headStart.value
                 } else {
                     reading = await CaptureJudge.read(clauses: Segmentation.items(from: captured)) {
-                        await CaptureJudge.modelVerdict($0)
+                        await CaptureJudge.modelAnswer($0)
                     }
                 }
                 guard !Task.isCancelled else { return }
-                let drafts = AppBrain.drafts(
-                    fromClauses: reading.clauses, learned: learned, ownership: ownershipSnapshot)
+                let (drafts, retitled) = CaptureJudge.drafts(
+                    from: reading, learned: learned, ownership: ownershipSnapshot)
                 var run = CaptureRunTelemetry.local(
                     segmentation: Segmentation.structure(of: captured).label,
                     cloudAvailable: CloudModel.isReachable(for: .ramble))
                 run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
                 run.rung = IntelligenceRung.onDevice.rawValue
                 run.engineName =
-                    "on-device(judge \(reading.answered)/\(reading.judged) · split \(reading.resplit) · out \(reading.leftOut.count))"
+                    "on-device(judge \(reading.answered)/\(reading.judged) · split \(reading.resplit) · out \(reading.leftOut.count) · bg \(reading.folded) · titled \(retitled))"
                 run.armWon = headStart == nil ? "judge" : "judge(head start)"
                 lastRun = run
                 await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
@@ -1374,8 +1379,14 @@ struct ComposerView: View {
                 addMoreRow
 
                 if interpretation.drafts.isEmpty {
-                    Text(Self.nothingFoundHint).supportingStyle()
-                    keepAsOneTaskButton
+                    if interpretation.leftOut.isEmpty {
+                        Text(Self.nothingFoundHint).supportingStyle()
+                        keepAsOneTaskButton
+                    } else {
+                        // The judge read the whole capture as nothing to do. The words are
+                        // right below, one tap from being a task.
+                        Text(Self.nothingToDoHint).supportingStyle()
+                    }
                 } else {
                     ConfirmCreationList(
                         drafts: $interpretation.editableDrafts,
@@ -1383,6 +1394,7 @@ struct ComposerView: View {
                         rosterNames: rosterNames,
                         onAddToRoster: { addToRoster($0) },
                         onRemove: { noteRemoval(of: $0) },
+                        onSplit: { splitCard($0) },
                         revealedAt: revealedAt
                     )
                     if interpretation.drafts.count >= 2 { groupRow }
@@ -1569,6 +1581,53 @@ struct ComposerView: View {
         }
         .buttonStyle(.pressable)
         .accessibilityHint("Makes one task from exactly what you said, with the details still editable")
+    }
+
+    /// The person tapped Split on a card the judge read as several things. The model names
+    /// the parts (`CaptureJudge.modelSplit`, validated in the person's own words); the
+    /// card is replaced in place through the person's edit path, with Undo. A refused
+    /// split says so and leaves the card alone.
+    private func splitCard(_ draft: TaskDraft) {
+        guard let index = interpretation.drafts.firstIndex(where: { $0.id == draft.id }) else { return }
+        var hidden = interpretation.editableDrafts
+        hidden[index].mightBeSeveral = nil
+        interpretation.editableDrafts = hidden
+        let source = draft.provisionalSource ?? draft.title
+        Task {
+            let parts = await CaptureJudge.modelSplit(source)
+            guard let parts, let at = interpretation.drafts.firstIndex(where: { $0.id == draft.id }) else {
+                cardNotice = UndoNotice(message: "Couldn't split that one. Edit it instead.", undoAction: nil)
+                return
+            }
+            let original = interpretation.drafts[at]
+            let replacements = parts.enumerated().map { offset, title -> TaskDraft in
+                var part = original
+                part.id = UUID()
+                part.title = title
+                part.aiOriginal?.title = title
+                part.mightBeSeveral = nil
+                if offset > 0 {
+                    part.context = nil
+                    part.edgeProposals = []
+                }
+                return part
+            }
+            let ids = Set(replacements.map(\.id))
+            Motion.withMotion(Motion.settle) {
+                var drafts = interpretation.editableDrafts
+                drafts.replaceSubrange(at...at, with: replacements)
+                interpretation.editableDrafts = drafts
+            }
+            cardNotice = UndoNotice(message: "Split into \(parts.count) tasks") {
+                Motion.withMotion(Motion.settle) {
+                    var drafts = interpretation.editableDrafts
+                    guard let first = drafts.firstIndex(where: { ids.contains($0.id) }) else { return }
+                    drafts.removeAll { ids.contains($0.id) }
+                    drafts.insert(original, at: min(first, drafts.count))
+                    interpretation.editableDrafts = drafts
+                }
+            }
+        }
     }
 
     /// A card left the reveal. Record it for the merge (so a re-read cannot resurrect
@@ -2522,7 +2581,7 @@ struct ComposerView: View {
                 judgeHeadStart = (
                     heard,
                     Task {
-                        await CaptureJudge.read(clauses: clauses) { await CaptureJudge.modelVerdict($0) }
+                        await CaptureJudge.read(clauses: clauses) { await CaptureJudge.modelAnswer($0) }
                     }
                 )
             }

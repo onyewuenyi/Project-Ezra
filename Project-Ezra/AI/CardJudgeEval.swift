@@ -33,6 +33,8 @@ enum CardJudgeEval {
 
     enum Kind: String, CaseIterable, Sendable {
         case task, several, none
+
+        var isNotACard: Bool { self == .none }
     }
 
     // MARK: - The schemas
@@ -98,10 +100,16 @@ enum CardJudgeEval {
     // MARK: - The two arms
 
     static func judgeOne(_ clause: String) async -> (Kind?, Int) {
+        let (kind, _, ms) = await judgeOneWithTodo(clause)
+        return (kind, ms)
+    }
+
+    static func judgeOneWithTodo(_ clause: String) async -> (Kind?, String?, Int) {
         let started = Date()
-        let verdict = await CaptureJudge.modelVerdict(clause)
+        let answer = await CaptureJudge.modelAnswer(clause)
         return (
-            verdict.flatMap { Kind(rawValue: $0.rawValue) }, Int(Date().timeIntervalSince(started) * 1000)
+            answer.flatMap { Kind(rawValue: $0.verdict.rawValue) }, answer?.todo,
+            Int(Date().timeIntervalSince(started) * 1000)
         )
     }
 
@@ -143,9 +151,9 @@ enum CardJudgeEval {
             if item.label == .several { severalTotal += 1 }
             guard let judged else { return }
             answered += 1
-            if judged == item.label { right += 1 }
-            if judged == .none && item.label != .none { falseDrops.append(item.clause) }
-            if judged == .none && item.label == .none { junkCaught += 1 }
+            if judged == item.label || (judged.isNotACard && item.label.isNotACard) { right += 1 }
+            if judged.isNotACard && item.label != .none { falseDrops.append(item.clause) }
+            if judged.isNotACard && item.label == .none { junkCaught += 1 }
             if judged == .several && item.label == .several { severalCaught += 1 }
             if judged == .several && item.label == .task { falseSeveral += 1 }
         }
@@ -174,6 +182,8 @@ enum CardJudgeEval {
         }
 
         var perClause = Score()
+        var titleOffers = 0
+        var titleAccepted = 0
         var batched = Score()
         var oneLatencies: [Int] = []
         var listLatencies: [Int] = []
@@ -184,9 +194,19 @@ enum CardJudgeEval {
             var serial = 0
             var oneKinds: [Kind?] = []
             for item in items {
-                let (kind, ms) = await judgeOne(item.clause)
+                let (kind, todo, ms) = await judgeOneWithTodo(item.clause)
                 perClause.add(item, judged: kind)
                 oneKinds.append(kind)
+                if kind == .task, let todo, !todo.isEmpty, !Segmentation.startsAnItem(item.clause) {
+                    let current = AppBrain.provisionalDrafts(item.clause).first?.title ?? item.clause
+                    let accepted = CaptureJudge.validatedTodo(
+                        todo, source: item.clause, currentTitle: current)
+                    titleOffers += 1
+                    if accepted != nil { titleAccepted += 1 }
+                    print(
+                        "    title: \(current.prefix(50)) → \(todo) [\(accepted == nil ? "refused" : "ACCEPTED")]"
+                    )
+                }
                 oneLatencies.append(ms)
                 serial += ms
             }
@@ -216,10 +236,40 @@ enum CardJudgeEval {
         }
         for drop in bracketOne.falseDrops { print("    FALSE DROP: \(drop.prefix(90))") }
 
+        print("\n── split on tap: what the model's parts look like, after validation ──")
+        let splitCases = [
+            "Mom's birthday is next week so I need a card and a gift",
+            "wash the soccer uniform before saturday and refill the prescription",
+            "send it in, also we're out of milk and eggs and the car needs an oil change at some point",
+            "Wednesday parent teacher conference at 5, remember the report card",
+            "I have to remember to call the school about the pickup change, oh and honestly I think we should just go to the park",
+            "book the dentist and the vet for the kids next week",
+        ]
+        var splitAccepted = 0
+        var splitMs: [Int] = []
+        for text in splitCases {
+            let started = Date()
+            let raw = await CaptureJudge.modelSplitRaw(text) ?? []
+            let parts = CaptureJudge.validatedSplit(raw, source: text)
+            for todo in raw {
+                let ok = CaptureJudge.validatedTodo(todo, source: text, currentTitle: "") != nil
+                print("        raw: \(todo) [\(ok ? "ok" : "refused")]")
+            }
+            splitMs.append(Int(Date().timeIntervalSince(started) * 1000))
+            if parts != nil { splitAccepted += 1 }
+            print(
+                "    \(text.prefix(70)) → \(parts.map { $0.joined(separator: " | ") } ?? "REFUSED") · \(splitMs.last ?? 0)ms"
+            )
+        }
+        print("split on tap: accepted \(splitAccepted)/\(splitCases.count) · max \(splitMs.max() ?? 0)ms")
+
         let sortedOne = oneLatencies.sorted()
         let sortedList = listLatencies.sorted()
         print("\n── summary ──")
         print("dumps · per clause: \(perClause.line)")
+        print(
+            "dumps · to-do titles offered for non-verb-led task pieces: \(titleOffers) · accepted by the validator: \(titleAccepted)"
+        )
         print("dumps · one list call: \(batched.line)")
         print("bracket · per clause (\(bracket.count) task clauses): \(bracketOne.line)")
         for drop in perClause.falseDrops { print("    dump FALSE DROP (per clause): \(drop.prefix(90))") }
