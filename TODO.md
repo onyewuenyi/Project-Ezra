@@ -15,10 +15,10 @@ skips the one gate internal testing does not need. What is left needs a person.
 2. [ ] **App Store Connect app record** for bundle id `amanze-studios.Project-Ezra`, named
        Ezra (the Kinly name check is still open). SKU anything; primary language English.
 3. [ ] **App ID capabilities** (developer portal ▸ Identifiers): iCloud with the container
-       `iCloud.amanze-studios.Project-Ezra`, Push Notifications, and **App Attest**. App
-       Attest is owed before App Check enforcement on **2026-11-02** — once it is on, the
-       `com.apple.developer.devicecheck.appattest-environment` entitlement can be added
-       (adding it first breaks signing).
+       `iCloud.amanze-studios.Project-Ezra` and Push Notifications. **App Attest is no
+       longer needed (2026-10-04):** the cloud rung is off (`CloudModel.isEnabled`), so
+       nothing requests an App Check token and the 2026-11-02 enforcement date does not
+       apply. It returns to this list only if the cloud rung is turned back on.
 4. [ ] **CloudKit schema: initialize Development, then deploy to Production.** Run a DEBUG
        build on a device signed into iCloud with the launch argument
        `-InitializeCloudKitSchema` (Xcode ▸ Scheme ▸ Run ▸ Arguments); wait for
