@@ -795,6 +795,25 @@ enum RambleEval {
                 ExpectedTask(titleContains: ["flights"], blocked: true),
                 ExpectedTask(titleContains: ["daycare"], expectDue: true),
             ]),
+
+        // **Found by `-DumpEval` (2026-10-04), the run that measured what the cloud's
+        // removal left open.** The commonest way a parent opens a dictated list is an
+        // occasion and a need — "for thanksgiving I need to order the turkey" — and that
+        // first part opens on the occasion, not a verb, so `splitCommaList`'s all-or-
+        // nothing veto threw out the whole list: six outcomes came back as TWO cards,
+        // the first fusing five. The fourth arm of `isItemLike` admits exactly that shape
+        // (occasion · own need-statement · action verb) and nothing looser.
+        EvalCase(
+            utterance:
+                "for thanksgiving I need to order the turkey by Monday, ask Aunt Rose to bring the pies, buy extra chairs, clean the guest room, book the flights for my parents once we know the date, and make a seating chart",
+            expected: [
+                ExpectedTask(titleContains: ["turkey"], expectDue: true),
+                ExpectedTask(titleContains: ["pies"]),
+                ExpectedTask(titleContains: ["chairs"]),
+                ExpectedTask(titleContains: ["guest room"]),
+                ExpectedTask(titleContains: ["flights"], blocked: true),
+                ExpectedTask(titleContains: ["seating"]),
+            ]),
     ]
 
     // MARK: - Scoring

@@ -58,7 +58,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // capture on the device, and `DataBoundary` stops claiming anything is
         // transmitted. That is a correct build, not a broken one — so it should boot and
         // say so in the diagnostics card, not die.
-        if FirebaseOptions.defaultOptions() != nil {
+        // …and only while the cloud rung is on at all (`CloudModel.isEnabled`): with it off
+        // there is nothing to configure, so no App Check token is ever requested.
+        if CloudModel.isEnabled, FirebaseOptions.defaultOptions() != nil {
             AppCheckSetup.install()
             FirebaseApp.configure()
         }
