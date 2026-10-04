@@ -37,7 +37,8 @@ struct CaptureFlowTests {
 
     private func plan(_ text: String, voice: Bool = false, model: Bool = true) -> CaptureFlow.Arm {
         CaptureFlow.plan(
-            text: text, localRead: AppBrain.provisionalDrafts(text), fromVoice: voice, modelAvailable: model
+            text: text, localRead: AppBrain.provisionalDrafts(text), fromVoice: voice, modelAvailable: model,
+            duplicateCandidates: false
         ).arm
     }
 

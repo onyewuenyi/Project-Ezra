@@ -56,11 +56,14 @@ enum CaptureFlow {
     /// silently transmitted). A capability the caller does not name is a capability nobody
     /// is deciding about.
     static func plan(
-        text: String, localRead: [TaskDraft], fromVoice: Bool, modelAvailable: Bool
+        text: String, localRead: [TaskDraft], fromVoice: Bool, modelAvailable: Bool,
+        duplicateCandidates: Bool
     ) -> SubmitPlan {
         let quiet = SubmitPlan(arm: fromVoice ? .revealAfterDwell : .revealInstantly)
         guard modelAvailable else { return quiet }
-        if !CaptureJudge.doubtfulIndices(in: Segmentation.items(from: text)).isEmpty {
+        // A doubtful piece, or a card with something close to it already on the list
+        // (`CaptureDuplicates`): both are the judge arm's model pass.
+        if duplicateCandidates || !CaptureJudge.doubtfulIndices(in: Segmentation.items(from: text)).isEmpty {
             return SubmitPlan(arm: .judge)
         }
         // The single-thought engine earns its seconds only on evidence the read fell

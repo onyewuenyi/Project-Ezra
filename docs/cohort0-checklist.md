@@ -63,6 +63,12 @@ file. See *Keeping this file current* at the bottom.
   not clear, is a finding. Numbers: `-CardJudgeEval` (FALSE DROP must stay 0) and
   `-DumpEval`'s judge-pipeline section.
 
+- **A duplicate offer at capture is the sweep's judge, never a guess** (`CaptureDuplicates`,
+  2026-10-04). Candidates pass the sweep's lexical floor, the verdict is
+  `DuplicateSweep.judge`, the tier is `IntentResolver.tier`, and a pairing the person
+  declined (`SuppressionStore`) is never offered again. A path that proposes a merge
+  without the judge, or ignores a suppression, is a finding.
+
 - **The boundary pass is unreachable in production** (`OnDeviceSegmenter`; its composer
   arm was removed with the posture on 2026-10-04 and `-DumpEval` measured it wrong on
   dumps). It survives for `-FMPrimitives` and `-DumpEval` only. As built, it proposes

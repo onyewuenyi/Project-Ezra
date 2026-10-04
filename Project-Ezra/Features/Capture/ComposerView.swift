@@ -682,9 +682,17 @@ struct ComposerView: View {
         // The decision is a VALUE (`CaptureFlow.plan`, test-pinned): with a model present,
         // a doubtful piece goes to the judge and a single thought the read could not land
         // goes to the single-thought engine; everything else reveals the read as it is.
+        // What is already on the list, for the "you already have that" check
+        // (`CaptureDuplicates`) — read once, here, and handed to the judge arm.
+        let openTasks = OpenTaskSnapshotCache.shared.snapshots(in: context)
+        let suppressions = SuppressionStore.load(
+            in: context, existingTaskIDs: Set(openTasks.map(\.id)))
         let plan = CaptureFlow.plan(
             text: captured, localRead: local, fromVoice: fromVoice,
-            modelAvailable: PrivateCaptureEngine.modelAvailable())
+            modelAvailable: PrivateCaptureEngine.modelAvailable(),
+            duplicateCandidates: !CaptureDuplicates.candidates(
+                for: local, among: openTasks, suppressions: suppressions
+            ).isEmpty)
         let route = CaptureRoute.local
         structureSource = route.metricName
 
@@ -723,8 +731,11 @@ struct ComposerView: View {
                     }
                 }
                 guard !Task.isCancelled else { return }
-                let (drafts, retitled) = CaptureJudge.drafts(
+                let (judged, retitled) = CaptureJudge.drafts(
                     from: reading, learned: learned, ownership: ownershipSnapshot)
+                let drafts = await CaptureDuplicates.proposing(
+                    judged, among: openTasks, suppressions: suppressions
+                ) { await CaptureDuplicates.modelJudge($0) }
                 var run = CaptureRunTelemetry.local(
                     segmentation: Segmentation.structure(of: captured).label,
                     cloudAvailable: CloudModel.isReachable(for: .ramble))
@@ -2566,7 +2577,7 @@ struct ComposerView: View {
         if PrivateCaptureEngine.modelAvailable(),
             CaptureFlow.plan(
                 text: heardSoFar, localRead: AppBrain.provisionalDrafts(heardSoFar, learned: sessionRules()),
-                fromVoice: true, modelAvailable: true
+                fromVoice: true, modelAvailable: true, duplicateCandidates: false
             ).arm == .privateEngine
         {
             privateEngine.silenceArmed(text: text)
