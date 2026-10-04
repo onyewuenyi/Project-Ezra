@@ -107,6 +107,12 @@ extension AppBrain {
     func runMaintenanceSweepsIfDue(
         in context: NSManagedObjectContext, now: Date = Date(), defaults: UserDefaults = .standard
     ) {
+        // The group this install reports as, on EVERY foreground and outside the hourly
+        // debounce: the debounce survives a relaunch, and events logged before the next
+        // sweep would otherwise carry no group. The sink skips an unchanged identity.
+        if let household = Household.existing(in: context) {
+            Telemetry.identify(GroupMetrics.group(for: household), defaults: defaults)
+        }
         let key = "brainSweeps.lastRunAt"
         if let last = defaults.object(forKey: key) as? Date, now.timeIntervalSince(last) < 3600 {
             return
@@ -119,9 +125,13 @@ extension AppBrain {
         if let household = Household.existing(in: context) {
             let entries =
                 (try? context.fetch(NSFetchRequest<ChangeLogEntry>(entityName: "ChangeLogEntry"))) ?? []
+            let tasks = TaskItem.fetchAll(in: context)
             let reading = HouseholdActivation.measure(
-                household: household, tasks: TaskItem.fetchAll(in: context), entries: entries, now: now)
+                household: household, tasks: tasks, entries: entries, now: now)
             HouseholdActivation.recordIfNewlyActivated(reading, defaults: defaults)
+            // The weekly group snapshot rides the same pass and the same working set.
+            let metrics = GroupMetrics.measure(household: household, tasks: tasks, entries: entries, now: now)
+            GroupMetrics.recordWeeklySnapshotIfDue(metrics, now: now, defaults: defaults)
         }
         // The destructive-tier exception rides the same debounce but never the
         // foreground: model judgments run behind a background deadline, hard-capped

@@ -915,11 +915,13 @@ final class AppBrain {
         }
         // Counts as BUCKETS, and "corrected" as a bit: whether any confirm-card edit
         // landed as a `Correction` — the capture-acceptance signal, observed without
-        // asking (`RequiredAttention.capture` is the exact local form).
+        // asking (`RequiredAttention.capture` is the exact local form). `triage` is the
+        // capture's arrival to this tap — Linear's triage time, for a family.
         Telemetry.log(
             .captureCommitted(
                 created: CountBucket(created.count), merged: CountBucket(mergeTargets.count),
-                corrected: drafts.contains { !$0.corrections.isEmpty }))
+                corrected: drafts.contains { !$0.corrections.isEmpty },
+                triage: DurationBucket(seconds: commitStarted.timeIntervalSince(capture.createdAt))))
         // The confirm tap's own wall clock — the other half of "instant capture", and
         // the number that decides whether the remaining commit-path work (the
         // per-created-task dependent rescan in `AttentionEngine.metadata`) is worth
@@ -1025,7 +1027,8 @@ final class AppBrain {
                     dependent.removeBlocker(blocker.id, among: all)
                 }
                 let before = dependent.taskBlockerIDs.count
-                dependent.addTaskBlocker(newID, among: all, origin: .inferred(confidence: 0.9))  // no-ops if it'd cycle
+                // No-ops if it'd cycle.
+                dependent.addTaskBlocker(newID, among: all, origin: .inferred(confidence: 0.9))
                 if dependent.hasActiveBlockers(among: all) { dependent.lastUnblockedAt = priorUnblockedAt }
                 guard dependent.taskBlockerIDs.count > before else { continue }
                 context.insert(
@@ -1382,7 +1385,8 @@ final class AppBrain {
             if let blockerID = TaskItem.resolveBlocker(
                 phrase: phrase, among: candidates.filter { $0.uuid != task.uuid })
             {
-                task.addTaskBlocker(blockerID, among: candidates, origin: .inferred(confidence: 0.9))  // no-ops if it'd cycle
+                // No-ops if it'd cycle.
+                task.addTaskBlocker(blockerID, among: candidates, origin: .inferred(confidence: 0.9))
             } else {
                 // No matching task: the captured wait becomes an EXTERNAL blocker in
                 // the user's own words ("waiting on receipts") rather than being

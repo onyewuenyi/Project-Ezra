@@ -24,15 +24,16 @@ advertising or measurement. `NSPrivacyTracking` is false and the tracking-domain
 empty. Answer **No** to every tracking question, including "Used for Tracking" on each
 data type below.
 
-Three data types, and every one of them is **Not Linked to You**:
+Four data types, and every one of them is **Not Linked to You**:
 
 | Data type | Category in the form | Purpose | Linked | Tracking |
 |---|---|---|---|---|
 | Product interaction | Usage Data | Analytics | No | No |
 | Device ID | Identifiers | Analytics | No | No |
+| User ID | Identifiers | Analytics | No | No |
 | Other User Content | User Content | App Functionality | No | No |
 
-Notes for the three, in case the form asks for detail:
+Notes for the four, in case the form asks for detail:
 
 - **Product interaction** is the closed telemetry enum (`Models/Telemetry.swift`), whose
   every payload is an enum or a bucket — never a title, a name, a raw count or a
@@ -42,6 +43,11 @@ Notes for the three, in case the form asks for detail:
   reset with the store. **It is not the IDFA and not the IDFV** — if the form offers
   "Device ID" under Identifiers, that is the right box; do not tick Advertising
   Identifier.
+- **User ID** is the anonymous group code (2026-10-04): a salted one-way hash of the
+  household's random internal id, so the phones in one household count as one group on
+  the dashboard. It is never the household's name and never the id itself, and it is sent
+  only while product telemetry is on. "User ID" under Identifiers is the closest box: an
+  app-assigned id that is not the device's.
 - **Other User Content** is a capture's raw words, and only when the router escalates a
   ramble to the cloud model so it can be read into tasks. Audio never leaves the device.
   Corrections and history never leave. The on-device posture keeps even this on the phone.

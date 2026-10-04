@@ -69,8 +69,11 @@ skips the one gate internal testing does not need. What is left needs a person.
       `Project-Ezra/Info.plist` → `StatsigClientKey` (an empty value means no sink and
       nothing leaves; a `secret-` key is refused); create the three gates exactly as named —
       `kill_cloud_capture`, `kill_cloud_advisor`, `kill_weekly_digest` (each OFF: they are
-      kill switches, and ON turns the thing off). *Done when:* the Settings diagnostics card
-      reads `telemetry: on · sharing` and one event shows in the console.
+      kill switches, and ON turns the thing off). **Also add the custom ID type `groupID`**
+      (Project Settings ▸ ID types; 2026-10-04): the app sends each household as one group
+      under that name, and without the ID type the console computes nothing per group.
+      *Done when:* the Settings diagnostics card reads `telemetry: on · sharing`, one event
+      shows in the console, and Metrics Explorer offers `groupID` as a unit.
 
 - [ ] **The name check — App Store + trademark — before anything public.** Kinly is
       already a video-conferencing brand. The rename stays undone until this is answered
@@ -124,8 +127,8 @@ it. Each of these is invisible to a green build and to the whole test suite.
       while the contact placeholder is still there. Drop them on anything that serves
       static files, set both constants, and put the same two URLs in App Store Connect. Guideline 5.1.1(i) requires an app that collects data
       to link its privacy policy *from inside the app*, not only from the listing, and
-      this app collects three things (`PrivacyInfo.xcprivacy`: product interaction, the
-      anonymous install id, the raw words on an escalated capture). Both URLs are `nil`
+      this app collects four things (`PrivacyInfo.xcprivacy`: product interaction, the
+      anonymous install id, the anonymous group code, the raw words on an escalated capture). Both URLs are `nil`
       today, so the app renders no link — deliberately, because a 404 under "Privacy
       policy" is the first thing a reviewer taps.
       *Done when:* the Settings diagnostics line reads `links: ready`, and both links open
@@ -136,4 +139,5 @@ it. Each of these is invisible to a green build and to the whole test suite.
       manifest; a mismatch is a rejection. The manifest declares no tracking, three
       collected types, all UNLINKED to identity, and one required-reason API
       (`UserDefaults`, CA92.1). Answer the questionnaire from the manifest, not from
-      memory. *Done when:* the listing's privacy section says the same three things.
+      memory. *Done when:* the listing's privacy section says the same four things (the
+      group code is a User ID row, added 2026-10-04 — `docs/app-store-listing.md`).

@@ -164,7 +164,7 @@ struct SubmissionGateTests {
     }
 
     /// The manifest is what the App Store Connect questionnaire is checked against, so a
-    /// claim here that the code contradicts is a rejection. These are the three collected
+    /// claim here that the code contradicts is a rejection. These are the four collected
     /// types and the one required-reason API the app actually has.
     @Test("The privacy manifest still describes this app")
     func theManifestMatchesTheApp() throws {
@@ -183,8 +183,9 @@ struct SubmissionGateTests {
         #expect(!reasons.isEmpty, "UserDefaults is a required-reason API and must be declared")
         let collected = manifest["NSPrivacyCollectedDataTypes"] as? [[String: Any]] ?? []
         #expect(
-            collected.count == 3,
-            "three collected types: product interaction, the install id, the raw capture words")
+            collected.count == 4,
+            "four collected types: product interaction, the install id, the group code, the raw capture words"
+        )
         for type in collected {
             #expect(
                 type["NSPrivacyCollectedDataTypeLinked"] as? Bool == false,

@@ -17,7 +17,10 @@
 //  is `Telemetry.installID` — a UUID minted on first use — with `optOutNonSdkMetadata`
 //  so the SDK's own device/session harvest is minimal, `disableCurrentVCLogging` so
 //  screen names never ride along, and `logNetworkMetadata` off. No name, no email, no
-//  iCloud identity, no household. The client key lives in `Info.plist` under
+//  iCloud identity. Since 2026-10-04 the user also carries ONE custom id, `groupID` — the
+//  salted hash `TelemetryGroup` makes of the household's id, never the id itself — and a
+//  `groupSize` bucket, so the console can compute every metric per group (a household of
+//  1 or N) as well as per install. The client key lives in `Info.plist` under
 //  `StatsigClientKey` and is a CLIENT key by construction (`Statsig.initialize` refuses a
 //  `secret-` prefix); with no key the sink is simply absent and nothing leaves.
 //
@@ -43,7 +46,12 @@ final class StatsigSink: TelemetrySink {
         return StatsigSink(key: key, installID: Telemetry.installID(defaults: defaults))
     }
 
+    private let installID: String
+    /// The group last sent, so an identical identify (every foreground) is not a refetch.
+    private var group: TelemetryGroup?
+
     private init(key: String, installID: String) {
+        self.installID = installID
         #if DEBUG
         let tier = StatsigEnvironment(tier: .Development)
         #else
@@ -64,6 +72,18 @@ final class StatsigSink: TelemetrySink {
 
     func log(name: String, metadata: [String: String]) {
         Statsig.logEvent(name, metadata: metadata)
+    }
+
+    /// Switch the Statsig user to one that carries the group. `updateUserWithResult` keeps
+    /// the same `userID`, so the install's history stays one unit; only the custom id and
+    /// the size bucket are added.
+    func identify(group: TelemetryGroup) {
+        guard group != self.group else { return }
+        self.group = group
+        let user = StatsigUser(
+            userID: installID, custom: ["groupSize": group.size.rawValue], optOutNonSdkMetadata: true,
+            customIDs: ["groupID": group.id])
+        Statsig.updateUserWithResult(user)
     }
 
     func isKilled(_ gate: String) -> Bool? {

@@ -94,7 +94,13 @@ extension TaskItem {
         transition(to: .done, now: now)
         completedAt = now
         killedAt = nil
-        Telemetry.log(.taskCompleted)
+        // Linear's two times, as buckets (2026-10-04): lead from the capture, cycle from the
+        // FIRST start — a task picked up, dropped and resumed has been in cycle since then.
+        let firstStart = stateTimeline.first { $0.state == TaskStatus.doing.rawValue }?.enteredAt
+        Telemetry.log(
+            .taskCompleted(
+                lead: AgeBucket(seconds: now.timeIntervalSince(confirmedAt ?? createdAt)),
+                cycle: firstStart.map { AgeBucket(seconds: now.timeIntervalSince($0)) }))
     }
 
     /// Explicitly kill — resolved, but recorded as a kill so resolution honesty
