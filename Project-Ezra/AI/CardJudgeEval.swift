@@ -52,14 +52,6 @@ enum CardJudgeEval {
         let kinds: [String]
     }
 
-    static let instructions = """
-        You sort lines a person said or pasted into their to-do app. For a line, answer \
-        with one word. task: it holds one thing they need to do, get, book, pay, send or \
-        remember. several: it holds more than one separate thing to do. none: it is a \
-        greeting, a sign-off, small talk or a remark with nothing to do. When unsure \
-        between task and none, answer task.
-        """
-
     static let capSeconds: Double = 6
 
     // MARK: - Labels (pure)
@@ -107,20 +99,17 @@ enum CardJudgeEval {
 
     static func judgeOne(_ clause: String) async -> (Kind?, Int) {
         let started = Date()
-        let instructions = instructions
-        let kind: Kind? = try? await ModelDeadline.race(timeout: capSeconds) {
-            let session = LanguageModelSession(instructions: instructions)
-            let read = try await session.respond(to: "Line: \(clause)", generating: OneRead.self).content
-            return Kind(rawValue: read.kind.lowercased())
-        }
-        return (kind, Int(Date().timeIntervalSince(started) * 1000))
+        let verdict = await CaptureJudge.modelVerdict(clause)
+        return (
+            verdict.flatMap { Kind(rawValue: $0.rawValue) }, Int(Date().timeIntervalSince(started) * 1000)
+        )
     }
 
     static func judgeList(_ clauses: [String]) async -> ([Kind]?, Int) {
         let started = Date()
         let numbered = clauses.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
         let count = clauses.count
-        let instructions = instructions
+        let instructions = CaptureJudge.instructions
         let kinds: [Kind]? = try? await ModelDeadline.race(timeout: capSeconds + Double(count)) {
             let session = LanguageModelSession(instructions: instructions)
             let read = try await session.respond(
@@ -177,7 +166,7 @@ enum CardJudgeEval {
         if args.contains("-EvalToFile") { Instrument.teeStdoutToDocuments("cardjudge-report.txt") }
         let markers = Instrument.Markers(name: "CARD JUDGE EVAL")
         print(markers.begin)
-        print(Instrument.runStamp(model: brain.status.description, configuration: instructions))
+        print(Instrument.runStamp(model: brain.status.description, configuration: CaptureJudge.instructions))
         guard brain.status.isOnDevice else {
             print("(no on-device model on this host — nothing measured)")
             print(markers.end)

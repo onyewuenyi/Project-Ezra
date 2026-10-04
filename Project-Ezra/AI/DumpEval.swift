@@ -200,7 +200,99 @@ enum DumpEval {
             }
         }
         print("providerCalls: 0 (the provider slot held EvalQuotaGuard)")
+        if onDevice { await runJudgePipeline(localExact: localExact) }
         print(markers.end)
+    }
+
+    // MARK: - The judge pipeline (2026-10-04)
+
+    /// The redesigned read, end to end: the deterministic pieces, the on-device judge over
+    /// the doubtful ones, the validated re-split, then the same resolver. Scored on the
+    /// dumps for exact card count and recall, and on the Ramble corpora as the regression
+    /// bracket: a case the plain read had right must stay right, and nothing a case
+    /// expects may be left out.
+    @MainActor
+    private static func runJudgePipeline(localExact: Int) async {
+        print("\n── judge pipeline · dumps ──")
+        print("name            exp  cards  recall  left out  judged  split  ms")
+        var exact = 0
+        var lost = 0
+        var latencies: [Int] = []
+        for dump in corpus {
+            let started = Date()
+            let reading = await CaptureJudge.read(clauses: Segmentation.items(from: dump.text)) {
+                await CaptureJudge.modelVerdict($0)
+            }
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            latencies.append(ms)
+            let drafts = AppBrain.drafts(fromClauses: reading.clauses)
+            let titles = drafts.map(\.title)
+            let found = recall(dump.expected, in: titles)
+            if drafts.count == dump.expected.count { exact += 1 }
+            lost += dump.expected.count - found
+            print(
+                "\(dump.name.padding(toLength: 14, withPad: " ", startingAt: 0)) "
+                    + "\(String(dump.expected.count).padding(toLength: 4, withPad: " ", startingAt: 0)) "
+                    + "\(String(drafts.count).padding(toLength: 6, withPad: " ", startingAt: 0)) "
+                    + "\(found)/\(dump.expected.count)".padding(toLength: 7, withPad: " ", startingAt: 0)
+                    + " \(String(reading.leftOut.count).padding(toLength: 9, withPad: " ", startingAt: 0)) "
+                    + "\(String(reading.judged).padding(toLength: 7, withPad: " ", startingAt: 0)) "
+                    + "\(String(reading.resplit).padding(toLength: 6, withPad: " ", startingAt: 0)) \(ms)")
+            if drafts.count != dump.expected.count {
+                print("    cards: \(titles.map { String($0.prefix(60)) })")
+            }
+            if !reading.leftOut.isEmpty {
+                print("    left out: \(reading.leftOut.map { String($0.prefix(60)) })")
+            }
+        }
+
+        print("\n── judge pipeline · Ramble corpora (regression bracket) ──")
+        var before = 0
+        var after = 0
+        var broke = 0
+        var total = 0
+        var wronglyLeftOut = 0
+        for evalCase in RambleEval.evalSet + RambleEval.realSet {
+            let intents = evalCase.expectedIntents ?? evalCase.expected.count
+            let clauses = Segmentation.items(from: evalCase.utterance)
+            let started = Date()
+            let reading = await CaptureJudge.read(clauses: clauses) { await CaptureJudge.modelVerdict($0) }
+            latencies.append(Int(Date().timeIntervalSince(started) * 1000))
+            total += 1
+            let wasRight = clauses.count == intents
+            let isRight = reading.clauses.count == intents
+            if wasRight { before += 1 }
+            if isRight { after += 1 }
+            if wasRight && !isRight {
+                broke += 1
+                print(
+                    "    BROKE (\(clauses.count) → \(reading.clauses.count), want \(intents)): \(evalCase.utterance.prefix(80))"
+                )
+                print(
+                    "        now: \(reading.clauses.map { String($0.prefix(40)) }) left out: \(reading.leftOut)"
+                )
+            } else if !wasRight && isRight {
+                print(
+                    "    fixed (\(clauses.count) → \(reading.clauses.count)): \(evalCase.utterance.prefix(80))"
+                )
+            }
+            if intents > 0, !reading.leftOut.isEmpty, reading.clauses.count < intents {
+                wronglyLeftOut += 1
+            }
+        }
+        let sorted = latencies.sorted()
+        print("\n── judge pipeline · summary ──")
+        print(
+            "dumps · exact card count: \(localExact)/\(corpus.count) → \(exact)/\(corpus.count) · expected outcomes missing from cards: \(lost)"
+        )
+        print(
+            "ramble · piece count right: \(before)/\(total) → \(after)/\(total) · broke \(broke) · left a task out \(wronglyLeftOut)"
+        )
+        if !sorted.isEmpty {
+            print(
+                "latency · whole read p50 \(sorted[sorted.count / 2])ms · p95 \(sorted[min(sorted.count - 1, sorted.count * 95 / 100)])ms · max \(sorted.last ?? 0)ms"
+            )
+        }
     }
 }
 
