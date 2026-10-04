@@ -186,6 +186,16 @@ struct ComposerView: View {
     /// it, and every private capture paid the cold ~1.5 s pre-first-token the design
     /// was written to hide. `speculative:` on the outcome was never true.
     @State private var privateEngine = PrivateCaptureEngine()
+    /// The judge's head start (`CaptureJudge`): when the silence window arms over a
+    /// capture with doubtful pieces, the read starts NOW, hidden, and submit collects it
+    /// if the words have not moved. Same bargain as the private engine's speculation:
+    /// nothing is shown before capture-end, and a discarded run costs battery, never
+    /// privacy.
+    @State private var judgeHeadStart: (text: String, task: Task<CaptureJudge.Reading, Never>)?
+    /// What the judge set aside at the reveal, and how many of those the person added
+    /// back — the false-drop meter, counted for the receipt at Create.
+    @State private var judgeLeftOutCount = 0
+    @State private var judgeRestoredCount = 0
     /// The user's past "no"s, loaded once per composer session — they only change at commit
     /// (which writes new `SuppressionRecord`s and dismisses). Loading also lazily prunes
     /// expired/orphaned rows, so caching keeps that off the per-keystroke path.
@@ -459,6 +469,8 @@ struct ComposerView: View {
                     // New words: any hidden generation is about a capture that no
                     // longer exists.
                     if posture == .onDevice { privateEngine.transcriptChanged() }
+                    judgeHeadStart?.task.cancel()
+                    judgeHeadStart = nil
                 }
                 guard Self.shouldArmSilence(transcript: transcript) else { return }
                 usedDictation = true
@@ -531,6 +543,7 @@ struct ComposerView: View {
                 let midListening = phase == .listening && speech.isActive
                 speech.stop()
                 privateEngine.cancel()
+                judgeHeadStart?.task.cancel()
                 parse.silenceTask?.cancel()
                 silenceDeadline = nil
                 parse.parseTask?.cancel()
@@ -680,7 +693,8 @@ struct ComposerView: View {
             text: captured, localRead: local, fromVoice: fromVoice, posture: posture,
             privateModelAvailable: PrivateCaptureEngine.modelAvailable(),
             boundaryPassAvailable: OnDeviceSegmenter.isRoutingEnabled
-                && PrivateCaptureEngine.modelAvailable())
+                && PrivateCaptureEngine.modelAvailable(),
+            judgeAvailable: PrivateCaptureEngine.modelAvailable())
         let decision = (route: plan.route, escalation: plan.escalation)
         let route = decision.route
         structureSource = route.metricName
@@ -705,6 +719,55 @@ struct ComposerView: View {
         // version of this and double-counted every model parse.
         switch route {
         case .local:
+            // THE JUDGE (2026-10-04): the read made the pieces, and at least one of them
+            // is doubtful — a line with no action to open it, or one that shows a second
+            // outcome. The on-device model says what each doubtful piece is; the app
+            // re-splits and sets aside only what it can validate, and a piece with no
+            // answer stays a card. One reveal, behind the same orb, typed or spoken.
+            if plan.arm == .judge {
+                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
+                understandingSince = .now
+                Motion.withMotion(Motion.heroSettle) { phase = .understanding }
+                parkIfUnfinished(force: true)
+                parse.parseTask?.cancel()
+                let headStart = judgeHeadStart?.text == captured ? judgeHeadStart?.task : nil
+                judgeHeadStart = nil
+                parse.parseTask = Task {
+                    let learned = sessionRules()
+                    let reading: CaptureJudge.Reading
+                    if let headStart {
+                        reading = await headStart.value
+                    } else {
+                        reading = await CaptureJudge.read(clauses: Segmentation.items(from: captured)) {
+                            await CaptureJudge.modelVerdict($0)
+                        }
+                    }
+                    guard !Task.isCancelled else { return }
+                    let drafts = AppBrain.drafts(
+                        fromClauses: reading.clauses, learned: learned, ownership: ownershipSnapshot)
+                    var run = CaptureRunTelemetry.local(
+                        segmentation: Segmentation.structure(of: captured).label,
+                        cloudAvailable: CloudModel.isReachable(for: .ramble))
+                    run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
+                    run.rung = IntelligenceRung.onDevice.rawValue
+                    run.engineName =
+                        "on-device(judge \(reading.answered)/\(reading.judged) · split \(reading.resplit) · out \(reading.leftOut.count))"
+                    run.armWon = headStart == nil ? "judge" : "judge(head start)"
+                    lastRun = run
+                    await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
+                    guard !Task.isCancelled else { return }
+                    parse.parseTask = nil
+                    judgeLeftOutCount = reading.leftOut.count
+                    judgeRestoredCount = 0
+                    if interpretation.propose(drafts, leftOut: reading.leftOut) {
+                        reveal()
+                    } else {
+                        ModelMetrics.shared.recordRefusedProposal()
+                    }
+                    parkIfUnfinished(force: true)
+                }
+                return
+            }
             // On-device posture, SEVERAL things: the boundary pass. Same orb, same confirm
             // card, and — because the posture forbids the network — a refusal lands on the
             // deterministic read rather than on the authority. The person gets the better
@@ -1575,7 +1638,8 @@ struct ComposerView: View {
                     if !interpretation.drafts.isEmpty {
                         Text(
                             Self.revealSubtitle(
-                                count: interpretation.drafts.count, asks: unresolvedAskCount)
+                                count: interpretation.drafts.count, asks: unresolvedAskCount,
+                                leftOut: interpretation.leftOut.count)
                         )
                         .supportingStyle()
                         .contentTransition(.numericText())
@@ -1609,6 +1673,7 @@ struct ComposerView: View {
                     )
                     if interpretation.drafts.count >= 2 { groupRow }
                 }
+                leftOutRow
             }
             .padding(.top, Spacing.xs)
             .padding(.bottom, Spacing.md)
@@ -1642,13 +1707,17 @@ struct ComposerView: View {
     /// one. The ask is the only thing on the page that wants something BACK, and it used
     /// to be findable only by scanning every card for the one "When?" chip — VoiceOver
     /// users were told at the reveal; sighted users were not.
-    static func revealSubtitle(count: Int, asks: Int) -> String {
-        let things = count == 1 ? "1 thing" : "\(count) things"
+    static func revealSubtitle(count: Int, asks: Int, leftOut: Int = 0) -> String {
+        var parts = [count == 1 ? "1 thing" : "\(count) things"]
         switch asks {
-        case 0: return things
-        case 1: return things + " · 1 needs a date"
-        default: return things + " · \(asks) need a date"
+        case 0: break
+        case 1: parts.append("1 needs a date")
+        default: parts.append("\(asks) need a date")
         }
+        // The left-out lines sit under the cards, below the fold on a long capture; the
+        // subtitle says they exist so nobody has to scroll to find out.
+        if leftOut > 0 { parts.append(leftOut == 1 ? "1 line left out" : "\(leftOut) lines left out") }
+        return parts.joined(separator: " · ")
     }
 
     /// What the transcript box is, in the register of the channel it came through.
@@ -1719,6 +1788,45 @@ struct ComposerView: View {
                 named == nil
                     ? "Names an outcome these tasks become the steps of"
                     : "Makes these tasks the steps of that outcome")
+        }
+    }
+
+    /// What the judge read as nothing to do, kept in sight (`CaptureJudge`). Quiet on
+    /// purpose — a caption and the person's own words — and each line adds back with one
+    /// tap, as a card built from exactly what they said. A wrong "nothing" therefore
+    /// costs a tap, never a task.
+    @ViewBuilder private var leftOutRow: some View {
+        if !interpretation.leftOut.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("Left out").metadataStyle()
+                ForEach(interpretation.leftOut, id: \.self) { line in
+                    Button {
+                        guard let draft = CaptureFlow.keepAsOneTask(text: line, learned: sessionRules())
+                        else { return }
+                        Motion.withMotion(Motion.settle) {
+                            interpretation.restoreLeftOut(line, as: draft)
+                        }
+                        judgeRestoredCount += 1
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                            Image(systemName: "plus.circle")
+                                .font(.glyphCaption())
+                                .foregroundStyle(Palette.accentFlat)
+                            Text("“\(line)”")
+                                .supportingStyle()
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(minHeight: LayoutMetrics.hitTarget)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                    .accessibilityLabel("Left out: \(line)")
+                    .accessibilityHint("Adds it as a task")
+                }
+            }
+            .padding(.top, Spacing.sm)
+            .transition(.opacity)
         }
     }
 
@@ -2219,6 +2327,11 @@ struct ComposerView: View {
         parse.parseTask?.cancel()
         parse.parseTask = nil
         let count = interpretation.drafts.count
+        if lastRun?.armWon?.hasPrefix("judge") == true {
+            Telemetry.log(
+                .captureJudged(
+                    leftOut: CountBucket(judgeLeftOutCount), restored: CountBucket(judgeRestoredCount)))
+        }
         brain.commit(
             interpretation.drafts, rawCapture: text, source: captureSource,
             imageRef: capturedImageRef,
@@ -2682,6 +2795,21 @@ struct ComposerView: View {
             !PrivateCaptureEngine.soundsLikeSeveralThings(text)
         {
             privateEngine.silenceArmed(text: text)
+        }
+        // The judge's head start: the same window, the same rule (nothing shown before
+        // capture-end). Started once per wording; new words cancelled it above.
+        let heard = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if judgeHeadStart?.text != heard, PrivateCaptureEngine.modelAvailable() {
+            let clauses = Segmentation.items(from: heard)
+            if !CaptureJudge.doubtfulIndices(in: clauses).isEmpty {
+                judgeHeadStart?.task.cancel()
+                judgeHeadStart = (
+                    heard,
+                    Task {
+                        await CaptureJudge.read(clauses: clauses) { await CaptureJudge.modelVerdict($0) }
+                    }
+                )
+            }
         }
         parse.silenceTask = Task {
             try? await Task.sleep(for: .seconds(Self.silenceStopSeconds))

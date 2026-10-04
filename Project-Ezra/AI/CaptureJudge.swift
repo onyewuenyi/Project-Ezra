@@ -69,11 +69,34 @@ enum CaptureJudge {
     /// Does this piece need the model at all? A piece that opens on an action and shows
     /// no sign of a second outcome is a task on its face: judging it costs a call and can
     /// only make it worse.
+    ///
+    /// Nor does a piece of three words or fewer: "milk", "date night" and "dentist
+    /// thursday" are how people write list items, a short noun phrase is the likeliest
+    /// thing for a classifier to call `none`, and there is nothing in three words to split.
     static func needsJudgment(_ clause: String) -> Bool {
         let core = opening(of: clause)
+        guard core.split(whereSeparator: \.isWhitespace).count > shortPieceWords else { return false }
         guard Segmentation.startsAnItem(core) else { return true }
-        return CaptureEscalation.connectiveSignals(in: core) > 0
-            || CaptureEscalation.interiorVerbSignals(in: core) > 0
+        return showsASecondOutcome(core)
+    }
+
+    static let shortPieceWords = 3
+
+    /// The read's own boundary signals, asked of one piece.
+    static func showsASecondOutcome(_ clause: String) -> Bool {
+        CaptureEscalation.connectiveSignals(in: clause) > 0
+            || CaptureEscalation.interiorVerbSignals(in: clause) > 0
+    }
+
+    /// Which pieces of this capture go to the model. **A capture that is ONE piece is
+    /// never judged for `none`**: a person who gave Ezra a single line wants it kept, and
+    /// "the thing with the insurance" has no verb to prove it. One piece is judged only
+    /// when it shows a second outcome, and then only `several` is honoured (`apply`).
+    static func doubtfulIndices(in clauses: [String]) -> [Int] {
+        if clauses.count == 1 {
+            return showsASecondOutcome(opening(of: clauses[0])) ? [0] : []
+        }
+        return Array(clauses.indices.filter { needsJudgment(clauses[$0]) }.prefix(maxCalls))
     }
 
     /// The piece as its first real word starts it: lead-ins and a polite "please" gone.
@@ -207,7 +230,7 @@ enum CaptureJudge {
         var splits = 0
         for (index, clause) in clauses.enumerated() {
             switch verdicts[index] {
-            case .some(.none) where !statesANeed(clause):
+            case .some(.none) where clauses.count > 1 && !statesANeed(clause):
                 leftOut.append(clause)
             case .some(.several):
                 if let parts = resplit(clause) {
@@ -231,7 +254,7 @@ enum CaptureJudge {
         clauses: [String], budget: Double = passBudgetSeconds,
         judge: @escaping @Sendable (String) async -> Verdict?
     ) async -> Reading {
-        let doubtful = clauses.enumerated().filter { needsJudgment($0.element) }.prefix(maxCalls)
+        let doubtful = doubtfulIndices(in: clauses).map { ($0, clauses[$0]) }
         guard !doubtful.isEmpty else { return apply([:], to: clauses) }
         let verdicts: [Int: Verdict] =
             (try? await ModelDeadline.race(timeout: budget) {

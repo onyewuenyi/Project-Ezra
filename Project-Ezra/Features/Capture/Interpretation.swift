@@ -47,6 +47,12 @@ struct Interpretation {
     private(set) var drafts: [TaskDraft] = []
     private(set) var state: RevealState = .pending
 
+    /// Pieces of the capture the judge read as nothing to do (`CaptureJudge`): shown under
+    /// the cards as lines the person can add back, never dropped. Part of the same
+    /// proposal as the cards, so it obeys the same boundary; adding one back is the
+    /// person's act (`restoreLeftOut`).
+    private(set) var leftOut: [String] = []
+
     /// The drafts as they stood the moment they were revealed — the baseline the DEBUG
     /// detector compares against. Nil until revealed.
     private var revealedFingerprint: [TaskDraft]?
@@ -57,9 +63,10 @@ struct Interpretation {
     /// Returns whether it was taken, so the caller can record the refusal rather than
     /// assume it landed.
     @discardableResult
-    mutating func propose(_ new: [TaskDraft]) -> Bool {
+    mutating func propose(_ new: [TaskDraft], leftOut: [String] = []) -> Bool {
         guard state == .pending else { return false }
         drafts = new
+        self.leftOut = leftOut
         return true
     }
 
@@ -87,6 +94,13 @@ struct Interpretation {
             drafts = newValue
             if state == .revealed { revealedFingerprint = newValue }
         }
+    }
+
+    /// The person says a left-out line IS a task: it joins the cards through their own
+    /// edit path, and leaves the left-out list.
+    mutating func restoreLeftOut(_ line: String, as draft: TaskDraft) {
+        leftOut.removeAll { $0 == line }
+        editableDrafts = drafts + [draft]
     }
 
     // MARK: - Zero tolerance

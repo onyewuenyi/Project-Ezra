@@ -44,6 +44,11 @@ enum CaptureFlow {
         /// the posture stops being a trade. A refusal falls to the same deterministic read
         /// it would have got anyway; the cloud is unreachable from here either way.
         case boundaryPass
+        /// A model is present and at least one piece of the read is doubtful: the
+        /// on-device judge says what each doubtful piece is — a task, several, or nothing
+        /// to do — and the app acts on the verdicts it can validate (`CaptureJudge`,
+        /// 2026-10-04). Nothing leaves the device; a piece with no answer stays a card.
+        case judge
         /// The authority: the orb holds while the cloud (or its degrade) reads.
         case authority(CaptureEscalationReason?)
     }
@@ -65,8 +70,13 @@ enum CaptureFlow {
     /// is deciding about.
     static func plan(
         text: String, localRead: [TaskDraft], fromVoice: Bool, posture: CapturePosture,
-        privateModelAvailable: Bool, boundaryPassAvailable: Bool
+        privateModelAvailable: Bool, boundaryPassAvailable: Bool, judgeAvailable: Bool
     ) -> SubmitPlan {
+        // The judge outranks every other arm: it reads on the device, so the posture has
+        // nothing to forbid, and it can only improve on the read it is handed.
+        if judgeAvailable, !CaptureJudge.doubtfulIndices(in: Segmentation.items(from: text)).isEmpty {
+            return SubmitPlan(route: .local, escalation: nil, arm: .judge)
+        }
         if posture == .onDevice {
             if privateModelAvailable {
                 // The two on-device envelopes are complementary by construction: the

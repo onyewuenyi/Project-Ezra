@@ -22,7 +22,8 @@ struct CaptureFlowTests {
         #expect(
             CaptureFlow.suggestedOutcomeTitle(from: "Lagos trip: renew passport, book flights")
                 == "Lagos trip")
-        #expect(CaptureFlow.suggestedOutcomeTitle(from: "  Kitchen remodel : get quotes ") == "Kitchen remodel")
+        #expect(
+            CaptureFlow.suggestedOutcomeTitle(from: "  Kitchen remodel : get quotes ") == "Kitchen remodel")
         // No colon, nothing after it, or a lead too long to be a name → the field starts empty.
         #expect(CaptureFlow.suggestedOutcomeTitle(from: "renew passport, book flights") == nil)
         #expect(CaptureFlow.suggestedOutcomeTitle(from: "Lagos trip:") == nil)
@@ -39,12 +40,12 @@ struct CaptureFlowTests {
         // An EMPTY local read is the one case the router always sends to the cloud.
         let open = CaptureFlow.plan(
             text: oneThought, localRead: [], fromVoice: true, posture: .open, privateModelAvailable: false,
-            boundaryPassAvailable: false)
+            boundaryPassAvailable: false, judgeAvailable: false)
         #expect(open.route == .cloud)
         #expect(open.arm == .authority(.emptyRead))
         let closed = CaptureFlow.plan(
             text: oneThought, localRead: [], fromVoice: true, posture: .onDevice,
-            privateModelAvailable: false, boundaryPassAvailable: false)
+            privateModelAvailable: false, boundaryPassAvailable: false, judgeAvailable: false)
         #expect(closed.route == .local)
         #expect(closed.escalation == nil)
         #expect(closed.arm == .revealAfterDwell)
@@ -53,7 +54,7 @@ struct CaptureFlowTests {
         let routed = CaptureRoute.route(for: oneThought, localRead: drafts, fromVoice: false)
         let plan = CaptureFlow.plan(
             text: oneThought, localRead: drafts, fromVoice: false, posture: .open,
-            privateModelAvailable: false, boundaryPassAvailable: false)
+            privateModelAvailable: false, boundaryPassAvailable: false, judgeAvailable: false)
         #expect(plan.route == routed.route && plan.escalation == routed.escalation)
     }
 
@@ -62,17 +63,18 @@ struct CaptureFlowTests {
         let drafts = AppBrain.provisionalDrafts(oneThought)
         let one = CaptureFlow.plan(
             text: oneThought, localRead: drafts, fromVoice: true, posture: .onDevice,
-            privateModelAvailable: true, boundaryPassAvailable: false)
+            privateModelAvailable: true, boundaryPassAvailable: false, judgeAvailable: false)
         #expect(one.arm == .privateEngine)
         #expect(one.route == .local)
         let noModel = CaptureFlow.plan(
             text: oneThought, localRead: drafts, fromVoice: true, posture: .onDevice,
-            privateModelAvailable: false, boundaryPassAvailable: false)
+            privateModelAvailable: false, boundaryPassAvailable: false, judgeAvailable: false)
         #expect(noModel.arm == .revealAfterDwell)
         let several = "book the flights and then renew the passport and also call the vet tomorrow"
         let many = CaptureFlow.plan(
             text: several, localRead: AppBrain.provisionalDrafts(several), fromVoice: true,
-            posture: .onDevice, privateModelAvailable: true, boundaryPassAvailable: false)
+            posture: .onDevice, privateModelAvailable: true, boundaryPassAvailable: false,
+            judgeAvailable: false)
         #expect(many.arm != .privateEngine)
         #expect(many.route == .local)
     }
@@ -86,7 +88,7 @@ struct CaptureFlowTests {
         let drafts = AppBrain.provisionalDrafts(several)
         let withPass = CaptureFlow.plan(
             text: several, localRead: drafts, fromVoice: true, posture: .onDevice,
-            privateModelAvailable: true, boundaryPassAvailable: true)
+            privateModelAvailable: true, boundaryPassAvailable: true, judgeAvailable: false)
         #expect(withPass.arm == .boundaryPass)
         // …and it never transmits, whatever the arm decides.
         #expect(withPass.route == .local)
@@ -95,20 +97,21 @@ struct CaptureFlowTests {
         // With the arm off, the plan is byte-identical to what shipped before it existed.
         let without = CaptureFlow.plan(
             text: several, localRead: drafts, fromVoice: true, posture: .onDevice,
-            privateModelAvailable: true, boundaryPassAvailable: false)
+            privateModelAvailable: true, boundaryPassAvailable: false, judgeAvailable: false)
         #expect(without.arm == .revealAfterDwell)
 
         // One thought still runs the private engine — the two envelopes are complementary,
         // and the boundary pass may not annex the single-thought case it cannot improve.
         let one = CaptureFlow.plan(
             text: oneThought, localRead: AppBrain.provisionalDrafts(oneThought), fromVoice: true,
-            posture: .onDevice, privateModelAvailable: true, boundaryPassAvailable: true)
+            posture: .onDevice, privateModelAvailable: true, boundaryPassAvailable: true,
+            judgeAvailable: false)
         #expect(one.arm == .privateEngine)
 
         // And with no model, the arm is unreachable however the flag is set.
         let noModel = CaptureFlow.plan(
             text: several, localRead: drafts, fromVoice: false, posture: .onDevice,
-            privateModelAvailable: false, boundaryPassAvailable: true)
+            privateModelAvailable: false, boundaryPassAvailable: true, judgeAvailable: false)
         #expect(noModel.arm == .revealInstantly)
     }
 
@@ -120,7 +123,7 @@ struct CaptureFlowTests {
         let several = "book the flights and then renew the passport and also call the vet tomorrow"
         let plan = CaptureFlow.plan(
             text: several, localRead: AppBrain.provisionalDrafts(several), fromVoice: true,
-            posture: .open, privateModelAvailable: true, boundaryPassAvailable: true)
+            posture: .open, privateModelAvailable: true, boundaryPassAvailable: true, judgeAvailable: false)
         #expect(plan.arm != .boundaryPass)
     }
 
@@ -129,10 +132,10 @@ struct CaptureFlowTests {
         let drafts = AppBrain.provisionalDrafts(typedList)
         let typed = CaptureFlow.plan(
             text: typedList, localRead: drafts, fromVoice: false, posture: .open, privateModelAvailable: true,
-            boundaryPassAvailable: false)
+            boundaryPassAvailable: false, judgeAvailable: false)
         let spoken = CaptureFlow.plan(
             text: typedList, localRead: drafts, fromVoice: true, posture: .open, privateModelAvailable: true,
-            boundaryPassAvailable: false)
+            boundaryPassAvailable: false, judgeAvailable: false)
         #expect(typed.arm == .revealInstantly)
         #expect(spoken.arm == .revealAfterDwell)
         #expect(typed.route == .local && spoken.route == .local)
@@ -142,7 +145,7 @@ struct CaptureFlowTests {
     func authorityCarriesTheReason() {
         let plan = CaptureFlow.plan(
             text: oneThought, localRead: [], fromVoice: false, posture: .open, privateModelAvailable: true,
-            boundaryPassAvailable: false)
+            boundaryPassAvailable: false, judgeAvailable: false)
         #expect(plan.route == .cloud)
         #expect(plan.arm == .authority(.emptyRead))
         #expect(plan.escalation == .emptyRead)

@@ -430,6 +430,9 @@ enum Segmentation {
         "i really should ", "i should ",
         "i want to ", "we need to ", "we have to ", "make sure to ",
         "make sure i ", "remember to ", "need to ", "i gotta ", "gotta ", "have to ",
+        // A request in someone else's words, pasted in ("Please return the signed slip by
+        // Friday", 2026-10-04): the politeness is theirs, the task is the verb.
+        "please ",
         "try to ", "so basically ", "so i ", "oh and ", "also ", "then ", "to ",
         // Spoken enumeration openers ("first call mom…") — like every lead-in they
         // strip only when the remainder verifies as an item, so "first aid kit"
