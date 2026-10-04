@@ -761,7 +761,7 @@ struct ComposerView: View {
                 parse.parseTask = nil
                 judgeLeftOutCount = reading.leftOut.count
                 judgeRestoredCount = 0
-                if interpretation.propose(drafts, leftOut: reading.leftOut) {
+                if interpretation.propose(reconciled(drafts), leftOut: reading.leftOut) {
                     reveal()
                 } else {
                     ModelMetrics.shared.recordRefusedProposal()
@@ -800,7 +800,7 @@ struct ComposerView: View {
                 await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
                 guard !Task.isCancelled else { return }
                 parse.parseTask = nil
-                if interpretation.propose([outcome.draft]) {
+                if interpretation.propose(reconciled([outcome.draft])) {
                     reveal()
                 } else {
                     ModelMetrics.shared.recordRefusedProposal()
@@ -839,7 +839,7 @@ struct ComposerView: View {
                 await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
                 guard !Task.isCancelled else { return }
                 parse.parseTask = nil
-                if interpretation.propose(local) {
+                if interpretation.propose(reconciled(local)) {
                     reveal()
                 } else {
                     ModelMetrics.shared.recordRefusedProposal()
@@ -849,10 +849,20 @@ struct ComposerView: View {
         } else {
             // Typed structure reveals instantly — byte-identical to the pre-voice
             // arc: the user drew the boundaries, and a beat here would be theatre.
-            interpretation.propose(local)
+            interpretation.propose(reconciled(local))
             reveal()
             parkIfUnfinished(force: true)
         }
+    }
+
+    /// A fresh reading, reconciled with the cards already on the page. On a first read
+    /// there are none and this is the reading itself; on a Re-read (the person edited
+    /// their words) `DraftMerge` keeps each matched card's identity and the person's edits
+    /// on it, and a card they removed stays removed (`removedDrafts`). This went with
+    /// the cloud arm's parse on 2026-10-04 and every on-device arm proposed raw, so a
+    /// Re-read brought removed cards back and dropped edits; restored for every arm.
+    private func reconciled(_ fresh: [TaskDraft]) -> [TaskDraft] {
+        DraftMerge.merge(fresh: fresh, into: interpretation.drafts, removed: removedDrafts)
     }
 
     /// The arrival. Everything that makes the reveal land as an ANSWER rather than a
