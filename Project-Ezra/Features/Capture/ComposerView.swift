@@ -192,6 +192,7 @@ struct ComposerView: View {
     /// nothing is shown before capture-end, and a discarded run costs battery, never
     /// privacy.
     @State private var judgeHeadStart: (text: String, task: Task<CaptureJudge.Reading, Never>)?
+    @State private var judgeHeadStartDelay: Task<Void, Never>?
     /// What the judge set aside at the reveal, and how many of those the person added
     /// back — the false-drop meter, counted for the receipt at Create.
     /// The outcome the grouping judge named for THIS card set (`CaptureFlow.outcomeTitle`),
@@ -396,6 +397,10 @@ struct ComposerView: View {
                 refreshRosterCaches()
                 restoreIfResuming()
                 privateEngine.prewarm()
+                // The judge's sessions load while the sheet animates in — the same bargain:
+                // a capture that never needs them costs memory for the sheet's life, nothing
+                // more (`CaptureJudge.SessionPool`).
+                CaptureJudge.SessionPool.shared.prewarm()
                 if phase == .listening {
                     // Fresh open, mic permitted (decided in `init`): the sheet opens
                     // INTO listening. Opening capture is opening a listening
@@ -467,6 +472,7 @@ struct ComposerView: View {
                     privateEngine.transcriptChanged()
                     judgeHeadStart?.task.cancel()
                     judgeHeadStart = nil
+                    judgeHeadStartDelay?.cancel()
                 }
                 guard Self.shouldArmSilence(transcript: transcript) else { return }
                 usedDictation = true
@@ -540,6 +546,8 @@ struct ComposerView: View {
                 speech.stop()
                 privateEngine.cancel()
                 judgeHeadStart?.task.cancel()
+                judgeHeadStartDelay?.cancel()
+                CaptureJudge.SessionPool.shared.drain()
                 parse.silenceTask?.cancel()
                 silenceDeadline = nil
                 parse.parseTask?.cancel()
@@ -2573,6 +2581,10 @@ struct ComposerView: View {
     /// gone. A DELIBERATE fixed five seconds: deterministic and understandable beats
     /// adaptive — make it energy-aware only if real usage shows cut-offs.
     private static let silenceStopSeconds: Double = 5
+    /// Quiet before the judge's head start begins: long enough that a pause between words
+    /// is not a pass, short enough that the judge (1–3 s on the phone) finishes inside the
+    /// rest of the silence window.
+    private static let judgeHeadStartQuietSeconds: Double = 1.2
 
     /// Milliseconds from the last transcript delta to `now`. The deadline is armed at
     /// last-delta + `silenceStopSeconds`, so the delta's instant is recoverable from it
@@ -2612,18 +2624,28 @@ struct ComposerView: View {
             privateEngine.silenceArmed(text: text)
         }
         // The judge's head start: the same window, the same rule (nothing shown before
-        // capture-end). Started once per wording; new words cancelled it above.
+        // capture-end) — but only after a beat of QUIET. This runs on every transcript
+        // delta, and starting a pass per delta would start and cancel model work several
+        // times a second while the person is still talking. `judgeHeadStartQuietSeconds`
+        // of no new words, then one pass for that wording; new words cancel it.
+        judgeHeadStartDelay?.cancel()
         let heard = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if judgeHeadStart?.text != heard, PrivateCaptureEngine.modelAvailable() {
             let clauses = Segmentation.items(from: heard)
             if !CaptureJudge.doubtfulIndices(in: clauses).isEmpty {
-                judgeHeadStart?.task.cancel()
-                judgeHeadStart = (
-                    heard,
-                    Task {
-                        await CaptureJudge.read(clauses: clauses) { await CaptureJudge.modelAnswer($0) }
-                    }
-                )
+                judgeHeadStartDelay = Task {
+                    try? await Task.sleep(for: .seconds(Self.judgeHeadStartQuietSeconds))
+                    guard !Task.isCancelled, phase == .listening,
+                        text.trimmingCharacters(in: .whitespacesAndNewlines) == heard
+                    else { return }
+                    judgeHeadStart?.task.cancel()
+                    judgeHeadStart = (
+                        heard,
+                        Task {
+                            await CaptureJudge.read(clauses: clauses) { await CaptureJudge.modelAnswer($0) }
+                        }
+                    )
+                }
             }
         }
         parse.silenceTask = Task {

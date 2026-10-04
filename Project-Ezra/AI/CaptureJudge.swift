@@ -586,13 +586,46 @@ enum CaptureJudge {
 
     // MARK: - The model calls
 
+    /// Sessions built and prewarmed before they are needed (2026-10-04). Each judge call
+    /// is a fresh session — a judgment must not see the last one — so each paid for
+    /// loading the model and its instructions on the critical path. The composer fills
+    /// this when the sheet opens; a call takes a warm session, or builds a cold one.
+    @MainActor
+    final class SessionPool {
+        static let shared = SessionPool()
+        static let size = 4
+        private var spare: [LanguageModelSession] = []
+        private(set) var hits = 0
+        private(set) var misses = 0
+
+        func prewarm() {
+            guard AppBrain.onDeviceModelAvailable() else { return }
+            while spare.count < Self.size {
+                let session = LanguageModelSession(instructions: CaptureJudge.instructions)
+                session.prewarm(promptPrefix: Prompt("Line: "))
+                spare.append(session)
+            }
+        }
+
+        func take() -> LanguageModelSession {
+            guard !spare.isEmpty else {
+                misses += 1
+                return LanguageModelSession(instructions: CaptureJudge.instructions)
+            }
+            hits += 1
+            return spare.removeFirst()
+        }
+
+        func drain() { spare.removeAll() }
+    }
+
     /// One call to the on-device model. Nil on a refusal, a timeout or an answer outside
     /// the four words: all of them keep the piece.
     nonisolated static func modelAnswer(_ clause: String) async -> Answer? {
         let started = Date()
         do {
+            let session = await SessionPool.shared.take()
             let answer = try await ModelDeadline.race(timeout: callCapSeconds) { () -> Answer? in
-                let session = LanguageModelSession(instructions: instructions)
                 let read = try await session.respond(to: "Line: \(clause)", generating: PieceRead.self)
                     .content
                 return Verdict(rawValue: read.kind.lowercased()).map { Answer(verdict: $0, todo: read.todo) }

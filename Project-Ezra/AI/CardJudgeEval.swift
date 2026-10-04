@@ -263,6 +263,32 @@ enum CardJudgeEval {
         }
         print("split on tap: accepted \(splitAccepted)/\(splitCases.count) · max \(splitMs.max() ?? 0)ms")
 
+        print(
+            "\n── session pool: a warm session (prewarmed 1.5 s earlier, as at sheet-open) against a cold one ──"
+        )
+        let poolClauses = dumpItems().flatMap(\.items).map(\.clause).filter { CaptureJudge.needsJudgment($0) }
+            .prefix(12)
+        var cold: [Int] = []
+        var warm: [Int] = []
+        for clause in poolClauses {
+            CaptureJudge.SessionPool.shared.drain()
+            var started = Date()
+            _ = await CaptureJudge.modelAnswer(clause)
+            cold.append(Int(Date().timeIntervalSince(started) * 1000))
+            CaptureJudge.SessionPool.shared.prewarm()
+            try? await Task.sleep(for: .milliseconds(1500))
+            started = Date()
+            _ = await CaptureJudge.modelAnswer(clause)
+            warm.append(Int(Date().timeIntervalSince(started) * 1000))
+        }
+        CaptureJudge.SessionPool.shared.drain()
+        if !cold.isEmpty {
+            let c = cold.sorted(), w = warm.sorted()
+            print(
+                "session pool · cold p50 \(c[c.count / 2])ms max \(c.last ?? 0)ms · warm p50 \(w[w.count / 2])ms max \(w.last ?? 0)ms · n=\(c.count)"
+            )
+        }
+
         let sortedOne = oneLatencies.sorted()
         let sortedList = listLatencies.sorted()
         print("\n── summary ──")
