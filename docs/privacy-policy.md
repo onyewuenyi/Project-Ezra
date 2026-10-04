@@ -80,6 +80,12 @@ Signals are keyed to a random identifier created the first time you use the app.
 your name, your email, your Apple ID, or your device's advertising identifier, and it is
 destroyed and replaced if you reset the app.
 
+Signals also carry a household code, so the phones in one household count as one group
+rather than as strangers. The code is a one-way scramble of a random identifier inside your
+household's data: it is not your household's name, it cannot be turned back into anything in
+your household, and every phone in a shared household sends the same one. It is sent only
+while these signals are on.
+
 **You can turn this off** in Settings, under *What leaves this device*. The switch is
 checked before anything is sent.
 

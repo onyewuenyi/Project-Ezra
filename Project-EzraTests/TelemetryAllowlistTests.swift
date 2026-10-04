@@ -85,10 +85,10 @@ struct TelemetryAllowlistTests {
         Telemetry.sink = sink
         defer { Telemetry.sink = previous }
 
-        Telemetry.log(.taskCompleted, defaults: defaults)
+        Telemetry.log(.taskCompleted(lead: .underOneDay, cycle: nil), defaults: defaults)
         #expect(sink.events.count == 1)
         Telemetry.setEnabled(false, defaults: defaults)
-        Telemetry.log(.taskCompleted, defaults: defaults)
+        Telemetry.log(.taskCompleted(lead: .underOneDay, cycle: nil), defaults: defaults)
         #expect(sink.events.count == 1, "an opted-out install still logged")
 
         let id = Telemetry.installID(defaults: defaults)
@@ -125,6 +125,47 @@ struct TelemetryAllowlistTests {
         #expect(CountBucket(3) == .twoToThree)
         #expect(CountBucket(47) == .thirteenPlus)
         #expect(Set(CountBucket.allCases.map(\.rawValue)).count == CountBucket.allCases.count)
+        #expect(AgeBucket(seconds: 3600) == .underOneDay)
+        #expect(AgeBucket(seconds: 2 * 86_400) == .oneToTwoDays)
+        #expect(AgeBucket(seconds: 7 * 86_400) == .threeToSevenDays)
+        #expect(AgeBucket(seconds: 10 * 86_400) == .oneToTwoWeeks)
+        #expect(AgeBucket(seconds: 40 * 86_400) == .overFourWeeks)
+        #expect(ShareBucket(0) == .zero)
+        #expect(ShareBucket(0.5) == .halfToSeventy)
+        #expect(ShareBucket(0.95) == .ninetyPlus)
+        #expect(ShareBucket(1) == .ninetyPlus)
+        #expect(GroupSizeBucket(0) == .one)
+        #expect(GroupSizeBucket(2) == .two)
+        #expect(GroupSizeBucket(5) == .threePlus)
+    }
+
+    @Test("The group id is a stable hash of the household id, never the id itself")
+    func groupIdentity() {
+        let household = UUID(uuidString: "6F9619FF-8B86-D011-B42D-00C04FC964FF")!
+        let group = TelemetryGroup(householdID: household, adults: 2)
+        #expect(group.id.count == 32)
+        #expect(group.id.wholeMatch(of: /[0-9a-f]+/) != nil)
+        #expect(!group.id.localizedCaseInsensitiveContains(household.uuidString.prefix(8)))
+        #expect(TelemetryGroup(householdID: household, adults: 1).id == group.id, "size never moves the id")
+        #expect(TelemetryGroup(householdID: UUID(), adults: 2).id != group.id)
+        #expect(group.size == .two)
+    }
+
+    @Test("Identify reaches the sink, behind the same opt-out as log")
+    func identifyRespectsOptOut() {
+        let defaults = UserDefaults(suiteName: "TelemetryAllowlistTests.group.\(UUID())")!
+        let sink = RecordingTelemetrySink()
+        let previous = Telemetry.sink
+        Telemetry.sink = sink
+        defer { Telemetry.sink = previous }
+
+        let group = TelemetryGroup(householdID: UUID(), adults: 1)
+        Telemetry.setEnabled(false, defaults: defaults)
+        Telemetry.identify(group, defaults: defaults)
+        #expect(sink.group == nil, "an opted-out install still identified its group")
+        Telemetry.setEnabled(true, defaults: defaults)
+        Telemetry.identify(group, defaults: defaults)
+        #expect(sink.group == group)
     }
 
     @Test("The boundary sentence names no vendor and leads with what is NOT sent")

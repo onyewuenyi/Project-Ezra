@@ -51,6 +51,7 @@
 //  all read as "not killed".
 //
 
+import CryptoKit
 import Foundation
 
 // MARK: - Buckets
@@ -88,6 +89,57 @@ enum DurationBucket: String, CaseIterable, Sendable {
         case ..<300: self = .oneToFiveMinutes
         case ..<1800: self = .fiveToThirtyMinutes
         default: self = .overThirtyMinutes
+        }
+    }
+}
+
+/// An age in whole days — Linear's lead and cycle times, for a family (2026-10-04). A
+/// timestamp is a fingerprint; "done within the week it was captured" is the product
+/// question, and the bucket answers it with nothing left over.
+enum AgeBucket: String, CaseIterable, Sendable {
+    case underOneDay = "<1d", oneToTwoDays = "1-2d", threeToSevenDays = "3-7d"
+    case oneToTwoWeeks = "1-2w", twoToFourWeeks = "2-4w", overFourWeeks = "4w+"
+
+    init(seconds: TimeInterval) {
+        switch seconds / 86_400 {
+        case ..<1: self = .underOneDay
+        case ..<3: self = .oneToTwoDays
+        case ..<8: self = .threeToSevenDays
+        case ..<15: self = .oneToTwoWeeks
+        case ..<29: self = .twoToFourWeeks
+        default: self = .overFourWeeks
+        }
+    }
+}
+
+/// A fraction with its precision removed — the group snapshot's shares (stale, hand-off,
+/// participation, load). The edges are the launch plan's: "the busiest member does 90%+ of
+/// the completing" is the mental-load question, and it needs no more precision than that.
+enum ShareBucket: String, CaseIterable, Sendable {
+    case zero = "0", underQuarter = "<25", quarterToHalf = "25-50", halfToSeventy = "50-70"
+    case seventyToNinety = "70-90", ninetyPlus = "90+"
+
+    init(_ fraction: Double) {
+        switch fraction {
+        case ...0: self = .zero
+        case ..<0.25: self = .underQuarter
+        case ..<0.5: self = .quarterToHalf
+        case ..<0.7: self = .halfToSeventy
+        case ..<0.9: self = .seventyToNinety
+        default: self = .ninetyPlus
+        }
+    }
+}
+
+/// How many adults plan in a group. A solo parent is a group of one, never "not counted".
+enum GroupSizeBucket: String, CaseIterable, Sendable {
+    case one = "1", two = "2", threePlus = "3+"
+
+    init(_ adults: Int) {
+        switch adults {
+        case ...1: self = .one
+        case 2: self = .two
+        default: self = .threePlus
         }
     }
 }
@@ -154,11 +206,14 @@ enum TelemetryEvent: Sendable {
     /// The router decided where the words go, and why.
     case captureRouted(route: CaptureRoute, reason: CaptureEscalationReason?)
     /// Confirm — the single publish boundary — fired.
-    case captureCommitted(created: CountBucket, merged: CountBucket, corrected: Bool)
+    /// `triage` is words-to-confirmed (the capture's arrival to the Confirm tap) — Linear's
+    /// triage time, for a family. Nil when the capture has no arrival stamp.
+    case captureCommitted(created: CountBucket, merged: CountBucket, corrected: Bool, triage: DurationBucket?)
     /// Install → first committed capture. Fires once per install.
     case firstPayoff(elapsed: DurationBucket)
-    /// A task reached `.done`.
-    case taskCompleted
+    /// A task reached `.done`. `lead` is capture → done and `cycle` is first start → done
+    /// (Linear's two times); `cycle` is nil for a task that was never started.
+    case taskCompleted(lead: AgeBucket, cycle: AgeBucket?)
     /// A person typed or tapped a question into a chat, and which rung answered it.
     case askAsked(scope: TelemetryAskScope, route: TelemetryAskRoute)
     /// The Tasks list was opened from the Ask home — the swap's other half, so the two
@@ -196,6 +251,13 @@ enum TelemetryEvent: Sendable {
     case digestScheduled
     case digestSkipped(reason: TelemetryDigestSkip)
     case digestOpened
+    /// The weekly group snapshot (2026-10-04): the shape of the group's open work and how
+    /// the doing is spread across its adults. Participation and load are nil for a group of
+    /// one, where they would always read 100%. Every phone in a group sends its own, so
+    /// the dashboard keeps one per group per week (`GroupMetrics`).
+    case groupSnapshot(
+        open: CountBucket, stale: ShareBucket?, handOff: ShareBucket?, participation: ShareBucket?,
+        load: ShareBucket?)
 
     /// The wire name: snake_case, stable, never user-facing.
     var name: String {
@@ -223,6 +285,7 @@ enum TelemetryEvent: Sendable {
         case .digestScheduled: return "digest_scheduled"
         case .digestSkipped: return "digest_skipped"
         case .digestOpened: return "digest_opened"
+        case .groupSnapshot: return "group_snapshot"
         }
     }
 
@@ -235,15 +298,27 @@ enum TelemetryEvent: Sendable {
             var fields = ["route": route.metricName]
             if let reason { fields["reason"] = reason.rawValue }
             return fields
-        case .captureCommitted(let created, let merged, let corrected):
-            return [
+        case .captureCommitted(let created, let merged, let corrected, let triage):
+            var fields = [
                 "created": created.rawValue, "merged": merged.rawValue, "corrected": corrected ? "yes" : "no",
             ]
+            if let triage { fields["triage"] = triage.rawValue }
+            return fields
         case .firstPayoff(let elapsed):
             return ["elapsed": elapsed.rawValue]
-        case .taskCompleted, .tasksOpened, .homeReturned, .householdActivated, .digestScheduled,
-            .digestOpened:
+        case .tasksOpened, .homeReturned, .householdActivated, .digestScheduled, .digestOpened:
             return [:]
+        case .taskCompleted(let lead, let cycle):
+            var fields = ["lead": lead.rawValue]
+            if let cycle { fields["cycle"] = cycle.rawValue }
+            return fields
+        case .groupSnapshot(let open, let stale, let handOff, let participation, let load):
+            var fields = ["open": open.rawValue]
+            if let stale { fields["stale"] = stale.rawValue }
+            if let handOff { fields["hand_off"] = handOff.rawValue }
+            if let participation { fields["participation"] = participation.rawValue }
+            if let load { fields["load"] = load.rawValue }
+            return fields
         case .askAsked(let scope, let route):
             return ["scope": scope.rawValue, "route": route.rawValue]
         case .catchUpSeated(let changes):
@@ -279,9 +354,12 @@ enum TelemetryEvent: Sendable {
             .captureStarted(channel: .voice),
             .captureRouted(route: .cloud, reason: .bigDump),
             .captureRouted(route: .local, reason: nil),
-            .captureCommitted(created: .twoToThree, merged: .zero, corrected: true),
+            .captureCommitted(
+                created: .twoToThree, merged: .zero, corrected: true, triage: .fifteenToSixtySeconds),
+            .captureCommitted(created: .one, merged: .zero, corrected: false, triage: nil),
             .firstPayoff(elapsed: .oneToFiveMinutes),
-            .taskCompleted,
+            .taskCompleted(lead: .threeToSevenDays, cycle: .underOneDay),
+            .taskCompleted(lead: .overFourWeeks, cycle: nil),
             .askAsked(scope: .household, route: .floor),
             .askAsked(scope: .task, route: .model),
             .tasksOpened,
@@ -301,6 +379,10 @@ enum TelemetryEvent: Sendable {
             .digestScheduled,
             .digestSkipped(reason: .nothingToSay),
             .digestOpened,
+            .groupSnapshot(
+                open: .sevenToTwelve, stale: .quarterToHalf, handOff: .underQuarter,
+                participation: .halfToSeventy, load: .ninetyPlus),
+            .groupSnapshot(open: .zero, stale: nil, handOff: nil, participation: nil, load: nil),
         ]
     }
 }
@@ -328,6 +410,28 @@ enum TelemetryGate: String, CaseIterable, Sendable {
 protocol TelemetrySink: AnyObject {
     func log(name: String, metadata: [String: String])
     func isKilled(_ gate: String) -> Bool?
+    /// Which group later events belong to. Part of WHO is reporting, beside the install
+    /// id — never an event payload, so the allowlist above is unchanged.
+    func identify(group: TelemetryGroup)
+}
+
+/// The group an install reports as (2026-10-04): one household of 1 or N, the unit the
+/// launch plan counts. **The household's own id never leaves** — `id` is a salted SHA-256
+/// of it, cut to 32 hex characters, so every phone in a shared household reports the same
+/// value (the household's id arrives with the iCloud share) and nothing on the wire can be
+/// matched against a CloudKit record. The salt is in this public file: it separates this
+/// value from the raw id, it is not a secret. `size` is a bucket, never a roster count.
+struct TelemetryGroup: Equatable, Sendable {
+    let id: String
+    let size: GroupSizeBucket
+
+    static let salt = "ezra.telemetry.group.v1:"
+
+    init(householdID: UUID, adults: Int) {
+        let digest = SHA256.hash(data: Data((Self.salt + householdID.uuidString).utf8))
+        id = digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+        size = GroupSizeBucket(adults)
+    }
 }
 
 /// The DEBUG-visible sink: remembers the last few events so the diagnostics card can
@@ -335,6 +439,7 @@ protocol TelemetrySink: AnyObject {
 final class RecordingTelemetrySink: TelemetrySink {
     private(set) var events: [(name: String, metadata: [String: String])] = []
     private(set) var killed: Set<String>
+    private(set) var group: TelemetryGroup?
     static let keep = 50
 
     init(killed: Set<String> = []) { self.killed = killed }
@@ -345,6 +450,8 @@ final class RecordingTelemetrySink: TelemetrySink {
     }
 
     func isKilled(_ gate: String) -> Bool? { killed.contains(gate) }
+
+    func identify(group: TelemetryGroup) { self.group = group }
 }
 
 // MARK: - The seam
@@ -385,6 +492,12 @@ enum Telemetry {
         sink.log(name: event.name, metadata: event.metadata)
     }
 
+    /// Tell the sink which group this install reports as. Behind the same opt-out as `log`.
+    static func identify(_ group: TelemetryGroup, defaults: UserDefaults = .standard) {
+        guard let sink, isEnabled(defaults: defaults) else { return }
+        sink.identify(group: group)
+    }
+
     /// Whether a kill switch is engaged. Unknown, absent or opted-out all read `false`:
     /// a kill switch that fails open is a feature flag, and this is not one.
     static func isKilled(_ gate: TelemetryGate, defaults: UserDefaults = .standard) -> Bool {
@@ -396,6 +509,7 @@ enum Telemetry {
     /// and names what is NOT sent before what is — the reader's question is the first half.
     static let boundarySentence =
         "Ezra never sends your tasks, your words, or anyone's name. It may send anonymous "
-        + "product signals — which features were used and whether they worked — so the "
-        + "research preview can improve. You can turn that off below."
+        + "product signals — which features were used and whether they worked, grouped by a "
+        + "scrambled household code so a family counts once — so the research preview can "
+        + "improve. You can turn that off below."
 }

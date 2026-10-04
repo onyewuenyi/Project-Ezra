@@ -46,7 +46,9 @@ policies draw between *content* and *usage data*:
 - **Product telemetry — which features were used, whether they worked, how long they
   took — may leave**, through ONE seam (`Models/Telemetry.swift`), to ONE vendor
   (`AI/StatsigSink.swift`, the only file that knows its name), keyed on an anonymous
-  install id, with an opt-out under the same Settings card that states what leaves.
+  install id (and, since 2026-10-04, an anonymous group code: a salted hash of the
+  household's internal id, so a family counts once), with an opt-out under the same
+  Settings card that states what leaves.
 
 **The allowlist is a type, not a review.** `TelemetryEvent` has no `String`, `Int`,
 `Date` or `UUID` payload anywhere (`TelemetryAllowlistTests` greps for one); every value is

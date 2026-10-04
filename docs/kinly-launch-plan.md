@@ -6,6 +6,16 @@ the source of truth for what the product is — and NOT a rename until the App S
 trademark check below has been done (Kinly is already a video-conferencing brand). The
 second half of this file maps the plan's build order onto the repo as of the same day.*
 
+> **Superseded in part, 2026-10-04.** The owner re-aimed the launch at the parent who
+> carries the load and made the GROUP (one household of 1 or N) the unit of measure, Linear
+> style. "Activated = both caretakers" and "single-caretaker households are tracked
+> separately, not counted" below no longer hold: a solo parent is a group of one, and the
+> NSM is Weekly Moving Groups. The new definitions and their telemetry are in
+> `docs/decisions.md` (*The group is the unit of measure*) and `Models/GroupMetrics.swift`;
+> the plan itself is the artifact *Ezra Launch Plan v2*
+> (https://claude.ai/code/artifact/333e0dce-b1bc-475d-adcb-e59ff8af8304). The text below
+> stays verbatim as the record of the 2026-09-12 plan.
+
 ---
 
 ## Positioning

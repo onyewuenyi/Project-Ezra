@@ -11,13 +11,16 @@
 	  data for advertising or measurement, so `NSPrivacyTracking` is false and the
 	  tracking-domain list is empty.
 
-	  Three collected types, all unlinked to identity and none used for tracking:
+	  Four collected types, all unlinked to identity and none used for tracking:
 	    • Product interaction — the closed telemetry enum (`Models/Telemetry.swift`),
 	      whose every payload is an enum or a bucket; never a title, a name, a raw count
 	      or a duration, pinned by `TelemetryAllowlistTests`. Opt-out in Settings, and
 	      absent entirely when no client key is configured.
 	    • Device ID — the anonymous install id (`Telemetry.installID`), a UUID minted on
 	      first use and reset with the store. Not the IDFA or the IDFV.
+	    • User ID — the anonymous group code (`TelemetryGroup`, 2026-10-04): a salted
+	      one-way hash of the household's random internal id, so the phones in one
+	      household count as one group. Never the household's name, never the id itself.
 	    • Other user content — a capture's raw words, transmitted ONLY when the router
 	      escalates a ramble to the cloud model (`CaptureRoute.transmitsRawCapture`) so it
 	      can be read into tasks. Audio never leaves the device; corrections and history
@@ -47,6 +50,18 @@
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeUserID</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
 			<false/>
 			<key>NSPrivacyCollectedDataTypeTracking</key>
