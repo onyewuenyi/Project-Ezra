@@ -25,6 +25,10 @@ struct OnboardingView: View {
     @State private var text = ""
     @State private var name = ""
     @State private var drafts: [TaskDraft] = []
+    /// Lines of the first capture the judge read as nothing to do — a pasted email's
+    /// greeting and sign-off. Shown under the areas, one tap from being a task, never
+    /// dropped (`CaptureJudge`).
+    @State private var leftOut: [String] = []
     /// Set when a transform came back with nothing. The first impression of the product
     /// is this one button; bouncing silently back to the editor reads as a broken app,
     /// not as "there was nothing to find".
@@ -114,15 +118,20 @@ struct OnboardingView: View {
         guard ProcessInfo.processInfo.arguments.contains("-OnboardingResult"),
             phase == .welcome
         else { return }
-        text = sample
+        // `-OnboardingResult "text"` reads that text instead of the sample, so a pasted
+        // email's left-out lines can be looked at.
+        let args = ProcessInfo.processInfo.arguments
+        if let flag = args.firstIndex(of: "-OnboardingResult"), flag + 1 < args.count,
+            !args[flag + 1].hasPrefix("-")
+        {
+            text = args[flag + 1]
+        } else {
+            text = sample
+        }
+        let input = text
         Task {
-            let decision = CaptureFlow.route(for: sample)
-            let run = await brain.triage(
-                sample, route: decision.route, escalation: decision.escalation)
-            drafts = run.drafts
-            onboardingReceipt = run.telemetry
-            onboardingReceipt?.escalationReason = decision.escalation?.rawValue
-            guard !drafts.isEmpty else { return }
+            await readFirstCapture(input)
+            guard !drafts.isEmpty || !leftOut.isEmpty else { return }
             withAnimation(Motion.onboardReveal) { phase = .result }
         }
         #endif
@@ -543,12 +552,8 @@ struct OnboardingView: View {
                         ? "Nothing to bring in" : "I found \(areaCount) area\(areaCount == 1 ? "" : "s")"
                 )
                 .screenTitleStyle()
-                Text(
-                    drafts.isEmpty
-                        ? "You cleared them all. You can start from an empty slate and capture as things come up."
-                        : "From \(drafts.count) item\(drafts.count == 1 ? "" : "s"). \(judgmentCount) I'm leaving for you to decide."
-                )
-                .supportingStyle()
+                Text(resultSubtitle)
+                    .supportingStyle()
             }
             .padding(Spacing.lg)
 
@@ -583,6 +588,7 @@ struct OnboardingView: View {
                             }
                         }
                     }
+                    leftOutSection
                 }
                 .padding(.horizontal, Spacing.lg)
             }
@@ -707,41 +713,105 @@ struct OnboardingView: View {
             .sorted { $0.1.count > $1.1.count }
     }
     private var areaCount: Int { Set(drafts.map(\.category)).count }
+
+    private var resultSubtitle: String {
+        // "0 I'm leaving for you to decide" is true and reads like a bug.
+        let decide = judgmentCount == 0 ? "" : " \(judgmentCount) I'm leaving for you to decide."
+        let aside =
+            leftOut.isEmpty ? "" : " \(leftOut.count) line\(leftOut.count == 1 ? "" : "s") left out, below."
+        if drafts.isEmpty {
+            return leftOut.isEmpty
+                ? "You cleared them all. You can start from an empty slate and capture as things come up."
+                : "Nothing in that reads like a to-do.\(aside) Tap one to keep it."
+        }
+        return
+            "From \(drafts.count) item\(drafts.count == 1 ? "" : "s").\(decide)\(aside)"
+    }
+
+    /// The first capture's left-out lines, kept in sight with a one-tap way back — the
+    /// composer's row, in onboarding's register.
+    @ViewBuilder private var leftOutSection: some View {
+        if !leftOut.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("LEFT OUT")
+                    .font(.metadata)
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.mutedText)
+                    .accessibilityAddTraits(.isHeader)
+                ForEach(leftOut, id: \.self) { line in
+                    Button {
+                        guard let draft = CaptureFlow.keepAsOneTask(text: line) else { return }
+                        withAnimation(Motion.respecting(Motion.settle)) {
+                            leftOut.removeAll { $0 == line }
+                            drafts.append(draft)
+                        }
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                            Image(systemName: "plus.circle")
+                                .font(.glyphCaption())
+                                .foregroundStyle(Palette.accentFlat)
+                            Text("“\(line)”")
+                                .font(.supporting)
+                                .foregroundStyle(Palette.secondaryText)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(minHeight: LayoutMetrics.hitTarget)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                    .accessibilityLabel("Left out: \(line)")
+                    .accessibilityHint("Adds it as a task")
+                }
+            }
+        }
+    }
     private var judgmentCount: Int { drafts.filter(\.isJudgmentCall).count }
 
     // MARK: - Flow
+
+    /// The seam's path to the same read `transform` uses.
+    private func readFirstCapture(_ input: String) async {
+        let reading = await CaptureJudge.readCapture(
+            input, modelAvailable: PrivateCaptureEngine.modelAvailable())
+        apply(reading, for: input)
+    }
+
+    /// Hold the reading and its receipt — the first capture in the store carries
+    /// provenance like every other.
+    private func apply(_ reading: CaptureJudge.CaptureReading, for input: String) {
+        drafts = reading.drafts
+        leftOut = reading.leftOut
+        var receipt = CaptureRunTelemetry.local(
+            segmentation: Segmentation.structure(of: input).label, cloudAvailable: false)
+        receipt.engineName = reading.engineName
+        receipt.rung =
+            (reading.engineName == "deterministic" ? IntelligenceRung.facts : .onDevice).rawValue
+        onboardingReceipt = receipt
+    }
 
     private func transform() async {
         focused = false
         foundNothing = false
         tookTooLong = false
         withAnimation(.easeInOut(duration: 0.3)) { phase = .settling }
-        // **The router decides, not a default.** This is a new user's very first brain
-        // dump, and it used to take `triage`'s `.cloud` default — so it transmitted
-        // whatever they had typed, however plainly they had structured it, and got the
-        // model's segmentation instead of the deterministic read that already has the
-        // boundaries a newline-separated list hands over.
-        let decision = CaptureFlow.route(for: text)
+        // The same on-device read the composer gives (`CaptureJudge.readCapture`): the
+        // read makes the pieces, the judge says what each doubtful one is, and a pasted
+        // email's greeting and sign-off are set aside instead of becoming a new user's
+        // first tasks. Nothing leaves the device.
         Telemetry.log(.captureStarted(channel: .onboarding))
-        let run = await brain.triage(
-            text, route: decision.route, escalation: decision.escalation)
-        let result = run.drafts
-        // The receipt for the first capture the store will ever hold. It was discarded
-        // here — `commit`'s `telemetry:` defaults to nil — so the very capture a person
-        // is most likely to go looking at afterwards was the one Activity could say
-        // nothing about. `escalationReason` is stamped the way the composer stamps it,
-        // because the router's evidence is the point of the receipt.
+        let reading = await CaptureJudge.readCapture(
+            text, modelAvailable: PrivateCaptureEngine.modelAvailable())
         // The person stopped waiting and went back to their text. Their words are on
         // screen and theirs to edit; revealing a result over the top of that now would
         // take the screen back off them.
         guard phase == .settling else { return }
-        onboardingReceipt = run.telemetry
-        onboardingReceipt?.escalationReason = decision.escalation?.rawValue
+        apply(reading, for: text)
         // Nothing actionable found: return to the editor with the text intact rather
         // than revealing an empty "0 areas" result (input is never discarded) — and SAY
         // so, because an unexplained bounce back to the same screen is indistinguishable
         // from the button not working.
-        guard !result.isEmpty else {
+        guard !drafts.isEmpty || !leftOut.isEmpty else {
             withAnimation(.easeInOut(duration: 0.3)) {
                 phase = .intro
                 foundNothing = true
@@ -750,7 +820,6 @@ struct OnboardingView: View {
         }
         // Hold the settle beat briefly so the motion reads (this is the earned moment).
         try? await Task.sleep(nanoseconds: reduceMotion ? 200_000_000 : 1_400_000_000)
-        drafts = result
         withAnimation(Motion.onboardReveal) { phase = .result }
     }
 

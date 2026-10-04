@@ -544,6 +544,39 @@ enum CaptureJudge {
         return (drafts, retitled)
     }
 
+    // MARK: - One capture, end to end
+
+    struct CaptureReading {
+        var drafts: [TaskDraft]
+        var leftOut: [String]
+        /// For the receipt: which arm read it, and what the judge did.
+        var engineName: String
+    }
+
+    /// The whole on-device read of one capture, for a caller with no composer around it
+    /// (onboarding). The read makes the pieces; with a model present and a doubtful
+    /// piece, the judge runs and its additions are mapped onto the cards; otherwise the
+    /// deterministic read stands. Nothing here transmits.
+    static func readCapture(
+        _ text: String, learned: [LearnedRule] = [], ownership given: OwnershipContext? = nil,
+        modelAvailable: Bool
+    ) async -> CaptureReading {
+        let ownership = given ?? .none
+        let clauses = Segmentation.items(from: text)
+        guard modelAvailable, !doubtfulIndices(in: clauses).isEmpty else {
+            return CaptureReading(
+                drafts: AppBrain.drafts(fromClauses: clauses, learned: learned, ownership: ownership),
+                leftOut: [], engineName: "deterministic")
+        }
+        let reading = await read(clauses: clauses) { await modelAnswer($0) }
+        let (drafts, retitled) = drafts(from: reading, learned: learned, ownership: ownership)
+        return CaptureReading(
+            drafts: drafts, leftOut: reading.leftOut,
+            engineName:
+                "on-device(judge \(reading.answered)/\(reading.judged) · split \(reading.resplit) · out \(reading.leftOut.count) · bg \(reading.folded) · titled \(retitled))"
+        )
+    }
+
     // MARK: - The model calls
 
     /// One call to the on-device model. Nil on a refusal, a timeout or an answer outside
