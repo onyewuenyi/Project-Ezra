@@ -60,6 +60,7 @@ def segments(cmd: str) -> list[list[str]]:
     try:
         lex = shlex.shlex("".join(buf), posix=True, punctuation_chars=True)
         lex.whitespace_split = True
+        lex.commenters = ""  # a `#` must never hide the rest of the line (the newline became `;`)
         toks = list(lex)
     except ValueError as e:
         raise Unclear(str(e))
@@ -76,6 +77,8 @@ def segments(cmd: str) -> list[list[str]]:
             if cur and cur[-1].isdigit():
                 cur.pop()
             j += 1
+        elif t and all(ch in "()<>|&;" for ch in t):  # `<(`, `>(`, `>|`, `(`, `;;`: not a plain argument
+            raise Unclear(f"operator {t}")
         else:  # unquoted operators are already their own tokens; these characters here were quoted
             cur.append(t)
         j += 1
@@ -107,7 +110,9 @@ def verdict(cmd: str, prefix: str = "claude/", publish: bool = True) -> tuple[st
                         f"cloud gate does not approve ({e}). Split it into plain commands, or list it as not done.")
     if not segs:
         return "deny", "Nobody is here to approve an empty command in a cloud session."
-    for s in segs:
+    for i, s in enumerate(segs):
+        if s[0] == "git" and len(s) > 1 and s[1] == "fetch" and any(a.startswith(("--upload-pack", "--exec", "-c")) for a in s[2:]):
+            return "deny", "git fetch with --upload-pack/--exec/-c can run arbitrary commands."
         if s[0] == "git" and s[1:2] == ["push"]:
             if not publish:
                 return "deny", "This repo publishes cloud work by hand (CLOUD_PUBLISH=0): commit, and say the branch is unpushed."
@@ -121,7 +126,7 @@ def verdict(cmd: str, prefix: str = "claude/", publish: bool = True) -> tuple[st
         elif s[:2] == ["gh", "pr"] and len(s) > 2 and s[2] in GH_PR:
             if s[2] == "create" and not publish:
                 return "deny", "This repo publishes cloud work by hand (CLOUD_PUBLISH=0)."
-        elif s[0] in FILTERS:
+        elif s[0] in FILTERS and i > 0:  # a filter is a pipe's tail, never a standalone file reader
             continue
         else:
             return "deny", (f"Nobody is here to approve `{' '.join(s)[:80]}` in a cloud session. Do it another "

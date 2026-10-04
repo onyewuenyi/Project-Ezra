@@ -33,15 +33,26 @@ pr)
   head=$(gh pr view "$n" --json headRefName,state -q 'select(.state=="OPEN") | .headRefName') || die "cannot read PR #$n"
   [[ -n $head ]] || die "PR #$n is not open"
   git -C "$AI_ROOT" fetch -q origin "$head" || die "cannot fetch $head"
-  git -C "$AI_ROOT" worktree add -q "$dir" -B "$head" "origin/$head" || die "cannot add a worktree for $head"
+  if git -C "$AI_ROOT" show-ref -q --verify "refs/heads/$head"; then
+    # The branch exists locally: use it as it is. Never -B, which would reset it to origin and drop
+    # unpushed commits; say so instead if it is ahead.
+    ahead=$(git -C "$AI_ROOT" rev-list --count "origin/$head..$head" 2>/dev/null || echo 0)
+    (( ahead == 0 )) || say "local $head is $ahead commit(s) ahead of origin; the worktree starts from it (push when ready)"
+    git -C "$AI_ROOT" worktree add -q "$dir" "$head" || die "cannot add a worktree for $head (is it checked out elsewhere? git worktree list)"
+  else
+    git -C "$AI_ROOT" worktree add -q "$dir" -b "$head" "origin/$head" || die "cannot add a worktree for $head"
+  fi
   git -C "$dir" branch -q --set-upstream-to "origin/$head" "$head"
   copy_includes "$dir"
   echo "worktree: $dir (PR #$n, branch $head, tracking origin)" ;;
 remove)
   dir=$(cd "${2:?path}" && pwd)
-  # Clean environment: this script's own SIM_UDID must never reach the worktree's sim.sh.
-  [[ -x $dir/scripts/ai/sim.sh ]] && (cd "$dir" && env -u SIM_UDID -u SIM_OWNER /bin/bash scripts/ai/sim.sh destroy) || true
-  git -C "$AI_ROOT" worktree remove "$dir" && echo "removed $dir" ;;
+  # git decides first (it refuses a worktree with modified or untracked files); only then the
+  # simulator goes. The reverse order left a refused worktree with no device.
+  udid_file="$dir/.claude/ios.local.env"; wt_udid=$(grep -m1 '^SIM_UDID=' "$udid_file" 2>/dev/null | cut -d= -f2 || true)
+  git -C "$AI_ROOT" worktree remove "$dir" || die "git refused to remove $dir (uncommitted or untracked files? commit, stash or delete them, or git worktree remove --force)"
+  if [[ -n $wt_udid ]]; then xcrun simctl delete "$wt_udid" >/dev/null 2>&1 && echo "deleted simulator $wt_udid" || true; fi
+  echo "removed $dir" ;;
 prune)
   # PR worktrees (<repo>-pr<N>) whose PR is merged or closed: each holds a simulator and a DerivedData
   # of several GB. Kept when it has uncommitted or unpushed work, and said so.
@@ -52,7 +63,7 @@ prune)
     n=${dir##*-pr}; [[ $n =~ ^[0-9]+$ ]] || continue
     state=$(gh pr view "$n" --json state -q .state 2>/dev/null || echo UNKNOWN)
     [[ $state == MERGED || $state == CLOSED ]] || continue
-    if [[ -n $(git -C "$dir" status --porcelain --untracked-files=no 2>/dev/null) ]]; then echo "kept $dir: PR #$n is $state but it has uncommitted work"; continue; fi
+    if [[ -n $(git -C "$dir" status --porcelain 2>/dev/null) ]]; then echo "kept $dir: PR #$n is $state but it has uncommitted or untracked files"; continue; fi
     if [[ $(git -C "$dir" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0) != 0 ]]; then echo "kept $dir: PR #$n is $state but it has unpushed commits"; continue; fi
     "$0" remove "$dir" && n_removed=$((n_removed + 1))
   done

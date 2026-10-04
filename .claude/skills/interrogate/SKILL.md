@@ -17,7 +17,7 @@ The signal comes from three places: independent lenses, each looking for one cla
 
 ## 1. Scope and intent
 
-- Diff: the argument if given, else `git diff` of uncommitted work, else `git diff main...HEAD`.
+- Diff: the argument if given, else `git diff` of uncommitted work, else `git diff $(git merge-base HEAD origin/HEAD)...HEAD` (the branch's work).
 - Write one paragraph of intent from the user's words, the commits and the code. Reviewers judge the change against it.
 
 ## 2. Pick the lenses

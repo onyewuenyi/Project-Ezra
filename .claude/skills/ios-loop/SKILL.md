@@ -17,7 +17,7 @@ Every change goes through the same loop, one logical change per build. Your clai
 
 1. **Context.** `CLAUDE.md` is loaded. Run `scripts/ai/doctor.sh` if anything looks off. A broken simulator runtime or a stale toolchain looks exactly like an app bug.
 2. **Locate and propose.** Grep and Glob find the files. State the smallest diff you plan, and why, before editing.
-3. **Edit.** Use Edit and Write only. Never hand-edit `*.pbxproj`. With synchronized folders, a new `.swift` file in the target's folder compiles automatically. Otherwise, confirm target membership first.
+3. **Edit.** Edit and Write for existing files. A NEW file: with synchronized folders, Write it into the target's folder and it compiles; with explicit groups, add it through `XcodeWrite` (or in Xcode) so it gets target membership. Never hand-edit `*.pbxproj`.
 4. **Build.** Run `scripts/ai/build.sh`. It prints only errors, new warnings and one summary line; the full log is in `.build/build.log`. For huge failures, hand the build to the `build-verify` agent.
 5. **Fix.**
    - Fix the minimal cause and rebuild.
@@ -56,10 +56,10 @@ Every change goes through the same loop, one logical change per build. Your clai
 
 - **Each checkout has its own simulator,** created on first build and recorded in `.claude/ios.local.env`.
 - **Address it by UDID:**
-  - `scripts/ai/sim.sh udid | install | launch <args> | shot <png> | size <category> | appearance dark | record | frames | compare | guard | crashes <since>`.
+  - `scripts/ai/sim.sh udid | install | launch <args> | shot <png> | size <category> | appearance dark | record <out.mov> <seconds> | frames <in.mov> <out.png> | compare <out.png> <a.png> <b.png…> | guard | crashes <epoch>`.
   - Never use `booted`, and never a bare device name. The guard hook blocks both when they're ambiguous.
 - **Before believing a crash or a hang,** run `scripts/ai/sim.sh guard` (a plain launch must stay alive) and `scripts/ai/sim.sh crashes <epoch>`. Some traps write no report, so also check `sim.sh alive`.
-- **Motion:** start `sim.sh record` BEFORE the launch that triggers the motion. Then `sim.sh frames` gives a numbered strip; read it frame by frame.
+- **Motion:** `record` runs for its whole duration, so start it in the background, then launch: `scripts/ai/sim.sh record out.mov 8 & sleep 1; scripts/ai/sim.sh launch -Flag; wait`. Then `scripts/ai/sim.sh frames out.mov sheet.png` gives a numbered strip; read it frame by frame.
 
 ## Playbooks
 

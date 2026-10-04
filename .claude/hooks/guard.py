@@ -69,9 +69,25 @@ def pushes_default(cmd: str) -> str | None:
             words = shlex.split(part)
         except ValueError:
             words = part.split()
-        if "push" not in words or "git" not in words[: words.index("push")]:
+        if "git" not in words:
             continue
-        args = words[words.index("push") + 1:]
+        # `push` must be git's SUBCOMMAND (the first non-option word after `git`, skipping the value
+        # of -C/-c/--git-dir/--work-tree): `git stash push`, `git grep push`, `git commit -m push` are not pushes.
+        gi = words.index("git")
+        j, sub = gi + 1, None
+        while j < len(words):
+            w = words[j]
+            if w in ("-C", "-c", "--git-dir", "--work-tree", "--namespace"):
+                j += 2
+                continue
+            if w.startswith("-"):
+                j += 1
+                continue
+            sub = w
+            break
+        if sub != "push":
+            continue
+        args = words[j + 1:]
         pos = [a for a in args if not a.startswith("-")]
         refs = pos[1:]
         if not refs:  # a bare push follows the current branch's upstream
@@ -80,7 +96,10 @@ def pushes_default(cmd: str) -> str | None:
             continue
         for r in refs:
             dst = r.lstrip("+").split(":")[-1]
-            if dst in (base, f"refs/heads/{base}") or (dst == "HEAD" and git_out("rev-parse", "--abbrev-ref", "HEAD") == base):
+            if "$" in dst or "(" in dst or "`" in dst:
+                return base  # a ref that is computed at run time could be anything, including main
+            if dst in (base, f"refs/heads/{base}", f"heads/{base}") \
+                    or (dst in ("HEAD", "@") and git_out("rev-parse", "--abbrev-ref", "HEAD") == base):
                 return base
     return None
 

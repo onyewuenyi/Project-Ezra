@@ -4,7 +4,7 @@ A long task the user steps away from ("run until it's done", "I'm going to bed")
 
 1. **Write the contract first,** as the first todo items: the goal, the predicate that means done (a test passes, a screenshot shows X, an eval reaches N with the gate held), what you will NOT do without the user (Autonomy, in `principles.md`), and where the decision log lives (`.build/reports/<date>-<slug>.md`).
 2. **Pace with the harness, not with sleep:**
-   - `/loop` (or `ScheduleWakeup` inside a loop) for work that waits on something slow; pick the delay from what you are waiting for, and never poll a build you started in the background, since its completion wakes you.
+   - `/loop` for work that waits on something slow (and `ScheduleWakeup`, where this build of Claude Code has it); pick the delay from what you are waiting for, and never poll a build you started in the background, since its completion wakes you.
    - Long builds, test runs and evals run with `run_in_background`; a `Monitor` watches a log for the line that matters (`BUILD SUCCEEDED|error:`) instead of re-reading it.
    - Independent slices go to their own worktrees or cloud sessions (`playbooks/delegate.md`), each with its own simulator and derived data; `/lead` tracks them.
 3. **Log every decision** as one line in the report: time, decision, evidence, reversible or not. A default you chose for a call only the user can make is logged with the one word that reverses it.
