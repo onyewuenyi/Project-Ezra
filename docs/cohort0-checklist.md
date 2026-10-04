@@ -46,13 +46,26 @@ file. See *Keeping this file current* at the bottom.
   defaulted to `.cloud`, and `OnboardingView.transform()` — a new user's FIRST brain dump —
   never mentioned it, so it transmitted structure the user had typed and skipped the
   deterministic read. A call site that hardcodes `.cloud`, or computes a route by any means
-  other than `CaptureRoute.route(for:localRead:)` / `CaptureFlow.plan` /
-  `CaptureFlow.route(for:posture:)`, is a finding. Holding the invariant inside
+  other than `CaptureRoute.route(for:localRead:)` / `CaptureFlow.route(for:)`, is a
+  finding. (The composer no longer calls `triage` at all since 2026-10-04: `CaptureFlow.plan`
+  picks between the deterministic read, the judge and the single-thought engine, and none
+  of them transmits.) Holding the invariant inside
   `CaptureRoute` is not enough — the last one held perfectly while a view bypassed it.
 
-- **The boundary pass can only ever REMOVE a transmission** (`OnDeviceSegmenter`, off by
-  default until the GA report). It is reachable on exactly one escalation reason
-  (`underSegmented`) and on the on-device posture's several-things envelope; it proposes
+- **The capture judge may set aside and may license a split; it may never delete or
+  invent** (`CaptureJudge`, 2026-10-04). Check any change to it against five things: a
+  piece judged `none` reaches Confirm as a left-out line with a one-tap way back, and the
+  subtitle says it exists; a piece that states a need, a piece of three words or fewer and
+  a one-piece capture are never set aside; `several` splits only when every part stands
+  alone (`resplit` returns nil otherwise and the piece stays one card); a missing or late
+  verdict keeps the piece; and the judged pieces are the read's own, so every card is the
+  person's words. A path that drops a `none` piece, or applies a verdict the validators did
+  not clear, is a finding. Numbers: `-CardJudgeEval` (FALSE DROP must stay 0) and
+  `-DumpEval`'s judge-pipeline section.
+
+- **The boundary pass is unreachable in production** (`OnDeviceSegmenter`; its composer
+  arm was removed with the posture on 2026-10-04 and `-DumpEval` measured it wrong on
+  dumps). It survives for `-FMPrimitives` and `-DumpEval` only. As built, it proposes
   nothing `CaptureEscalation.reason` has not re-cleared; every fragment is a substring of
   what the person said and the fragments tile the text, so it cannot invent or drop an
   outcome; and its file is grep-pinned against the cloud seam. A call site that runs it on
@@ -418,11 +431,12 @@ the whole suite and to a green build. Re-walk this section on a device, with
   an ineligible phone "Rules engine · device not eligible". A finding is any
   customer-facing surface reading `brain.status`, `AppBrain.Status`, a provider name or a
   model id. Seams: `-OnboardingIntro`, `-OnboardingResult`.
-- **Every capture surface says where the words are read.** The composer carries the
-  posture chip; Settings carries `DataBoundary`'s sentences; onboarding's paste screen
-  carries `DataBoundary.captureShort(cloudReachable:)`. A new capture entry point with
-  none of the three is a finding — that screen is usually the one receiving the most raw
-  text.
+- **Where the words are read is stated, and it is one answer: on this device.** Capture
+  has no cloud arm and no privacy setting since 2026-10-04 (the composer's posture chip is
+  gone with the choice it offered). Settings carries `DataBoundary`'s sentences and
+  onboarding's paste screen carries `DataBoundary.captureShort(cloudReachable:)`. A capture
+  path that can transmit the person's words, or a surface that offers a choice about it,
+  is a finding.
 - **Both buttons are reachable at accessibility-extra-large.** The paste screen overflowed
   top and bottom at once: the hero ran under the status bar, and "Start empty" — the only
   way past for someone with nothing to paste — was off the display. A fixed `VStack` with

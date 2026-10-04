@@ -54,10 +54,10 @@ struct DataBoundary: Equatable {
     /// remain. The user experiences "Ezra thought", never a vendor or a budget — v5 cuts
     /// provider names and usage mechanics from customer-facing language entirely.
     static func current(
-        cloudReachable: Bool, posture: CapturePosture = .open,
+        cloudReachable: Bool,
         telemetry: Bool = false, syncLive: Bool = HouseholdSync.isLive
     ) -> DataBoundary {
-        var boundary = base(cloudReachable: cloudReachable, posture: posture)
+        var boundary = base(cloudReachable: cloudReachable)
         if telemetry { boundary.telemetry = Telemetry.boundarySentence }
         if syncLive { boundary.sync = syncSentence }
         return boundary
@@ -117,18 +117,7 @@ struct DataBoundary: Equatable {
         "Your tasks are kept in your own iCloud, so they are on all your devices — and "
         + "shared with someone else only after you invite them."
 
-    private static func base(cloudReachable: Bool, posture: CapturePosture) -> DataBoundary {
-        // The posture (F-03) is the person's own setting, so it is said first when it is
-        // on: what leaves the device is something they chose, in their words.
-        if posture == .onDevice {
-            return DataBoundary(
-                capture:
-                    "You've set captures to stay on this device. Everything you capture is understood here and never sent anywhere.",
-                judgment: cloudReachable
-                    ? "Advice may use the cloud, and sends only the task itself — never your captures."
-                    : "Nothing is sent anywhere to prepare your advice.",
-                never: neverSentence)
-        }
+    private static func base(cloudReachable: Bool) -> DataBoundary {
         guard cloudReachable else {
             return DataBoundary(
                 capture: "Everything you capture is understood on this device.",

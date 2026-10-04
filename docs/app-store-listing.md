@@ -50,7 +50,9 @@ Notes for the four, in case the form asks for detail:
   app-assigned id that is not the device's.
 - **Other User Content** is a capture's raw words, and only when the router escalates a
   ramble to the cloud model so it can be read into tasks. Audio never leaves the device.
-  Corrections and history never leave. The on-device posture keeps even this on the phone.
+  Corrections and history never leave. **Since 2026-10-04 capture reads on the device only
+  and nothing transmits these words;** the type stays declared until the dormant cloud code
+  is deleted, and the manifest and this row go with it.
 
 **Required-reason API:** `UserDefaults`, reason **CA92.1** (the app reads and writes only
 its own defaults). Already declared in the manifest; nothing to enter in the form.

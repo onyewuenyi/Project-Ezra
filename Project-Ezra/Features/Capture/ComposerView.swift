@@ -115,7 +115,7 @@ struct ComposerView: View {
     @State private var phase: RamblePhase
     /// When submit happened — the clock for the performance contract.
     @State private var submittedAt: Date?
-    /// Which route produced the cards on screen ("local"/"cloud").
+    /// Which route produced the cards on screen (always "local" since 2026-10-04).
     @State private var structureSource = CaptureRoute.local.metricName
     /// How the parse behind the current cards actually ran — the receipt `commit` turns
     /// into this capture's `CaptureProvenance`. Nil until a route has been taken; the
@@ -196,10 +196,6 @@ struct ComposerView: View {
     /// back — the false-drop meter, counted for the receipt at Create.
     @State private var judgeLeftOutCount = 0
     @State private var judgeRestoredCount = 0
-    /// The user's past "no"s, loaded once per composer session — they only change at commit
-    /// (which writes new `SuppressionRecord`s and dismisses). Loading also lazily prunes
-    /// expired/orphaned rows, so caching keeps that off the per-keystroke path.
-    @State private var loadedSuppressions: [RelationshipSuppression]?
     /// The durable row behind this session. Created at PARSE time, not commit time, so
     /// dismissing the sheet parks the thought instead of destroying it. Adopted by
     /// `commit` on confirm; deleted only by an explicit Discard.
@@ -216,9 +212,6 @@ struct ComposerView: View {
     @State private var groupTitle: String?
     @State private var groupPrompt = false
     @State private var groupDraftTitle = ""
-    /// The privacy posture (F-03) — a control beside the one door, persisted.
-    @AppStorage(CapturePosture.storageKey) private var postureRaw = CapturePosture.open.rawValue
-    private var posture: CapturePosture { CapturePosture(rawValue: postureRaw) ?? .open }
     @State private var showDiscardConfirm = false
     /// Set when `brain.commit`'s own save reported a dropped write. The created
     /// `TaskItem`s stay pending in the context either way (`saveChanges` never
@@ -399,7 +392,7 @@ struct ComposerView: View {
             .onAppear {
                 refreshRosterCaches()
                 restoreIfResuming()
-                if posture == .onDevice { privateEngine.prewarm() }
+                privateEngine.prewarm()
                 if phase == .listening {
                     // Fresh open, mic permitted (decided in `init`): the sheet opens
                     // INTO listening. Opening capture is opening a listening
@@ -468,7 +461,7 @@ struct ComposerView: View {
                     text = next
                     // New words: any hidden generation is about a capture that no
                     // longer exists.
-                    if posture == .onDevice { privateEngine.transcriptChanged() }
+                    privateEngine.transcriptChanged()
                     judgeHeadStart?.task.cancel()
                     judgeHeadStart = nil
                 }
@@ -680,23 +673,14 @@ struct ComposerView: View {
         let localStarted = Date()
         let local = AppBrain.provisionalDrafts(captured, learned: sessionRules())
         let localMs = Int(Date().timeIntervalSince(localStarted) * 1000)
-        // Device-first, escalate on evidence (2026-08-29): the deterministic read above
-        // IS the default interpretation, and the capture transmits only when
-        // `CaptureEscalation` finds observable evidence it fell short — an empty read,
-        // a big dump, one draft against many boundary signals, an unresolved spoken
-        // detail, dropped content. Most captures reveal this read directly: instant,
-        // private, free. The check itself is microseconds of string work.
-        // The decision is a VALUE (`CaptureFlow.plan`, test-pinned): the posture outranks
-        // the router, one thought on an on-device posture runs the private engine, and
-        // otherwise the device-first router decides, voice-aware.
+        // The read above IS the default interpretation, and nothing leaves the device.
+        // The decision is a VALUE (`CaptureFlow.plan`, test-pinned): with a model present,
+        // a doubtful piece goes to the judge and a single thought the read could not land
+        // goes to the single-thought engine; everything else reveals the read as it is.
         let plan = CaptureFlow.plan(
-            text: captured, localRead: local, fromVoice: fromVoice, posture: posture,
-            privateModelAvailable: PrivateCaptureEngine.modelAvailable(),
-            boundaryPassAvailable: OnDeviceSegmenter.isRoutingEnabled
-                && PrivateCaptureEngine.modelAvailable(),
-            judgeAvailable: PrivateCaptureEngine.modelAvailable())
-        let decision = (route: plan.route, escalation: plan.escalation)
-        let route = decision.route
+            text: captured, localRead: local, fromVoice: fromVoice,
+            modelAvailable: PrivateCaptureEngine.modelAvailable())
+        let route = CaptureRoute.local
         structureSource = route.metricName
 
         // Verification seam: hold the Understanding beat so the orb can actually be looked
@@ -710,204 +694,137 @@ struct ComposerView: View {
         }
         #endif
 
-        // The ledger is split between here and `AppBrain.triage` on purpose, and the
-        // split is "who knows what ACTUALLY ran". `.local` never reaches the brain, so it
-        // is counted here; the cloud arm is counted there, after the availability
-        // degrade — a `.cloud` route on a device that turns out to have no reachable
-        // provider runs on-device, and a counter that recorded the intent would report
-        // paid calls that never happened. Counting it in both places was the first
-        // version of this and double-counted every model parse.
-        switch route {
-        case .local:
-            // THE JUDGE (2026-10-04): the read made the pieces, and at least one of them
-            // is doubtful — a line with no action to open it, or one that shows a second
-            // outcome. The on-device model says what each doubtful piece is; the app
-            // re-splits and sets aside only what it can validate, and a piece with no
-            // answer stays a card. One reveal, behind the same orb, typed or spoken.
-            if plan.arm == .judge {
-                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
-                understandingSince = .now
-                Motion.withMotion(Motion.heroSettle) { phase = .understanding }
-                parkIfUnfinished(force: true)
-                parse.parseTask?.cancel()
-                let headStart = judgeHeadStart?.text == captured ? judgeHeadStart?.task : nil
-                judgeHeadStart = nil
-                parse.parseTask = Task {
-                    let learned = sessionRules()
-                    let reading: CaptureJudge.Reading
-                    if let headStart {
-                        reading = await headStart.value
-                    } else {
-                        reading = await CaptureJudge.read(clauses: Segmentation.items(from: captured)) {
-                            await CaptureJudge.modelVerdict($0)
-                        }
-                    }
-                    guard !Task.isCancelled else { return }
-                    let drafts = AppBrain.drafts(
-                        fromClauses: reading.clauses, learned: learned, ownership: ownershipSnapshot)
-                    var run = CaptureRunTelemetry.local(
-                        segmentation: Segmentation.structure(of: captured).label,
-                        cloudAvailable: CloudModel.isReachable(for: .ramble))
-                    run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
-                    run.rung = IntelligenceRung.onDevice.rawValue
-                    run.engineName =
-                        "on-device(judge \(reading.answered)/\(reading.judged) · split \(reading.resplit) · out \(reading.leftOut.count))"
-                    run.armWon = headStart == nil ? "judge" : "judge(head start)"
-                    lastRun = run
-                    await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
-                    guard !Task.isCancelled else { return }
-                    parse.parseTask = nil
-                    judgeLeftOutCount = reading.leftOut.count
-                    judgeRestoredCount = 0
-                    if interpretation.propose(drafts, leftOut: reading.leftOut) {
-                        reveal()
-                    } else {
-                        ModelMetrics.shared.recordRefusedProposal()
-                    }
-                    parkIfUnfinished(force: true)
-                }
-                return
-            }
-            // On-device posture, SEVERAL things: the boundary pass. Same orb, same confirm
-            // card, and — because the posture forbids the network — a refusal lands on the
-            // deterministic read rather than on the authority. The person gets the better
-            // of the two answers this device can give, and never a worse one than before.
-            if plan.arm == .boundaryPass {
-                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
-                understandingSince = .now
-                Motion.withMotion(Motion.heroSettle) { phase = .understanding }
-                parkIfUnfinished(force: true)
-                parse.parseTask?.cancel()
-                parse.parseTask = Task {
-                    let learned = sessionRules()
-                    let outcome = await OnDeviceSegmenter.segment(
-                        text: captured, learned: learned, ownership: ownershipSnapshot)
-                    guard !Task.isCancelled else { return }
-                    var run = CaptureRunTelemetry.local(
-                        segmentation: Segmentation.structure(of: captured).label,
-                        cloudAvailable: CloudModel.isReachable(for: .ramble))
-                    run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
-                    let final: [TaskDraft]
-                    if case .accepted(let drafts, let fragments, _) = outcome {
-                        run.rung = IntelligenceRung.onDevice.rawValue
-                        run.engineName = "on-device(segment→\(fragments))"
-                        final = drafts
-                    } else {
-                        // The refusal is provenance, not an error: it is how the arm's
-                        // shortfalls get tuned, and the person sees the same read they
-                        // would have seen with the arm switched off.
-                        if case .refused(let refusal) = outcome {
-                            run.outcome = Instrument.oneLine(refusal.label)
-                        }
-                        final = local
-                    }
-                    lastRun = run
-                    await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
-                    guard !Task.isCancelled else { return }
-                    parse.parseTask = nil
-                    if interpretation.propose(final) {
-                        reveal()
-                    } else {
-                        ModelMetrics.shared.recordRefusedProposal()
-                    }
-                    parkIfUnfinished(force: true)
-                }
-                return
-            }
-            // On-device posture + ONE thought + a model present: the single-thought
-            // envelope the local model was measured to win (Private Capture's engine),
-            // behind the same orb, landing on the same confirm card. With no model, both
-            // on-device arms fall to the deterministic read exactly as before.
-            if plan.arm == .privateEngine {
-                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
-                understandingSince = .now
-                Motion.withMotion(Motion.heroSettle) { phase = .understanding }
-                parkIfUnfinished(force: true)
-                parse.parseTask?.cancel()
-                parse.parseTask = Task {
-                    let learned = sessionRules()
-                    let outcome = await privateEngine.finish(text: captured, learned: learned)
-                    guard !Task.isCancelled else { return }
-                    var run = CaptureRunTelemetry.local(
-                        segmentation: Segmentation.structure(of: captured).label,
-                        cloudAvailable: CloudModel.isReachable(for: .ramble))
-                    run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
-                    run.rung = IntelligenceRung.onDevice.rawValue
-                    // The receipt says whether the silence window paid for the read.
-                    switch outcome {
-                    case .captured(_, let speculative):
-                        run.armWon = speculative ? "privateEngine(speculative)" : "privateEngine"
-                    case .fallback:
-                        run.armWon = "deterministic(fallback)"
-                    }
-                    lastRun = run
-                    await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
-                    guard !Task.isCancelled else { return }
-                    parse.parseTask = nil
-                    if interpretation.propose([outcome.draft]) {
-                        reveal()
-                    } else {
-                        ModelMetrics.shared.recordRefusedProposal()
-                    }
-                    parkIfUnfinished(force: true)
-                }
-                return
-            }
-            IntelligenceLedger.shared.record(route.rung, for: .ramble)
-            // The deterministic arm is measured too. It is the baseline the authority has
-            // to beat, and a baseline with no number can't be one. Measured p50: 3ms.
-            var run = CaptureRunTelemetry.local(
-                segmentation: Segmentation.structure(of: captured).label,
-                cloudAvailable: CloudModel.isReachable(for: .ramble))
-            run.parseMs = localMs
-            // The local route's cost, recorded where it is actually paid. It is the
-            // baseline the cloud arm is judged against, and a baseline nobody measures
-            // is an assumption.
-            ModelMetrics.shared.recordProvisionalPass(latencyMs: localMs)
-            lastRun = run
-            if fromVoice {
-                // A spoken capture earns the thinking beat even on the deterministic
-                // route: the voice surface IS the orb, and cards flashing up the frame
-                // after silence reads as "it didn't actually listen". Same-branch phase
-                // change — only the status word animates; the orb decays from its
-                // listening floor. The dwell runs inside `parse.parseTask`, so Back and
-                // Discard cancel it exactly like the cloud arm's parse.
-                understandingSince = .now
-                Motion.withMotion(Motion.heroSettle) { phase = .understanding }
-                parkIfUnfinished(force: true)
-                parse.parseTask?.cancel()
-                parse.parseTask = Task {
-                    // The LOCAL floor: the read is ~2ms, so this dwell IS the reveal
-                    // latency. A candidate UX beat judged on video, not a number the
-                    // animation was shrunk to — see `Motion.orbLocalDwellSeconds`.
-                    await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
-                    guard !Task.isCancelled else { return }
-                    parse.parseTask = nil
-                    if interpretation.propose(local) {
-                        reveal()
-                    } else {
-                        ModelMetrics.shared.recordRefusedProposal()
-                    }
-                    parkIfUnfinished(force: true)
-                }
-            } else {
-                // Typed structure reveals instantly — byte-identical to the pre-voice
-                // arc: the user drew the boundaries, and a beat here would be theatre.
-                interpretation.propose(local)
-                reveal()
-                parkIfUnfinished(force: true)
-            }
-        case .cloud:
-            // The orb holds the screen and the result is the reveal. Nothing here may
-            // tell the user which rung is thinking — a "thinking in the cloud" state
-            // would be an intermediate semantic disclosure in everything but name, and
-            // the reveal contract's whole point is that the user receives one answer,
-            // not a progress report on how it was produced. That applies equally to the
-            // offline degrade beneath this arm.
+        // THE JUDGE (2026-10-04): the read made the pieces, and at least one of them
+        // is doubtful — a line with no action to open it, or one that shows a second
+        // outcome. The on-device model says what each doubtful piece is; the app
+        // re-splits and sets aside only what it can validate, and a piece with no
+        // answer stays a card. One reveal, behind the same orb, typed or spoken.
+        if plan.arm == .judge {
+            IntelligenceLedger.shared.record(.onDevice, for: .ramble)
             understandingSince = .now
             Motion.withMotion(Motion.heroSettle) { phase = .understanding }
             parkIfUnfinished(force: true)
-            runParse(captured, route: route, escalation: decision.escalation)
+            parse.parseTask?.cancel()
+            let headStart = judgeHeadStart?.text == captured ? judgeHeadStart?.task : nil
+            judgeHeadStart = nil
+            parse.parseTask = Task {
+                let learned = sessionRules()
+                let reading: CaptureJudge.Reading
+                if let headStart {
+                    reading = await headStart.value
+                } else {
+                    reading = await CaptureJudge.read(clauses: Segmentation.items(from: captured)) {
+                        await CaptureJudge.modelVerdict($0)
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                let drafts = AppBrain.drafts(
+                    fromClauses: reading.clauses, learned: learned, ownership: ownershipSnapshot)
+                var run = CaptureRunTelemetry.local(
+                    segmentation: Segmentation.structure(of: captured).label,
+                    cloudAvailable: CloudModel.isReachable(for: .ramble))
+                run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
+                run.rung = IntelligenceRung.onDevice.rawValue
+                run.engineName =
+                    "on-device(judge \(reading.answered)/\(reading.judged) · split \(reading.resplit) · out \(reading.leftOut.count))"
+                run.armWon = headStart == nil ? "judge" : "judge(head start)"
+                lastRun = run
+                await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
+                guard !Task.isCancelled else { return }
+                parse.parseTask = nil
+                judgeLeftOutCount = reading.leftOut.count
+                judgeRestoredCount = 0
+                if interpretation.propose(drafts, leftOut: reading.leftOut) {
+                    reveal()
+                } else {
+                    ModelMetrics.shared.recordRefusedProposal()
+                }
+                parkIfUnfinished(force: true)
+            }
+            return
+        }
+        // ONE thought the read could not land (nothing drafted, or a spoken detail it
+        // could not resolve) + a model present: the single-thought envelope the local
+        // model was measured to win, behind the same orb, landing on the same confirm
+        // card. With no model the deterministic read stands, exactly as before.
+        if plan.arm == .privateEngine {
+            IntelligenceLedger.shared.record(.onDevice, for: .ramble)
+            understandingSince = .now
+            Motion.withMotion(Motion.heroSettle) { phase = .understanding }
+            parkIfUnfinished(force: true)
+            parse.parseTask?.cancel()
+            parse.parseTask = Task {
+                let learned = sessionRules()
+                let outcome = await privateEngine.finish(text: captured, learned: learned)
+                guard !Task.isCancelled else { return }
+                var run = CaptureRunTelemetry.local(
+                    segmentation: Segmentation.structure(of: captured).label,
+                    cloudAvailable: CloudModel.isReachable(for: .ramble))
+                run.parseMs = Int(Date().timeIntervalSince(localStarted) * 1000)
+                run.rung = IntelligenceRung.onDevice.rawValue
+                // The receipt says whether the silence window paid for the read.
+                switch outcome {
+                case .captured(_, let speculative):
+                    run.armWon = speculative ? "privateEngine(speculative)" : "privateEngine"
+                case .fallback:
+                    run.armWon = "deterministic(fallback)"
+                }
+                lastRun = run
+                await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
+                guard !Task.isCancelled else { return }
+                parse.parseTask = nil
+                if interpretation.propose([outcome.draft]) {
+                    reveal()
+                } else {
+                    ModelMetrics.shared.recordRefusedProposal()
+                }
+                parkIfUnfinished(force: true)
+            }
+            return
+        }
+        IntelligenceLedger.shared.record(route.rung, for: .ramble)
+        // The deterministic arm is measured too. It is the baseline the authority has
+        // to beat, and a baseline with no number can't be one. Measured p50: 3ms.
+        var run = CaptureRunTelemetry.local(
+            segmentation: Segmentation.structure(of: captured).label,
+            cloudAvailable: CloudModel.isReachable(for: .ramble))
+        run.parseMs = localMs
+        // The local route's cost, recorded where it is actually paid. It is the
+        // baseline the cloud arm is judged against, and a baseline nobody measures
+        // is an assumption.
+        ModelMetrics.shared.recordProvisionalPass(latencyMs: localMs)
+        lastRun = run
+        if fromVoice {
+            // A spoken capture earns the thinking beat even on the deterministic
+            // route: the voice surface IS the orb, and cards flashing up the frame
+            // after silence reads as "it didn't actually listen". Same-branch phase
+            // change — only the status word animates; the orb decays from its
+            // listening floor. The dwell runs inside `parse.parseTask`, so Back and
+            // Discard cancel it exactly like the cloud arm's parse.
+            understandingSince = .now
+            Motion.withMotion(Motion.heroSettle) { phase = .understanding }
+            parkIfUnfinished(force: true)
+            parse.parseTask?.cancel()
+            parse.parseTask = Task {
+                // The LOCAL floor: the read is ~2ms, so this dwell IS the reveal
+                // latency. A candidate UX beat judged on video, not a number the
+                // animation was shrunk to — see `Motion.orbLocalDwellSeconds`.
+                await holdOrbToMinimumDwell(floor: Motion.orbLocalDwellSeconds)
+                guard !Task.isCancelled else { return }
+                parse.parseTask = nil
+                if interpretation.propose(local) {
+                    reveal()
+                } else {
+                    ModelMetrics.shared.recordRefusedProposal()
+                }
+                parkIfUnfinished(force: true)
+            }
+        } else {
+            // Typed structure reveals instantly — byte-identical to the pre-voice
+            // arc: the user drew the boundaries, and a beat here would be theatre.
+            interpretation.propose(local)
+            reveal()
+            parkIfUnfinished(force: true)
         }
     }
 
@@ -934,128 +851,6 @@ struct ComposerView: View {
         }
         Motion.withMotion(Motion.heroSettle) { phase = .confirm }
         announceReveal()
-    }
-
-    /// The ONE model parse a capture gets, and it runs only on a model route — its
-    /// result IS the reveal. There is deliberately no "enrich the already-revealed set"
-    /// arm any more: `Interpretation` refuses a late proposal, so an arm that tried would
-    /// be dead code that looked alive.
-    ///
-    /// `route` is passed through rather than re-derived: which rung thinks was decided
-    /// once, at submit, and a second call to `CaptureRoute.route` here could disagree
-    /// with the first if connectivity changed in between — the user would then be
-    /// waiting behind an orb for an arm the router no longer believes in.
-    private func runParse(
-        _ captured: String, route: CaptureRoute,
-        escalation: CaptureEscalationReason? = nil
-    ) {
-        parse.parseTask?.cancel()
-        parse.parseTask = Task {
-            let roster = rosterSnapshot
-            let learned = sessionRules()
-            let openTasks = openTaskSnapshots
-            let suppressions = sessionSuppressions()
-            let ownership = ownershipSnapshot
-            EmbeddingStore.warmUp(openTaskIDs: Set(openTasks.map(\.id)), in: context)
-
-            // THE BOUNDARY PASS, before anything is transmitted (WS4 / Campaign 5).
-            //
-            // The deterministic read under-segmented this capture, which is a BOUNDARY
-            // failure and the one thing the on-device model is being asked for. It names
-            // where each outcome begins, the app cuts the person's own words there, and
-            // the existing validator judges the result. Accepted, the capture never leaves
-            // the device and the orb's beat covers the whole pass; refused, the cloud arm
-            // below runs exactly as it does today. The arm can only ever REMOVE a
-            // transmission — it is unreachable on any other escalation reason, and it
-            // cannot propose anything the validator has not cleared.
-            //
-            // Inert until `OnDeviceSegmenter.isRoutingEnabled` (see that file's header:
-            // the GA report flips it, not an argument here).
-            let segmentStarted = Date()
-            if OnDeviceSegmenter.attempts(escalation),
-                case .accepted(let segmented, let fragments, _) = await OnDeviceSegmenter.segment(
-                    text: captured, learned: learned, ownership: ownership)
-            {
-                guard !Task.isCancelled else { return }
-                parse.parseTask = nil
-                var receipt = CaptureRunTelemetry.local(
-                    segmentation: Segmentation.structure(of: captured).label,
-                    cloudAvailable: CloudModel.isReachable(for: .ramble))
-                receipt.rung = IntelligenceRung.onDevice.rawValue
-                receipt.engineName = "on-device(segment→\(fragments))"
-                // The receipt still names the reason the capture was ABOUT to transmit —
-                // that is the provenance the escalation signals are tuned from, and the
-                // arm's whole claim is that this reason was answered without the network.
-                receipt.escalationReason = escalation?.rawValue
-                receipt.parseMs = Int(Date().timeIntervalSince(segmentStarted) * 1000)
-                lastRun = receipt
-                IntelligenceLedger.shared.record(.onDevice, for: .ramble)
-                await holdOrbToMinimumDwell(floor: Motion.orbMinimumDwellSeconds)
-                guard !Task.isCancelled else { return }
-                if interpretation.propose(segmented) {
-                    reveal()
-                } else {
-                    ModelMetrics.shared.recordRefusedProposal()
-                }
-                parkIfUnfinished(force: true)
-                return
-            }
-
-            // No partial handler: streamed snapshots would expose structure growing,
-            // which is the whole thing this architecture exists to prevent. The
-            // deadline's salvage still applies — it becomes the timeout path into
-            // the reveal.
-            let result = await brain.triage(
-                captured, roster: roster, learned: learned, openTasks: openTasks,
-                suppressions: suppressions, ownership: ownership, route: route,
-                escalation: escalation)
-            guard !Task.isCancelled else { return }
-            parse.parseTask = nil
-            EmbeddingStore.persistFresh(openTasks: openTasks, in: context)
-            var receipt = result.telemetry
-            // Why this capture cost a cloud call — the router's evidence, stamped on
-            // the receipt so the escalation signals are tuned from provenance, not
-            // recollection.
-            receipt.escalationReason = escalation?.rawValue
-            lastRun = receipt
-
-            // The authority said "nothing here" (F-02): a spoken capture the verifier read
-            // as a caught conversation, and the model — allowed to return nothing —
-            // did. Settle to the canvas with the words, no cards, no error: the person can
-            // read what was heard and type, or close and let it park.
-            if result.drafts.isEmpty, escalation == .conversation,
-                result.telemetry.outcome == "success" || result.telemetry.outcome == "salvaged"
-            {
-                await holdOrbToMinimumDwell(floor: Motion.orbMinimumDwellSeconds)
-                guard !Task.isCancelled else { return }
-                Motion.withMotion(Motion.heroSettle) { phase = .capture }
-                focused = true
-                parkIfUnfinished(force: true)
-                return
-            }
-            // The model decides the structure; if it found nothing, the deterministic
-            // read is the honest fallback rather than an empty screen.
-            let final =
-                result.drafts.isEmpty
-                ? AppBrain.provisionalDrafts(captured, learned: learned) : result.drafts
-            // The answer exists; the orb may not have finished arriving. Hold it to its
-            // floor BEFORE proposing, so the reveal and the morph-out happen on the same
-            // frame — waiting after the propose would leave the cards built and hidden,
-            // and any cancellation in between would strand a revealed set behind an orb.
-            await holdOrbToMinimumDwell(floor: Motion.orbMinimumDwellSeconds)
-            guard !Task.isCancelled else { return }
-            // Refused if the user somehow got to a reveal first (a race we don't expect,
-            // but the guard is the point — it can't be argued with).
-            if interpretation.propose(merge(fresh: final, into: interpretation.drafts)) {
-                reveal()
-            } else {
-                ModelMetrics.shared.recordRefusedProposal()
-            }
-            // Zero tolerance, checked rather than assumed: whichever way that branch went,
-            // a revealed set must be exactly what the user was shown.
-            interpretation.assertNotMutated("after the model parse landed")
-            parkIfUnfinished(force: true)
-        }
     }
 
     /// Wait out whatever is left of the orb's minimum presence, if anything.
@@ -1096,32 +891,6 @@ struct ComposerView: View {
         let rules = CorrectionProfile.rules(from: corrections.map { $0 }, tasks: allTasks.map { $0 })
         parse.cachedRules = rules
         return rules
-    }
-
-    /// The open working set as value snapshots, for reverse dependency detection
-    /// ("should anything already open wait on this new task?"). Served by the
-    /// change-invalidated cache — rolling parses read this per chained parse, and
-    /// rebuilding an identical set each time was the audit's A3.
-    private var openTaskSnapshots: [OpenTaskSnapshot] {
-        OpenTaskSnapshotCache.shared.snapshots(in: context)
-    }
-
-    /// The session's suppression set — loaded (and pruned) once, then reused for every
-    /// re-parse. Invalidated at commit, which is also when new records are written.
-    private func sessionSuppressions() -> [RelationshipSuppression] {
-        if let cached = loadedSuppressions { return cached }
-        let loaded = SuppressionStore.load(
-            in: context, existingTaskIDs: Set(allTasks.compactMap(\.uuid)))
-        loadedSuppressions = loaded
-        return loaded
-    }
-
-    /// Household roster as value snapshots (live members only — soft-deleted
-    /// people keep attribution but aren't "the household" any more).
-    private var rosterSnapshot: [RosterPerson] {
-        familyMembers
-            .filter { !$0.isRemoved }
-            .map { RosterPerson(name: $0.name, relationship: $0.relationship.label) }
     }
 
     /// Everything `OwnerProposer` needs, snapshotted as values so the proposer stays a
@@ -1169,13 +938,6 @@ struct ComposerView: View {
         }
         return OwnershipContext(
             candidates: candidates, history: history, ownersByTaskID: ownersByTaskID)
-    }
-
-    /// Keep cards stable across re-parses and streaming partials: `DraftMerge`
-    /// matches by the AI's reading of the line, transplants identity, re-applies
-    /// the user's edits over the fresh values, and honors the session's removals.
-    private func merge(fresh: [TaskDraft], into current: [TaskDraft]) -> [TaskDraft] {
-        DraftMerge.merge(fresh: fresh, into: current, removed: removedDrafts)
     }
 
     // MARK: - The four surfaces
@@ -1256,17 +1018,12 @@ struct ComposerView: View {
             // photo") reads as a rendering fault on the product's front door. Every label
             // is single-line and fixed-width, so a candidate that would wrap is one that
             // does not fit — and the row degrades in the order the labels EARN their
-            // room. The posture label goes last: "Read anywhere" / "On device" is the
-            // privacy posture in the person's own words (F-03), and a bare padlock is not
-            // that sentence. The mic and the photo are universal glyphs, both already
-            // carry accessibility labels, so they yield first. "Speak instead" survives
-            // wherever it fits.
+            // room. The mic and the photo are universal glyphs, both already carry
+            // accessibility labels. "Speak instead" survives wherever it fits.
             ViewThatFits(in: .horizontal) {
-                inputModeRow(
-                    mic: canSubmit ? "Speak instead" : "Speak", photo: "Add a photo", postureLabelled: true)
-                inputModeRow(mic: "Speak", photo: "Photo", postureLabelled: true)
-                inputModeRow(mic: nil, photo: nil, postureLabelled: true)
-                inputModeRow(mic: nil, photo: nil, postureLabelled: false)
+                inputModeRow(mic: canSubmit ? "Speak instead" : "Speak", photo: "Add a photo")
+                inputModeRow(mic: "Speak", photo: "Photo")
+                inputModeRow(mic: nil, photo: nil)
             }
             // Ramble appears only once there is something to ramble about. A disabled
             // primary button on an empty canvas is a dead affordance occupying the
@@ -1291,48 +1048,12 @@ struct ComposerView: View {
 
     /// One candidate width of the input-mode row. See the `ViewThatFits` in `captureBar`.
     /// A nil label is the glyph-only form of that capsule.
-    private func inputModeRow(mic: String?, photo: String?, postureLabelled: Bool) -> some View {
+    private func inputModeRow(mic: String?, photo: String?) -> some View {
         HStack(spacing: Spacing.sm) {
             micButton(mic)
             imageButton(photo)
             Spacer(minLength: 0)
-            postureChip(labelled: postureLabelled)
         }
-    }
-
-    /// The privacy posture, as a control beside the door (F-03). Bordered secondary,
-    /// never the gradient; the accent marks the ON state only. Its state is also what
-    /// `DataBoundary` says in Settings, so the sentence and the switch cannot disagree.
-    private var postureChip: some View { postureChip(labelled: true) }
-
-    private func postureChip(labelled: Bool) -> some View {
-        Button {
-            postureRaw = posture.toggled.rawValue
-        } label: {
-            HStack(spacing: Spacing.xxs) {
-                Image(systemName: posture.glyph)
-                    .font(.glyphCaption())
-                if labelled {
-                    Text(posture.label)
-                        .font(.chipLabel)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-            }
-            .foregroundStyle(posture == .onDevice ? Palette.accentFlat : Palette.secondaryText)
-            .padding(.horizontal, Spacing.sm)
-            .frame(height: 32)
-            .background(
-                Capsule().strokeBorder(
-                    posture == .onDevice ? Palette.accentFlat.opacity(0.6) : Palette.border, lineWidth: 1))
-        }
-        .buttonStyle(.pressable)
-        .minimumHitTarget()
-        .accessibilityLabel(
-            posture == .onDevice ? "Captures stay on this device" : "Captures may use the cloud"
-        )
-        .accessibilityHint("Switches the capture privacy posture")
-        .accessibilityAddTraits(posture == .onDevice ? .isSelected : [])
     }
 
     /// The submit affordance — the deliberate handoff, wearing the design system's
@@ -1429,13 +1150,6 @@ struct ComposerView: View {
             .overlay(alignment: .bottom) {
                 if phase == .listening {
                     VStack(spacing: Spacing.md) {
-                        // The privacy posture, on the door most people actually use.
-                        // It lived only on the typed canvas's bar — so the person who
-                        // opened INTO listening (the default) and was about to say
-                        // something private had no way to see, let alone set, whether
-                        // it would stay on the device without leaving the surface
-                        // first. Same chip, same persisted switch; read at submit.
-                        postureChip
                         listeningControls
                     }
                     .transition(.opacity)
@@ -2363,7 +2077,6 @@ struct ComposerView: View {
         parked = nil
         cardNotice = nil
         lastRun = nil  // spent: this receipt belongs to the capture just committed
-        loadedSuppressions = nil  // commit wrote new rejections — the session cache is stale
         parse.cachedRules = nil  // likewise new corrections
         // Straight back to whatever the user was doing — capture is something you do
         // mid-life, not a place you go.
@@ -2786,13 +2499,16 @@ struct ComposerView: View {
     private func scheduleSilenceFinish() {
         parse.silenceTask?.cancel()
         silenceDeadline = Date().addingTimeInterval(Self.silenceStopSeconds)
-        // The silence window is the private engine's whole budget: a single thought on
-        // the on-device posture starts generating NOW, hidden, and `finish` collects it
-        // when the window fires. Several things go to the other on-device arm and are
-        // not speculated (`CaptureFlow.plan` decides that at submit; the same predicate
-        // gates the speculation so nothing is generated the plan would discard).
-        if posture == .onDevice, PrivateCaptureEngine.modelAvailable(),
-            !PrivateCaptureEngine.soundsLikeSeveralThings(text)
+        // The silence window is the private engine's whole budget: a single thought the
+        // read could not land starts generating NOW, hidden, and `finish` collects it when
+        // the window fires. The plan itself gates the speculation, so nothing is generated
+        // that submit would discard.
+        let heardSoFar = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if PrivateCaptureEngine.modelAvailable(),
+            CaptureFlow.plan(
+                text: heardSoFar, localRead: AppBrain.provisionalDrafts(heardSoFar, learned: sessionRules()),
+                fromVoice: true, modelAvailable: true
+            ).arm == .privateEngine
         {
             privateEngine.silenceArmed(text: text)
         }

@@ -196,7 +196,8 @@ struct PrivateCaptureEngineTests {
             .deletingLastPathComponent()
             .appendingPathComponent("Project-Ezra")
         for file in [
-            "AI/PrivateCaptureEngine.swift", "Models/CapturePosture.swift",] {
+            "AI/PrivateCaptureEngine.swift", "AI/CaptureJudge.swift", "Features/Capture/CaptureFlow.swift",
+        ] {
             let content = try String(
                 contentsOf: root.appendingPathComponent(file), encoding: .utf8)
             #expect(

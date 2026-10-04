@@ -380,15 +380,15 @@ struct OnboardingView: View {
             // who has been using the app for ninety seconds. An unstructured paste is
             // exactly the shape the router escalates, so on a reachable build this is
             // also the first thing that leaves the device. Every other capture surface
-            // already states the boundary: the composer carries the posture chip,
-            // Settings carries these sentences in full. Onboarding carried neither.
+            // already states the boundary: Settings carries these sentences in full.
+            // Onboarding carried nothing.
             //
             // One sentence, not a control: `DataBoundary.capture` is already the
             // product's approved wording, already names no vendor, and already tells the
             // truth in both directions — on a build with no cloud reachable it says
             // nothing is sent, so nobody is alarmed about something that is not
-            // happening. A posture PICKER here would be a privacy decision asked at the
-            // worst possible moment, before the person knows what the app does.
+            // happening. A privacy PICKER here would be a decision asked at the worst
+            // possible moment, before the person knows what the app does.
             Text(DataBoundary.captureShort(cloudReachable: CloudModel.isAvailable))
                 .font(.metadata)
                 .foregroundStyle(Palette.mutedText)

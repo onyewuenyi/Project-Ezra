@@ -13,12 +13,14 @@
 //  interpretation; those follow once Ramble's loop sits on `Inquiry`, so the move happens
 //  once.
 //
-//  The plan encodes every rule the submit path enforces, in order of precedence:
-//  1. **The posture outranks the router** (F-03): on-device never transmits.
-//  2. **On-device posture + a model**: one thought runs the private engine, several things
-//     run the boundary pass — the posture is no longer a quality trade.
-//  3. Otherwise the device-first router decides (`CaptureRoute.route`), voice-aware (F-02).
-//  4. A local read earns the thinking beat only when SPOKEN; typed structure reveals instantly.
+//  The plan encodes every rule the submit path enforces, in order of precedence. Capture
+//  reads on the device only (2026-10-04), so there is no posture and no route to decide:
+//  1. **A model + a doubtful piece**: the judge (`CaptureJudge`) says what each doubtful
+//     piece is; the app re-splits and sets aside only what it can validate.
+//  2. **A model + ONE thought the read could not land** (nothing drafted, or a spoken
+//     detail it could not resolve): the single-thought engine.
+//  3. Otherwise the deterministic read is the interpretation. A SPOKEN capture earns the
+//     thinking beat; typed text reveals instantly.
 //
 
 import Foundation
@@ -27,80 +29,49 @@ enum CaptureFlow {
 
     /// Which arm interprets, and how the reveal is paced.
     enum Arm: Equatable, Sendable {
-        /// Typed structure: the deterministic read, revealed on the next frame.
+        /// Typed text the read handled: the deterministic read, revealed on the next frame.
         case revealInstantly
         /// A spoken capture the deterministic read handled: the read, after the orb's beat.
         case revealAfterDwell
-        /// On-device posture, one thought, a model present: the single-thought engine.
+        /// One thought the read could not land, a model present: the single-thought engine
+        /// (`PrivateCaptureEngine`), which falls back to the read itself.
         case privateEngine
-        /// On-device posture, SEVERAL things, a model present: the boundary pass
-        /// (`OnDeviceSegmenter`), then the deterministic resolve of each fragment.
-        ///
-        /// This is the arm the posture most needed and did not have. Choosing "On device"
-        /// used to COST quality on exactly the captures where boundaries are hard: one
-        /// thought got the private engine, several things fell to a single deterministic
-        /// read of the whole run-on — the read whose under-segmentation is what escalates
-        /// on the open posture. The boundary pass answers that without transmitting, so
-        /// the posture stops being a trade. A refusal falls to the same deterministic read
-        /// it would have got anyway; the cloud is unreachable from here either way.
-        case boundaryPass
         /// A model is present and at least one piece of the read is doubtful: the
         /// on-device judge says what each doubtful piece is — a task, several, or nothing
-        /// to do — and the app acts on the verdicts it can validate (`CaptureJudge`,
-        /// 2026-10-04). Nothing leaves the device; a piece with no answer stays a card.
+        /// to do — and the app acts on the verdicts it can validate (`CaptureJudge`).
+        /// A piece with no answer stays a card.
         case judge
-        /// The authority: the orb holds while the cloud (or its degrade) reads.
-        case authority(CaptureEscalationReason?)
     }
 
     struct SubmitPlan: Equatable, Sendable {
-        let route: CaptureRoute
-        let escalation: CaptureEscalationReason?
         let arm: Arm
     }
 
     /// The decision, from everything known at submit.
     ///
-    /// `boundaryPassAvailable` is a REQUIRED parameter rather than a default reading
-    /// `OnDeviceSegmenter.isRoutingEnabled`, and the reason is scar tissue: this codebase
-    /// has twice shipped a capability decided by an unset default parameter — the
+    /// `modelAvailable` is a REQUIRED parameter, and the reason is scar tissue: this
+    /// codebase has twice shipped a capability decided by an unset default parameter — the
     /// candidate-blind capture prompt (a feature silently disabled for weeks, every test
     /// green) and `triage`'s `route:` defaulting to `.cloud` (a new user's first brain dump
     /// silently transmitted). A capability the caller does not name is a capability nobody
     /// is deciding about.
     static func plan(
-        text: String, localRead: [TaskDraft], fromVoice: Bool, posture: CapturePosture,
-        privateModelAvailable: Bool, boundaryPassAvailable: Bool, judgeAvailable: Bool
+        text: String, localRead: [TaskDraft], fromVoice: Bool, modelAvailable: Bool
     ) -> SubmitPlan {
-        // The judge outranks every other arm: it reads on the device, so the posture has
-        // nothing to forbid, and it can only improve on the read it is handed.
-        if judgeAvailable, !CaptureJudge.doubtfulIndices(in: Segmentation.items(from: text)).isEmpty {
-            return SubmitPlan(route: .local, escalation: nil, arm: .judge)
+        let quiet = SubmitPlan(arm: fromVoice ? .revealAfterDwell : .revealInstantly)
+        guard modelAvailable else { return quiet }
+        if !CaptureJudge.doubtfulIndices(in: Segmentation.items(from: text)).isEmpty {
+            return SubmitPlan(arm: .judge)
         }
-        if posture == .onDevice {
-            if privateModelAvailable {
-                // The two on-device envelopes are complementary by construction: the
-                // detector's question is exactly "one thought or several?".
-                return SubmitPlan(
-                    route: .local, escalation: nil,
-                    arm: PrivateCaptureEngine.soundsLikeSeveralThings(text)
-                        ? (boundaryPassAvailable
-                            ? .boundaryPass
-                            : (fromVoice ? .revealAfterDwell : .revealInstantly))
-                        : .privateEngine)
-            }
-            return SubmitPlan(
-                route: .local, escalation: nil, arm: fromVoice ? .revealAfterDwell : .revealInstantly)
+        // The single-thought engine earns its seconds only on evidence the read fell
+        // short, and only on the envelope it was measured on: one thought.
+        if !PrivateCaptureEngine.soundsLikeSeveralThings(text),
+            let evidence = CaptureEscalation.reason(for: text, drafts: localRead),
+            evidence == .emptyRead || evidence == .unresolvedDetail
+        {
+            return SubmitPlan(arm: .privateEngine)
         }
-        let decision = CaptureRoute.route(for: text, localRead: localRead, fromVoice: fromVoice)
-        switch decision.route {
-        case .cloud:
-            return SubmitPlan(
-                route: .cloud, escalation: decision.escalation, arm: .authority(decision.escalation))
-        case .local:
-            return SubmitPlan(
-                route: .local, escalation: nil, arm: fromVoice ? .revealAfterDwell : .revealInstantly)
-        }
+        return quiet
     }
 
     /// The routing decision for a caller that has no composer around it — onboarding,
@@ -119,10 +90,8 @@ enum CaptureFlow {
     /// shape of device-first routing. `fromVoice` is false because none of these callers
     /// has a microphone.
     static func route(
-        for text: String, learned: [LearnedRule] = [],
-        posture: CapturePosture = .current(), now: Date = Date()
+        for text: String, learned: [LearnedRule] = [], now: Date = Date()
     ) -> (route: CaptureRoute, escalation: CaptureEscalationReason?) {
-        guard posture != .onDevice else { return (.local, nil) }
         let read = AppBrain.provisionalDrafts(text, learned: learned, now: now)
         return CaptureRoute.route(for: text, localRead: read)
     }

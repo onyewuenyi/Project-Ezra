@@ -142,19 +142,13 @@ struct CaptureJudgeTests {
     func planChoosesTheJudge() {
         let dump = "Hi families, a few reminders for next week. Please return the order form by Tuesday."
         let local = AppBrain.provisionalDrafts(dump)
-        let withModel = CaptureFlow.plan(
-            text: dump, localRead: local, fromVoice: false, posture: .open, privateModelAvailable: true,
-            boundaryPassAvailable: false, judgeAvailable: true)
+        let withModel = CaptureFlow.plan(text: dump, localRead: local, fromVoice: false, modelAvailable: true)
         #expect(withModel.arm == .judge)
-        #expect(withModel.route == .local)
-        let noModel = CaptureFlow.plan(
-            text: dump, localRead: local, fromVoice: false, posture: .open, privateModelAvailable: false,
-            boundaryPassAvailable: false, judgeAvailable: false)
-        #expect(noModel.arm != .judge)
+        let noModel = CaptureFlow.plan(text: dump, localRead: local, fromVoice: false, modelAvailable: false)
+        #expect(noModel.arm == .revealInstantly)
         let plain = "pay the water bill"
         let plainPlan = CaptureFlow.plan(
-            text: plain, localRead: AppBrain.provisionalDrafts(plain), fromVoice: false, posture: .open,
-            privateModelAvailable: true, boundaryPassAvailable: false, judgeAvailable: true)
+            text: plain, localRead: AppBrain.provisionalDrafts(plain), fromVoice: false, modelAvailable: true)
         #expect(plainPlan.arm == .revealInstantly)
     }
 

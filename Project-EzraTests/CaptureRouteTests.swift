@@ -49,7 +49,7 @@ struct CaptureRouteTests {
     @Test("The composer-free callers run the same policy — typed structure never transmits")
     func routeHelperHonoursThePolicy() {
         let typed = "renew my passport\nbook the flights\npay the water bill"
-        let decision = CaptureFlow.route(for: typed, posture: .open)
+        let decision = CaptureFlow.route(for: typed)
         #expect(decision.route == .local)
         #expect(decision.route.transmitsRawCapture == false)
         #expect(decision.escalation == nil)
@@ -69,7 +69,7 @@ struct CaptureRouteTests {
             figure out if the side project is still worth it
             pay the water bill
             """
-        #expect(CaptureFlow.route(for: sample, posture: .open).route == .local)
+        #expect(CaptureFlow.route(for: sample).route == .local)
         #expect(AppBrain.provisionalDrafts(sample).count == 10)
 
         // **The helper agrees with the router, whatever the router says.** Asserted as
@@ -85,11 +85,7 @@ struct CaptureRouteTests {
             """
         for text in [typed, sample, dump] {
             let read = AppBrain.provisionalDrafts(text)
-            #expect(CaptureFlow.route(for: text, posture: .open) == CaptureRoute.route(for: text, localRead: read))
-            // And the posture outranks it, here as everywhere.
-            #expect(CaptureFlow.route(for: text, posture: .onDevice).route == .local)
-            #expect(CaptureFlow.route(for: text, posture: .onDevice).route.transmitsRawCapture == false)
-            #expect(CaptureFlow.route(for: text, posture: .onDevice).escalation == nil)
+            #expect(CaptureFlow.route(for: text) == CaptureRoute.route(for: text, localRead: read))
         }
     }
 

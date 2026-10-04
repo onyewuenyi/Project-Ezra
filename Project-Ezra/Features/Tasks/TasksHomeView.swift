@@ -32,7 +32,8 @@ struct TasksHomeView: View {
 
     @FetchRequest(sortDescriptors: []) private var tasksResults: FetchedResults<TaskItem>
     @FetchRequest(sortDescriptors: []) private var membersResults: FetchedResults<FamilyMember>
-    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults: FetchedResults<UserProfile>
+    @FetchRequest(sortDescriptors: UserProfile.chosenOrder) private var profilesResults:
+        FetchedResults<UserProfile>
     /// Activity is the shell's screen, not this one's — it is reachable from the Brief
     /// too, so it has exactly one mount point and neither surface owns it.
     @Environment(\.openActivity) private var openActivity
@@ -473,8 +474,7 @@ struct TasksHomeView: View {
         // them invisible to VoiceOver, which read three identically-named buttons. The
         // navigation title separates Mine from the other two and nothing separated
         // Everyone from Created, so the answer to "whose tasks am I looking at?" was
-        // unavailable. The app already does this correctly on the composer's posture
-        // chip; this is the same trait.
+        // unavailable. The selected trait is what says it.
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
