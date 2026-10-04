@@ -106,9 +106,10 @@ struct GroupMetrics: Equatable {
     /// The reading as the wire carries it: buckets, nil where the share has no meaning.
     var snapshotEvent: TelemetryEvent {
         .groupSnapshot(
-            open: CountBucket(openCount), stale: staleShare.map(ShareBucket.init),
-            handOff: handOffShare.map(ShareBucket.init), participation: participation.map(ShareBucket.init),
-            load: loadShare.map(ShareBucket.init))
+            open: CountBucket(openCount), stale: staleShare.map { ShareBucket($0) },
+            handOff: handOffShare.map { ShareBucket($0) },
+            participation: participation.map { ShareBucket($0) },
+            load: loadShare.map { ShareBucket($0) })
     }
 
     // MARK: - The weekly snapshot
