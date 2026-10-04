@@ -537,10 +537,38 @@ enum Segmentation {
     /// pronoun guard is what keeps it honest: "call mom, she's back from the trip on
     /// friday" also carries a day, and it is one task with context — a part that opens on
     /// a pronoun is talking ABOUT something, not naming a new thing to do.
+    ///
+    /// The fourth arm (2026-10-04) is the commonest way a parent starts a dictated list:
+    /// "for thanksgiving I need to order the turkey by Monday, ask Aunt Rose to bring the
+    /// pies, buy extra chairs, …". The first part opens on its OCCASION, not its verb —
+    /// `strippedLeadIn` only strips a lead-in that begins the part — so it vetoed a list
+    /// whose five other parts were all verb-first, and six outcomes came back as two
+    /// cards (found by `-DumpEval`, which exists because the corpus held no long dumps).
     private static func isItemLike(_ part: String) -> Bool {
         if startsAnItem(part) { return true }
         if part.split(separator: " ").count <= 4 { return true }
+        if opensWithOccasionThenNeed(part) { return true }
         return carriesOwnDeadline(part) && !opensOnAPronoun(part)
+    }
+
+    /// "for thanksgiving I need to order …" — a short occasion (one to three words after
+    /// the preposition), then the PERSON'S OWN need-statement, then a real action verb.
+    /// Held to that whole shape on purpose: the occasion alone ("for the trip, …") or a
+    /// need with no verb ("for the trip I need snacks") stays a continuation, because a
+    /// loosened veto is where a false split — the critical error here — comes from.
+    private static func opensWithOccasionThenNeed(_ part: String) -> Bool {
+        let words = part.lowercased().split(separator: " ").map(String.init)
+        guard words.count >= 6, ["for", "before", "after", "on", "by"].contains(words[0]) else {
+            return false
+        }
+        for need in 2...4 where need + 3 < words.count {
+            guard ["i", "we"].contains(words[need]),
+                ["need", "have", "want", "gotta"].contains(words[need + 1])
+            else { continue }
+            let verb = words[need + 2] == "to" ? need + 3 : need + 2
+            return verb < words.count && actionVerbs.contains(words[verb])
+        }
+        return false
     }
 
     private static func carriesOwnDeadline(_ part: String) -> Bool {
