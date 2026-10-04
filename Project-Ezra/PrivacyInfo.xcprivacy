@@ -11,7 +11,7 @@
 	  data for advertising or measurement, so `NSPrivacyTracking` is false and the
 	  tracking-domain list is empty.
 
-	  Four collected types, all unlinked to identity and none used for tracking:
+	  Three collected types, all unlinked to identity and none used for tracking:
 	    • Product interaction — the closed telemetry enum (`Models/Telemetry.swift`),
 	      whose every payload is an enum or a bucket; never a title, a name, a raw count
 	      or a duration, pinned by `TelemetryAllowlistTests`. Opt-out in Settings, and
@@ -21,10 +21,10 @@
 	    • User ID — the anonymous group code (`TelemetryGroup`, 2026-10-04): a salted
 	      one-way hash of the household's random internal id, so the phones in one
 	      household count as one group. Never the household's name, never the id itself.
-	    • Other user content — a capture's raw words, transmitted ONLY when the router
-	      escalates a ramble to the cloud model (`CaptureRoute.transmitsRawCapture`) so it
-	      can be read into tasks. Audio never leaves the device; corrections and history
-	      never leave; the on-device posture keeps even this on the phone.
+
+	  A capture's raw words were a further type until 2026-10-04, when capture moved to
+	  the device only: no path can transmit them (`CloudOffTests`), so they are not
+	  collected and not declared.
 
 	  One required-reason API: `UserDefaults`, reason CA92.1 — the app reads and writes
 	  only its own defaults (posture, opt-out, install id, schema digests).
@@ -69,18 +69,6 @@
 			<key>NSPrivacyCollectedDataTypePurposes</key>
 			<array>
 				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
-			</array>
-		</dict>
-		<dict>
-			<key>NSPrivacyCollectedDataType</key>
-			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
-			<key>NSPrivacyCollectedDataTypeLinked</key>
-			<false/>
-			<key>NSPrivacyCollectedDataTypeTracking</key>
-			<false/>
-			<key>NSPrivacyCollectedDataTypePurposes</key>
-			<array>
-				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
 	</array>

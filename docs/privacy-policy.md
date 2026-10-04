@@ -51,20 +51,14 @@ the people you invited, through Apple's iCloud sharing. Your profile, your captu
 corrections and Ezra's learned preferences are deliberately excluded and never travel to
 them, however long you share.
 
-**The words of a capture, sometimes.** Ezra reads everything you capture on your device
-first. When that quick reading shows evidence it fell short — usually a long brain dump
-that needs a deeper read — the text you wrote is sent to a cloud model to be read into
-tasks, and the result comes back. This is the only place your raw words leave the device,
-it is never the default, and you can switch it off for good: the capture screen has an
-**On device** setting that keeps every capture local, whatever the length.
+**Never the words of a capture.** Everything you capture — typed, spoken or read from a
+screenshot — is understood on your device, by Apple's on-device model and Ezra's own
+rules. Your words are not sent anywhere to be read.
 
-**Structured task information, to prepare advice.** When Ezra suggests what would make a
-task easier, it sends the shape of the task — its title, dates and flags — and never your
-raw notes or your capture.
+**Never your tasks, to prepare advice.** Suggestions for what would make a task easier are
+worked out on your device too.
 
-**Nothing at all, on a build with no cloud configured.** The app states which of these is
-true for your install, in plain words, in Settings under *What leaves this device*. That
-screen changes to match what is actually happening.
+The app states this in plain words in Settings, under *What leaves this device*.
 
 ## Anonymous product signals
 

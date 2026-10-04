@@ -127,8 +127,9 @@ it. Each of these is invisible to a green build and to the whole test suite.
       while the contact placeholder is still there. Drop them on anything that serves
       static files, set both constants, and put the same two URLs in App Store Connect. Guideline 5.1.1(i) requires an app that collects data
       to link its privacy policy *from inside the app*, not only from the listing, and
-      this app collects four things (`PrivacyInfo.xcprivacy`: product interaction, the
-      anonymous install id, the anonymous group code, the raw words on an escalated capture). Both URLs are `nil`
+      this app collects three things (`PrivacyInfo.xcprivacy`: product interaction, the
+      anonymous install id, the anonymous group code; a capture's raw words left the list
+      on 2026-10-04). Both URLs are `nil`
       today, so the app renders no link — deliberately, because a 404 under "Privacy
       policy" is the first thing a reviewer taps.
       *Done when:* the Settings diagnostics line reads `links: ready`, and both links open
@@ -139,5 +140,5 @@ it. Each of these is invisible to a green build and to the whole test suite.
       manifest; a mismatch is a rejection. The manifest declares no tracking, three
       collected types, all UNLINKED to identity, and one required-reason API
       (`UserDefaults`, CA92.1). Answer the questionnaire from the manifest, not from
-      memory. *Done when:* the listing's privacy section says the same four things (the
-      group code is a User ID row, added 2026-10-04 — `docs/app-store-listing.md`).
+      memory. *Done when:* the listing's privacy section says the same three things (the
+      group code is a User ID row) and has no User Content row (`docs/app-store-listing.md`).

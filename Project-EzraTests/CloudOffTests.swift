@@ -68,4 +68,21 @@ struct CloudOffTests {
         #expect(code.components(separatedBy: "FirebaseApp.configure()").count == 2)
         #expect(code.components(separatedBy: "AppCheckSetup.install()").count == 2)
     }
+
+    @Test("No capture path can open a cloud session: nothing in the app builds the cloud engine")
+    func captureHasNoCloudSession() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Project-Ezra")
+        var builders: [String] = []
+        if let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) {
+            for case let url as URL in files where url.pathExtension == "swift" {
+                let content = try String(contentsOf: url, encoding: .utf8)
+                if content.contains("FoundationModelsEngine(sessionSource: .cloud)") {
+                    builders.append(url.lastPathComponent)
+                }
+            }
+        }
+        #expect(builders.isEmpty, "a capture cloud session is built in: \(builders)")
+    }
 }

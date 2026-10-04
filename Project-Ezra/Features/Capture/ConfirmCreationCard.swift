@@ -38,6 +38,9 @@ struct ConfirmCreationList: View {
     /// record it — a removed card must stay removed across re-parses (`DraftMerge`
     /// filters re-proposals against the session's `RemovedDraftSet`).
     var onRemove: ((TaskDraft) -> Void)? = nil
+    /// The person tapped Split on a card the judge read as several things. The composer
+    /// owns the model call and the undo; the card only asks.
+    var onSplit: ((TaskDraft) -> Void)? = nil
     /// When this card set arrived — the stagger clock the entrance rides (see
     /// `RevealEntrance`). Nil means "already on screen", which renders settled.
     var revealedAt: Date? = nil
@@ -64,6 +67,7 @@ struct ConfirmCreationList: View {
                 ConfirmCreationCard(
                     draft: $draft, ownerOptions: ownerOptions, rosterNames: rosterNames,
                     onAddToRoster: onAddToRoster, onRemove: { remove(draft) },
+                    onSplit: onSplit.map { split in { split(draft) } },
                     // One candidate gets the whole surface — the single-task capture
                     // is the fast path, and it should read like a task, not a row.
                     presentation: drafts.count == 1 ? .hero : .listRow
@@ -139,6 +143,9 @@ struct ConfirmCreationCard: View, Equatable {
     /// name becomes a member from here: an explicit human tap, never a silent mint.
     var onAddToRoster: ((String) -> Void)? = nil
     let onRemove: () -> Void
+    /// Offered only when the judge read this card as several things and the app could not
+    /// split it safely (`TaskDraft.mightBeSeveral`).
+    var onSplit: (() -> Void)? = nil
     /// How much room this card has. `.listRow` is the dense multi-candidate shape;
     /// `.hero` is the single-task confirm — the fast path's own surface, where there
     /// is vertical room to show every field at once instead of hiding most of them
@@ -217,6 +224,31 @@ struct ConfirmCreationCard: View, Equatable {
                 }
                 .buttonStyle(.pressableIcon)
                 .accessibilityLabel("Remove \(draft.title)")
+            }
+
+            // The background the person said before this task ("The pediatrician called"),
+            // folded in by the judge rather than made a card of its own. Kept as the
+            // task's notes at Create.
+            if let context = draft.context, !context.isEmpty {
+                Label {
+                    Text(context).lineLimit(2)
+                } icon: {
+                    Image(systemName: "text.quote")
+                }
+                .font(.metadata)
+                .foregroundStyle(Palette.secondaryText)
+                .accessibilityLabel("Context: \(context)")
+            }
+
+            if draft.mightBeSeveral == true, let onSplit {
+                Button(action: onSplit) {
+                    Label("Split into separate tasks", systemImage: "scissors")
+                        .font(.metadata.weight(.medium))
+                        .foregroundStyle(Palette.accentFlat)
+                        .minimumHitTarget(around: IconSize.small)
+                }
+                .buttonStyle(.pressableLink)
+                .accessibilityHint("Makes one task for each thing in this one")
             }
 
             // Gated, not merely empty: a zero-height subview still consumes a VStack

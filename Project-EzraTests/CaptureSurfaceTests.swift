@@ -29,6 +29,10 @@ struct CaptureSurfaceTests {
         #expect(ComposerView.revealSubtitle(count: 3, asks: 0) == "3 things")
         #expect(ComposerView.revealSubtitle(count: 3, asks: 1) == "3 things · 1 needs a date")
         #expect(ComposerView.revealSubtitle(count: 4, asks: 2) == "4 things · 2 need a date")
+        #expect(ComposerView.revealSubtitle(count: 2, asks: 0, leftOut: 2) == "2 things · 2 lines left out")
+        #expect(
+            ComposerView.revealSubtitle(count: 3, asks: 1, leftOut: 1)
+                == "3 things · 1 needs a date · 1 line left out")
     }
 
     @Test("The Create CTA states creates and merges separately, never a merge as a create")
@@ -91,11 +95,14 @@ struct CaptureSurfaceTests {
         #expect(ParkedCapturesRow.age(of: now.addingTimeInterval(60), now: now) == "now")
     }
 
-    @Test("Only a row confirmed within the arrival window washes in; never an old one, never an unconfirmed one")
+    @Test(
+        "Only a row confirmed within the arrival window washes in; never an old one, never an unconfirmed one"
+    )
     func arrivalWindow() {
         let now = Date()
         #expect(TaskRow.isFreshArrival(confirmedAt: now.addingTimeInterval(-1), now: now))
-        #expect(!TaskRow.isFreshArrival(confirmedAt: now.addingTimeInterval(-TaskRow.arrivalWindow), now: now))
+        #expect(
+            !TaskRow.isFreshArrival(confirmedAt: now.addingTimeInterval(-TaskRow.arrivalWindow), now: now))
         #expect(!TaskRow.isFreshArrival(confirmedAt: now.addingTimeInterval(-3600), now: now))
         #expect(!TaskRow.isFreshArrival(confirmedAt: nil, now: now))
         // A confirm stamped in the future (clock skew) is not an arrival either.

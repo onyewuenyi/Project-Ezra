@@ -291,7 +291,9 @@ struct PrecomputeBudgetTests {
 @Suite("Data boundary (what leaves this device)")
 struct DataBoundaryTests {
 
-    @Test("Three core sentences in both configurations; one more each for sync and telemetry, only while each is TRUE")
+    @Test(
+        "Three core sentences in both configurations; one more each for sync and telemetry, only while each is TRUE"
+    )
     func coreIsThreeSentences() {
         // The shape is the promise: one idea per line, readable in a glance. The three
         // core lines never grow. Since 2026-09-12 two more may FOLLOW them — the household
@@ -300,8 +302,12 @@ struct DataBoundaryTests {
         // transmission is real, because a sentence about a transmission that is not
         // happening is the mirror-image dishonesty the offline case guards against.
         for reachable in [true, false] {
-            #expect(DataBoundary.current(cloudReachable: reachable, telemetry: false, syncLive: false).sentences.count == 3)
-            #expect(DataBoundary.current(cloudReachable: reachable, telemetry: true, syncLive: true).sentences.count == 5)
+            #expect(
+                DataBoundary.current(cloudReachable: reachable, telemetry: false, syncLive: false).sentences
+                    .count == 3)
+            #expect(
+                DataBoundary.current(cloudReachable: reachable, telemetry: true, syncLive: true).sentences
+                    .count == 5)
         }
         let live = DataBoundary.current(cloudReachable: true)
         #expect(live.sentences.count == (HouseholdSync.isLive ? 4 : 3), "the default follows the live gate")
@@ -343,9 +349,9 @@ struct DataBoundaryTests {
     /// device. Named features are checkable; that is the point of this being a value type.
     @Test("The copy names no feature the product no longer has")
     func copyNamesNoCutFeature() {
-        for posture in CapturePosture.allCases {
+        do {
             for reachable in [true, false] {
-                let joined = DataBoundary.current(cloudReachable: reachable, posture: posture)
+                let joined = DataBoundary.current(cloudReachable: reachable)
                     .sentences.joined(separator: " ").lowercased()
                 #expect(!joined.contains("brief"), "the Brief was cut on 2026-09-02")
                 #expect(!joined.contains("briefing"))

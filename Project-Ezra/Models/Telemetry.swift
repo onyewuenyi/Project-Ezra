@@ -237,6 +237,10 @@ enum TelemetryEvent: Sendable {
     case catchUpSeated(changes: CountBucket)
     /// The home held a to-do-shaped line back from the model and the person chose a door.
     case captureOffer(outcome: TelemetryCaptureOfferOutcome)
+    /// The on-device judge read this capture (`CaptureJudge`, 2026-10-04): how many
+    /// pieces it set aside as nothing to do, and how many of those the person added
+    /// back at Confirm — the false-drop meter, observed without asking.
+    case captureJudged(leftOut: CountBucket, restored: CountBucket)
     /// The Advisor spoke, and what happened next.
     case advisorOffered(move: AdvisorMove)
     case advisorActed(move: AdvisorMove)
@@ -276,6 +280,7 @@ enum TelemetryEvent: Sendable {
         case .captureLandedBelow: return "capture_landed_below"
         case .catchUpSeated: return "catch_up_seated"
         case .captureOffer: return "capture_offer"
+        case .captureJudged: return "capture_judged"
         case .advisorOffered: return "advisor_offered"
         case .advisorActed: return "advisor_acted"
         case .advisorDismissed: return "advisor_dismissed"
@@ -333,6 +338,8 @@ enum TelemetryEvent: Sendable {
             return ["verb": verb.rawValue]
         case .captureOffer(let outcome):
             return ["outcome": outcome.rawValue]
+        case .captureJudged(let leftOut, let restored):
+            return ["left_out": leftOut.rawValue, "restored": restored.rawValue]
         case .advisorOffered(let move), .advisorActed(let move), .advisorDismissed(let move):
             return ["move": move.rawValue]
         case .modelCall(let feature, let served, let latency):
@@ -370,6 +377,7 @@ enum TelemetryEvent: Sendable {
             .captureLandedBelow(count: .one),
             .catchUpSeated(changes: .one),
             .captureOffer(outcome: .added),
+            .captureJudged(leftOut: .twoToThree, restored: .one),
             .advisorOffered(move: .advise),
             .advisorActed(move: .createSteps),
             .advisorDismissed(move: .decide),

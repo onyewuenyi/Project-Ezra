@@ -13,84 +13,69 @@
 //  interpretation; those follow once Ramble's loop sits on `Inquiry`, so the move happens
 //  once.
 //
-//  The plan encodes every rule the submit path enforces, in order of precedence:
-//  1. **The posture outranks the router** (F-03): on-device never transmits.
-//  2. **On-device posture + a model**: one thought runs the private engine, several things
-//     run the boundary pass — the posture is no longer a quality trade.
-//  3. Otherwise the device-first router decides (`CaptureRoute.route`), voice-aware (F-02).
-//  4. A local read earns the thinking beat only when SPOKEN; typed structure reveals instantly.
+//  The plan encodes every rule the submit path enforces, in order of precedence. Capture
+//  reads on the device only (2026-10-04), so there is no posture and no route to decide:
+//  1. **A model + a doubtful piece**: the judge (`CaptureJudge`) says what each doubtful
+//     piece is; the app re-splits and sets aside only what it can validate.
+//  2. **A model + ONE thought the read could not land** (nothing drafted, or a spoken
+//     detail it could not resolve): the single-thought engine.
+//  3. Otherwise the deterministic read is the interpretation. A SPOKEN capture earns the
+//     thinking beat; typed text reveals instantly.
 //
 
 import Foundation
+import FoundationModels
 
 enum CaptureFlow {
 
     /// Which arm interprets, and how the reveal is paced.
     enum Arm: Equatable, Sendable {
-        /// Typed structure: the deterministic read, revealed on the next frame.
+        /// Typed text the read handled: the deterministic read, revealed on the next frame.
         case revealInstantly
         /// A spoken capture the deterministic read handled: the read, after the orb's beat.
         case revealAfterDwell
-        /// On-device posture, one thought, a model present: the single-thought engine.
+        /// One thought the read could not land, a model present: the single-thought engine
+        /// (`PrivateCaptureEngine`), which falls back to the read itself.
         case privateEngine
-        /// On-device posture, SEVERAL things, a model present: the boundary pass
-        /// (`OnDeviceSegmenter`), then the deterministic resolve of each fragment.
-        ///
-        /// This is the arm the posture most needed and did not have. Choosing "On device"
-        /// used to COST quality on exactly the captures where boundaries are hard: one
-        /// thought got the private engine, several things fell to a single deterministic
-        /// read of the whole run-on — the read whose under-segmentation is what escalates
-        /// on the open posture. The boundary pass answers that without transmitting, so
-        /// the posture stops being a trade. A refusal falls to the same deterministic read
-        /// it would have got anyway; the cloud is unreachable from here either way.
-        case boundaryPass
-        /// The authority: the orb holds while the cloud (or its degrade) reads.
-        case authority(CaptureEscalationReason?)
+        /// A model is present and at least one piece of the read is doubtful: the
+        /// on-device judge says what each doubtful piece is — a task, several, or nothing
+        /// to do — and the app acts on the verdicts it can validate (`CaptureJudge`).
+        /// A piece with no answer stays a card.
+        case judge
     }
 
     struct SubmitPlan: Equatable, Sendable {
-        let route: CaptureRoute
-        let escalation: CaptureEscalationReason?
         let arm: Arm
     }
 
     /// The decision, from everything known at submit.
     ///
-    /// `boundaryPassAvailable` is a REQUIRED parameter rather than a default reading
-    /// `OnDeviceSegmenter.isRoutingEnabled`, and the reason is scar tissue: this codebase
-    /// has twice shipped a capability decided by an unset default parameter — the
+    /// `modelAvailable` is a REQUIRED parameter, and the reason is scar tissue: this
+    /// codebase has twice shipped a capability decided by an unset default parameter — the
     /// candidate-blind capture prompt (a feature silently disabled for weeks, every test
     /// green) and `triage`'s `route:` defaulting to `.cloud` (a new user's first brain dump
     /// silently transmitted). A capability the caller does not name is a capability nobody
     /// is deciding about.
     static func plan(
-        text: String, localRead: [TaskDraft], fromVoice: Bool, posture: CapturePosture,
-        privateModelAvailable: Bool, boundaryPassAvailable: Bool
+        text: String, localRead: [TaskDraft], fromVoice: Bool, modelAvailable: Bool,
+        duplicateCandidates: Bool
     ) -> SubmitPlan {
-        if posture == .onDevice {
-            if privateModelAvailable {
-                // The two on-device envelopes are complementary by construction: the
-                // detector's question is exactly "one thought or several?".
-                return SubmitPlan(
-                    route: .local, escalation: nil,
-                    arm: PrivateCaptureEngine.soundsLikeSeveralThings(text)
-                        ? (boundaryPassAvailable
-                            ? .boundaryPass
-                            : (fromVoice ? .revealAfterDwell : .revealInstantly))
-                        : .privateEngine)
-            }
-            return SubmitPlan(
-                route: .local, escalation: nil, arm: fromVoice ? .revealAfterDwell : .revealInstantly)
+        let quiet = SubmitPlan(arm: fromVoice ? .revealAfterDwell : .revealInstantly)
+        guard modelAvailable else { return quiet }
+        // A doubtful piece, or a card with something close to it already on the list
+        // (`CaptureDuplicates`): both are the judge arm's model pass.
+        if duplicateCandidates || !CaptureJudge.doubtfulIndices(in: Segmentation.items(from: text)).isEmpty {
+            return SubmitPlan(arm: .judge)
         }
-        let decision = CaptureRoute.route(for: text, localRead: localRead, fromVoice: fromVoice)
-        switch decision.route {
-        case .cloud:
-            return SubmitPlan(
-                route: .cloud, escalation: decision.escalation, arm: .authority(decision.escalation))
-        case .local:
-            return SubmitPlan(
-                route: .local, escalation: nil, arm: fromVoice ? .revealAfterDwell : .revealInstantly)
+        // The single-thought engine earns its seconds only on evidence the read fell
+        // short, and only on the envelope it was measured on: one thought.
+        if !PrivateCaptureEngine.soundsLikeSeveralThings(text),
+            let evidence = CaptureEscalation.reason(for: text, drafts: localRead),
+            evidence == .emptyRead || evidence == .unresolvedDetail
+        {
+            return SubmitPlan(arm: .privateEngine)
         }
+        return quiet
     }
 
     /// The routing decision for a caller that has no composer around it — onboarding,
@@ -109,10 +94,8 @@ enum CaptureFlow {
     /// shape of device-first routing. `fromVoice` is false because none of these callers
     /// has a microphone.
     static func route(
-        for text: String, learned: [LearnedRule] = [],
-        posture: CapturePosture = .current(), now: Date = Date()
+        for text: String, learned: [LearnedRule] = [], now: Date = Date()
     ) -> (route: CaptureRoute, escalation: CaptureEscalationReason?) {
-        guard posture != .onDevice else { return (.local, nil) }
         let read = AppBrain.provisionalDrafts(text, learned: learned, now: now)
         return CaptureRoute.route(for: text, localRead: read)
     }
@@ -146,6 +129,61 @@ enum CaptureFlow {
         guard !rest.isEmpty, (1...6).contains(words.count) else { return nil }
         return lead
     }
+
+    /// The outcome the on-device grouping judge names for a whole capture — "Thanksgiving",
+    /// "Lagos trip" — offered as the group button's one-tap label (2026-10-04). Accepted
+    /// only through the grouping sweep's own validator (shown titles only, a 1–6 word
+    /// name that is not a member) and only when EVERY card is a member: the button groups
+    /// all of them, so a name that fits some is not offered. Nil otherwise.
+    ///
+    /// **The name must be in their words** (`spoken` — the words of the KEPT cards, never
+    /// a left-out line): only the words of it they said survive. Without the capture as context the judge named
+    /// a Thanksgiving list "Family trip" — a confident name for an outcome nobody
+    /// mentioned.
+    static func outcomeTitle(
+        for judgment: GroupJudgment, shown: [OpenTaskSnapshot], spoken: String
+    ) -> String? {
+        guard shown.count >= minCardsToName,
+            let proposal = GroupingSweep.validated(judgment, shown: shown),
+            Set(proposal.memberIDs) == Set(shown.map(\.id))
+        else { return nil }
+        // Keep only the words of the name they said, in order: "Thanksgiving
+        // preparations" is "Thanksgiving". A name with none of their words is refused.
+        let said = Set(outcomeWords(spoken.lowercased()))
+        let kept = proposal.title.split(whereSeparator: \.isWhitespace).filter { word in
+            let key = outcomeWords(String(word).lowercased())
+            return !key.isEmpty && key.allSatisfy { said.contains($0) }
+        }
+        guard kept.contains(where: { $0.count >= 3 }) else { return nil }
+        let title = kept.joined(separator: " ")
+        return title.prefix(1).uppercased() + title.dropFirst()
+    }
+
+    private static func outcomeWords(_ text: String) -> [String] {
+        text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map {
+            $0.hasSuffix("s") && $0.count > 3 ? String($0.dropLast()) : String($0)
+        }
+    }
+
+    /// The grouping judge, asked about a capture's cards WITH the words they came from —
+    /// the sweep's instructions and answer type, so its validator applies unchanged.
+    static func judgeOutcome(spoken: String, shown: [OpenTaskSnapshot]) async -> GroupJudgment? {
+        let lines = shown.map { "- \($0.title)" }.joined(separator: "\n")
+        let prompt =
+            "The person said: \"\(spoken)\"\n\nIt became these items:\n\(lines)\n\n"
+            + "Are these steps toward one shared outcome? If so, name it in their words."
+        let result = await ModelRun.perform(.groupingSweep, deadline: ModelDeadline.seconds(for: .background))
+        {
+            let session = LanguageModelSession(instructions: GroupingSweep.judgeInstructions)
+            return try await session.respond(to: prompt, generating: GroupJudgment.self).content
+        }
+        if case .success(let judgment) = result { return judgment }
+        return nil
+    }
+
+    /// Fewer cards than this get the plain "Group as one outcome" button: two errands are
+    /// rarely a project, and a name the person must read costs more than it saves.
+    static let minCardsToName = 3
 
     /// assumed and editable; only the existence of the task is the person's call.
     ///

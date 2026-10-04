@@ -61,6 +61,9 @@ enum ModelFeature: String, CaseIterable, Sendable {
     /// The grouping sweep — the on-device model naming which loose tasks serve one
     /// outcome (`GroupingSweep`). Background-tier, capped; it PROPOSES, never writes.
     case groupingSweep
+    /// The capture judge — the on-device model saying what ONE piece of a capture is:
+    /// a task, several, or nothing to do (`CaptureJudge`). Recorded per call.
+    case captureJudge
 
     /// Short label for the diagnostics footer.
     var label: String {
@@ -76,6 +79,7 @@ enum ModelFeature: String, CaseIterable, Sendable {
         case .householdChat: return "askChat"
         case .captureSegment: return "segment"
         case .groupingSweep: return "groupSweep"
+        case .captureJudge: return "judge"
         }
     }
 }

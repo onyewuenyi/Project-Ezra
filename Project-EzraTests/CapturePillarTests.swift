@@ -61,31 +61,21 @@ struct ConversationGuardTests {
     }
 }
 
-@Suite("F-03 · privacy as a posture")
+@Suite("The privacy sentences, with capture on the device only")
 struct CapturePostureTests {
 
-    @Test("Persisted, defaulting to open; the toggle is symmetric")
-    func persistence() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
-        #expect(CapturePosture.current(defaults: defaults) == .open)
-        defaults.set(CapturePosture.onDevice.rawValue, forKey: CapturePosture.storageKey)
-        #expect(CapturePosture.current(defaults: defaults) == .onDevice)
-        #expect(CapturePosture.open.toggled == .onDevice)
-        #expect(CapturePosture.onDevice.toggled == .open)
-    }
-
-    @Test("The data-boundary sentences say the posture in the person's words, and still name no vendor")
+    @Test("The data-boundary sentences name no vendor, in either configuration")
     func boundarySpeaks() {
-        let onDevice = DataBoundary.current(cloudReachable: true, posture: .onDevice)
-        #expect(onDevice.capture.contains("stay on this device"))
-        #expect(onDevice.capture.contains("never sent"))
-        let open = DataBoundary.current(cloudReachable: true, posture: .open)
-        #expect(!open.capture.contains("stay on this device"))
-        for sentence in onDevice.sentences + open.sentences {
-            for vendor in ["Gemini", "Firebase", "Google", "Apple", "token", "credit", "quota", "model"] {
-                #expect(!sentence.localizedCaseInsensitiveContains(vendor), "\(sentence) names \(vendor)")
+        for reachable in [true, false] {
+            for sentence in DataBoundary.current(cloudReachable: reachable).sentences {
+                for vendor in ["Gemini", "Firebase", "Google", "Apple", "token", "credit", "quota", "model"] {
+                    #expect(!sentence.localizedCaseInsensitiveContains(vendor), "\(sentence) names \(vendor)")
+                }
             }
         }
+        #expect(
+            DataBoundary.current(cloudReachable: false).capture
+                == "Everything you capture is understood on this device.")
     }
 
     /// **The promise that holds everywhere is about US, not about the device.** It read
